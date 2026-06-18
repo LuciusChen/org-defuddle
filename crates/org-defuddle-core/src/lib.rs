@@ -512,26 +512,113 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     "svg script",
     "meta",
     "link",
+    "audio:not([src])",
+    "video:not([src])",
+    ".jwplayer",
+    "[class^=\"ad-\"]",
+    "[class$=\"-ad\"]",
+    "[data-ad-wrapper]",
+    "[id^=\"ad-\"]",
+    "[id$=\"-ad\"]",
+    "[alt*=\"advert\"]",
+    "[rel=\"sponsored\"]",
+    "[href*=\"source=promotion\"]",
+    ".ad",
+    ".ads",
+    ".advertisement",
+    ".promo",
+    ".Promo",
+    "#barrier-page",
+    ".alert",
+    "[id=\"comments\"]",
+    "[id=\"comment\"]",
+    "div[class*=\"cover-\"]",
+    "div[id*=\"cover-\"]",
+    "ads-breadcrumbs",
+    "header[class~=\"fixed\"]",
+    "header[class~=\"sticky\"]",
+    ".header:not(.banner)",
     "nav",
+    ".navigation",
+    ".menu",
+    ".previous",
     "footer",
     "form",
-    "aside",
     "[role=\"navigation\"]",
+    "[role=\"Navigation\"]",
     "[role=\"banner\"]",
+    "[role=\"Banner\"]",
     "[role=\"toolbar\"]",
     "[role=\"dialog\"]",
+    "[role=\"Dialog\"]",
     "[role=\"alertdialog\"]",
-    ".jwplayer",
+    "[role*=\"complementary\"]",
+    "[class*=\"pagination\"]",
+    ".author",
+    ".Author",
+    "[class$=\"_bio\"]",
+    "#categories",
+    ".contributor",
+    ".date",
+    "#date",
+    "[data-date]",
+    ".entry-meta",
+    ".entry-utility",
+    ".meta",
+    ".tags",
+    "#tags",
+    "[rel=\"tag\"]",
+    ".headline",
+    "#headline",
+    "#title",
+    "#Title",
+    "#articleTag",
+    "[href*=\"/author/\"]",
+    "[href*=\"/author?\"]",
+    "[href$=\"/author\"]",
+    "a[href*=\"copyright.com\"]",
+    "a[href*=\"google.com/preferences\"]",
+    "[href=\"#top\"]",
+    "[href=\"#Top\"]",
+    "[href=\"#page-header\"]",
+    "[href=\"#content\"]",
+    "[href=\"#site-content\"]",
+    "[href=\"#main-content\"]",
+    "[href^=\"#main\"]",
+    "[src*=\"author\"]",
+    ".toc",
+    ".Toc",
+    "#toc",
+    "[href*=\"#toc\"]",
+    ".aside",
+    "aside",
+    "button",
+    "canvas",
+    "date",
+    "dialog",
+    "fieldset",
+    "input:not([type=\"checkbox\"])",
+    "input[type=\"checkbox\"][class*=\"sidebar\"]",
+    "input[type=\"checkbox\"][id*=\"sidebar\"]",
+    "input[type=\"checkbox\"][class*=\"drawer\"]",
+    "input[type=\"checkbox\"][id*=\"drawer\"]",
+    "input[type=\"checkbox\"][class*=\"hamburger\"]",
+    "input[type=\"checkbox\"][id*=\"hamburger\"]",
+    "input[type=\"checkbox\"][class*=\"toggle\"]",
+    "input[type=\"checkbox\"][id*=\"toggle\"]",
+    "input[type=\"checkbox\"][class*=\"trigger\"]",
+    "input[type=\"checkbox\"][id*=\"trigger\"]",
+    "option",
+    "select",
+    "[role=\"listbox\"]",
+    "[role=\"option\"]",
+    "textarea",
     "instaread-player",
     "iframe:not([src])",
     "iframe[src*=\"blink.net\"]",
     "iframe[src*=\"giscus.app\"]",
     "iframe[src*=\"tinypass.com\"]",
     "iframe[src*=\"trinitymedia.ai\"]",
-    ".ad",
-    ".ads",
-    ".advertisement",
-    ".promo",
     ".cookie",
     ".comments",
     ".comment",
@@ -539,16 +626,57 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     ".share",
     ".social",
     ".sidebar",
+    ".Sidebar",
     ".newsletter",
     ".pagination",
     ".book-card .metadata",
-    ".entry-meta",
-    ".entry-utility",
     ".infobox",
     ".mw-editsection",
     ".mw-indicators",
     ".catlinks",
-    ".toc",
+    ".logo",
+    ".Logo",
+    "[class=\"logo\"]",
+    "[class=\"Logo\"]",
+    "#logo",
+    "#Logo",
+    "#newsletter",
+    "#Newsletter",
+    ".subscribe",
+    "[data-component-name=\"ButtonCreateButton\"]",
+    "[data-component-name=\"DigestPostEmbed\"]",
+    "[data-component-name=\"SubscribeWidgetToDOM\"]",
+    "[class*=\"digestPostEmbed\"]",
+    ".noprint",
+    "[data-print-layout=\"hide\"]",
+    "[data-block=\"donotprint\"]",
+    "[class*=\"clickable-icon\"]",
+    "li span[class*=\"ltx_tag\"][class*=\"ltx_tag_item\"]",
+    "a[href^=\"#\"][class*=\"anchor\"]",
+    "[data-container*=\"most-viewed\"]",
+    "[href*=\"/sitemap/sitemap.xml\"]",
+    "[data-link-name*=\"skip\"]",
+    "[aria-label*=\"skip\"]",
+    "[title^=\"Share on\"]",
+    "[aria-label=\"Dismiss\"]",
+    "[aria-label=\"Close\"]",
+    "svg[data-icon]",
+    "[data-testid=\"load-more-posts\"] + div",
+    ".copyright",
+    "#copyright",
+    ".licensebox",
+    "#page-info",
+    "#rss",
+    "#feed",
+    ".gutter",
+    "#primaryaudio",
+    "#NYT_ABOVE_MAIN_CONTENT_REGION",
+    "[data-testid=\"photoviewer-children-figure\"] > span",
+    "table.infobox",
+    "[data-optimizely=\"related-articles-section\"]",
+    "[data-orientation=\"vertical\"]",
+    ".gh-header-sticky",
+    "[data-testid=\"issue-metadata-sticky\"]",
     "#siteNotice",
     "#siteSub",
     "#contentSub",
@@ -557,10 +685,17 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     "#footer",
     "#fps",
     "#header",
+    "#Header",
+    "#banner",
+    "#Banner",
     "#navigation",
     "#PreviousNext",
     "#site-footer",
     "#sidebar",
+    "#Sidebar",
+    "#side-bar",
+    "#secondary",
+    "#sitesub",
     "#toc",
 ];
 
@@ -11765,6 +11900,32 @@ fn remove_element_class_tokens(element: &ElementData, remove: &[&str]) {
 
 fn is_hidden_class_value(class: &str) -> bool {
     let tokens = class.split_ascii_whitespace().collect::<Vec<_>>();
+    let has_plain_hidden = tokens
+        .iter()
+        .any(|token| matches!(*token, "hidden" | "invisible"));
+    if has_plain_hidden {
+        return !tokens.iter().any(|token| {
+            let Some((prefix, utility)) = token.split_once(':') else {
+                return false;
+            };
+            matches!(prefix, "sm" | "md" | "lg" | "xl" | "2xl")
+                && matches!(
+                    utility,
+                    "block"
+                        | "flex"
+                        | "grid"
+                        | "inline"
+                        | "inline-block"
+                        | "inline-flex"
+                        | "table"
+                        | "table-row"
+                        | "table-cell"
+                        | "contents"
+                        | "flow-root"
+                )
+        });
+    }
+
     tokens.iter().any(|token| {
         let Some((prefix, utility)) = token.split_once(':') else {
             return false;
@@ -11778,19 +11939,142 @@ fn remove_exact_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<De
         if let Ok(matches) = document.select(selector) {
             let nodes: Vec<NodeRef> = matches.map(|m| m.as_node().clone()).collect();
             for node in nodes {
-                if !is_html_or_body_node(&node) && !is_preserved_noise_node(&node) {
-                    record_debug_removal(
-                        &mut debug_removals,
-                        "removeBySelector",
-                        Some(selector),
-                        Some("exact selector"),
-                        &node,
-                    );
-                    node.detach();
+                if should_skip_exact_noise_node(&node) {
+                    continue;
                 }
+                if handle_exact_noise_transform(&node, selector, debug_removals.as_deref_mut()) {
+                    continue;
+                }
+                record_debug_removal(
+                    &mut debug_removals,
+                    "removeBySelector",
+                    Some(selector),
+                    Some("exact selector"),
+                    &node,
+                );
+                node.detach();
             }
         }
     }
+}
+
+fn should_skip_exact_noise_node(node: &NodeRef) -> bool {
+    if node.parent().is_none() || is_html_or_body_node(node) || is_preserved_noise_node(node) {
+        return true;
+    }
+    if tag_name(node)
+        .as_deref()
+        .is_some_and(|tag| matches!(tag, "pre" | "code"))
+        || has_ancestor_tag(node, &["pre", "code"])
+    {
+        return true;
+    }
+    if tag_name(node).as_deref() == Some("a")
+        && has_ancestor_tag(node, &["h1", "h2", "h3", "h4", "h5", "h6"])
+    {
+        return true;
+    }
+    is_exact_noise_footnote_node(node) || is_code_table_gutter_node(node)
+}
+
+fn is_exact_noise_footnote_node(node: &NodeRef) -> bool {
+    is_footnote_container_node(node)
+        || has_ancestor_matching(node, is_footnote_container_node)
+        || count_selector(node, "[data-footnotes], .footnotes, .footnote, .references") > 0
+}
+
+fn is_code_table_gutter_node(node: &NodeRef) -> bool {
+    if !has_class_token(node, "gutter") {
+        return false;
+    }
+    node.ancestors().any(|ancestor| {
+        tag_name(&ancestor).as_deref() == Some("table")
+            && count_selector(&ancestor, ".gutter") > 0
+            && count_selector(&ancestor, ".code") > 0
+            && count_selector(&ancestor, "pre") > 0
+    })
+}
+
+fn handle_exact_noise_transform(
+    node: &NodeRef,
+    selector: &str,
+    mut debug_removals: Option<&mut Vec<DebugRemoval>>,
+) -> bool {
+    if tag_name(node).as_deref() != Some("button") {
+        return false;
+    }
+
+    let media = button_media_nodes(node);
+    if !media.is_empty() {
+        record_debug_removal(
+            &mut debug_removals,
+            "removeBySelector",
+            Some(selector),
+            Some("exact selector media button"),
+            node,
+        );
+        for media_node in media {
+            node.insert_before(media_node);
+        }
+        node.detach();
+        return true;
+    }
+
+    if has_ancestor_tag(
+        node,
+        &[
+            "p", "li", "td", "th", "span", "h1", "h2", "h3", "h4", "h5", "h6",
+        ],
+    ) {
+        record_debug_removal(
+            &mut debug_removals,
+            "removeBySelector",
+            Some(selector),
+            Some("exact selector inline button"),
+            node,
+        );
+        unwrap_node_children_before(node);
+        return true;
+    }
+
+    false
+}
+
+fn button_media_nodes(button: &NodeRef) -> Vec<NodeRef> {
+    let Ok(matches) = button.select("picture, img, video") else {
+        return Vec::new();
+    };
+    matches
+        .filter_map(|matched| {
+            let node = matched.as_node().clone();
+            (!has_media_ancestor_before(&node, button)).then_some(node)
+        })
+        .collect()
+}
+
+fn has_media_ancestor_before(node: &NodeRef, boundary: &NodeRef) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if &parent == boundary {
+            return false;
+        }
+        if tag_name(&parent)
+            .as_deref()
+            .is_some_and(|tag| matches!(tag, "picture" | "video"))
+        {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
+}
+
+fn unwrap_node_children_before(node: &NodeRef) {
+    let children = node.children().collect::<Vec<_>>();
+    for child in children {
+        node.insert_before(child);
+    }
+    node.detach();
 }
 
 fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<DebugRemoval>>) {
@@ -26624,6 +26908,170 @@ Output: [0,1]</code></pre>
         .unwrap();
         assert!(!without_partial.org.contains("exact selector marker"));
         assert!(without_partial.org.contains("partial selector marker"));
+    }
+
+    #[test]
+    fn expanded_exact_selector_cleanup_removes_common_chrome() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Expanded Selectors</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Expanded Selectors</h1>
+              <p>The visible paragraph anchors extraction and should remain in the final Org output.</p>
+              <a href="#content">Skip to content marker</a>
+              <a href="https://example.com/pay?source=promotion">Promotion marker</a>
+              <a href="https://copyright.com/license">Copyright marker</a>
+              <div data-component-name="SubscribeWidgetToDOM">Substack subscribe marker</div>
+              <div data-testid="issue-metadata-sticky">GitHub sticky marker</div>
+              <div class="gh-header-sticky">GitHub header sticky marker</div>
+              <div class="noprint">Print hidden marker</div>
+              <div id="primaryaudio">NPR primary audio marker</div>
+              <svg data-icon="share"><title>Icon marker</title></svg>
+              <p>The concluding paragraph keeps the article substantial after selector cleanup.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/expanded-selectors".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("visible paragraph anchors extraction"));
+        assert!(output
+            .org
+            .contains("concluding paragraph keeps the article"));
+        for marker in [
+            "Skip to content marker",
+            "Promotion marker",
+            "Copyright marker",
+            "Substack subscribe marker",
+            "GitHub sticky marker",
+            "GitHub header sticky marker",
+            "Print hidden marker",
+            "NPR primary audio marker",
+            "Icon marker",
+        ] {
+            assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
+        }
+    }
+
+    #[test]
+    fn exact_button_cleanup_preserves_inline_text_and_media() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Button Cleanup</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Button Cleanup</h1>
+              <p>The article starts with enough real text to keep extraction stable.</p>
+              <p>A tooltip term <button>dynamic programming</button> should remain readable.</p>
+              <button>Standalone UI button marker</button>
+              <figure>
+                <button>
+                  <picture>
+                    <source srcset="/images/chart-large.jpg 1200w">
+                    <img src="/images/chart.jpg" alt="Chart image">
+                  </picture>
+                  <span>Zoom overlay marker</span>
+                </button>
+                <figcaption>Chart caption remains.</figcaption>
+              </figure>
+              <p>The article continues after the button-wrapped media.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/button-cleanup".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("dynamic programming"));
+        assert!(output
+            .org
+            .contains("[[https://example.com/images/chart-large.jpg][Chart image]]"));
+        assert!(output.org.contains("Chart caption remains."));
+        assert!(!output.org.contains("Standalone UI button marker"));
+        assert!(!output.org.contains("Zoom overlay marker"));
+    }
+
+    #[test]
+    fn hidden_class_cleanup_respects_hidden_option_and_responsive_show() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Hidden Classes</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Hidden Classes</h1>
+              <p>The visible paragraph should always remain in the extracted output.</p>
+              <p class="hidden">Plain hidden class marker.</p>
+              <p class="invisible">Invisible class marker.</p>
+              <p class="hidden sm:block">Responsive show marker.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let with_removal = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/hidden-classes".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(with_removal.org.contains("visible paragraph"));
+        assert!(!with_removal.org.contains("Plain hidden class marker"));
+        assert!(!with_removal.org.contains("Invisible class marker"));
+        assert!(with_removal.org.contains("Responsive show marker"));
+
+        let without_removal = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/hidden-classes".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_hidden_elements: false,
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(without_removal.org.contains("Plain hidden class marker"));
+        assert!(without_removal.org.contains("Invisible class marker"));
+        assert!(without_removal.org.contains("Responsive show marker"));
     }
 
     #[test]
