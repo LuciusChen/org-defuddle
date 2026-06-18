@@ -301,8 +301,10 @@ Known remaining gaps:
 - Core low-content retry is deliberately conservative: it recovers empty-body
   extractions but does not replace already extracted short articles with noisier
   fallback passes.
-- URL fetching exists in both Emacs and the Rust CLI, but the Emacs URL path
-  still uses Emacs ~url-retrieve~ rather than the Rust CLI fetch stack.
+- URL fetching exists in both Emacs and the Rust CLI.  The Emacs generic HTML
+  URL path uses the Rust CLI fetch stack when options can be represented
+  without changing output semantics; site-specific Emacs API helper requests
+  still use Emacs ~url-retrieve~.
 
 Implemented:
 
@@ -396,6 +398,11 @@ Implemented:
   can collapse whitespace. Extractions that still have no textual body fail
   with an upstream-style no-content error, and successful ~--output~ writes
   report the written file path on stdout.
+- Emacs generic HTML URL extraction can delegate to the Rust CLI fetch stack
+  when using compatible options, preserving CLI behavior for redirects,
+  proxies, charsets, size limits, bot-user-agent retry, and raw Markdown
+  recovery while keeping dynamic-module parsing for direct HTML/buffer input
+  and option sets the CLI cannot represent.
 - Org footnote rendering for several common defuddle patterns, including
   ~fn:/fnref:~ references, Google Docs ~ftnt~ exports, WordPress block
   footnotes, Easy Footnotes, hidden footnote sections, MediaWiki

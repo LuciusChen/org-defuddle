@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'subr-x)
 (require 'url)
 (require 'url-parse)
 (require 'url-util)
@@ -103,6 +104,23 @@
 When nil, `org-defuddle-load-module' tries the repository-local
 Cargo release output."
   :type '(choice (const :tag "Auto-detect" nil) file)
+  :group 'org-defuddle)
+
+(defcustom org-defuddle-cli-file nil
+  "Path to the compiled org-defuddle CLI.
+
+When nil, URL extraction tries the repository-local Cargo release
+output when `org-defuddle-use-cli-url-fetch' is non-nil."
+  :type '(choice (const :tag "Auto-detect" nil) file)
+  :group 'org-defuddle)
+
+(defcustom org-defuddle-use-cli-url-fetch t
+  "Whether generic HTML URL extraction may use the Rust CLI fetch stack.
+
+The CLI path is used only when the requested options can be represented
+without changing output semantics.  Unsupported options fall back to
+Emacs `url-retrieve' plus the dynamic module."
+  :type 'boolean
   :group 'org-defuddle)
 
 (defcustom org-defuddle-include-images t
@@ -216,6 +234,19 @@ language order."
                ((eq system-type 'windows-nt) "org_defuddle_module.dll")
                (t "liborg_defuddle_module.so"))))
     (expand-file-name (concat "target/release/" lib) root)))
+
+(defun org-defuddle--default-cli-file ()
+  "Return the default org-defuddle CLI path for the current platform."
+  (expand-file-name
+   (concat "target/release/org-defuddle"
+           (if (eq system-type 'windows-nt) ".exe" ""))
+   (org-defuddle--repo-root)))
+
+(defun org-defuddle--cli-file ()
+  "Return an executable org-defuddle CLI path, or nil."
+  (let ((cli-file (or org-defuddle-cli-file
+                      (org-defuddle--default-cli-file))))
+    (and (file-executable-p cli-file) cli-file)))
 
 ;;;###autoload
 (defun org-defuddle-load-module ()
@@ -529,6 +560,79 @@ HEADERS, METHOD, and DATA configure the request."
        (unwind-protect
            (funcall callback (org-defuddle--response-body))
          (kill-buffer (current-buffer)))))))
+
+(defun org-defuddle--cli-compatible-html-url-options-p (options)
+  "Return non-nil when OPTIONS can use the CLI URL backend."
+  (and org-defuddle-use-cli-url-fetch
+       (org-defuddle--cli-file)
+       (org-defuddle--include-images-option options)
+       (org-defuddle--option options
+                             :remove-small-images
+                             org-defuddle-remove-small-images)
+       (null (org-defuddle--option options
+                                   :content-selector
+                                   org-defuddle-content-selector))
+       (eq (org-defuddle--option options
+                                 :include-replies
+                                 org-defuddle-include-replies)
+           'extractors)
+       (org-defuddle--option options
+                             :remove-hidden-elements
+                             org-defuddle-remove-hidden-elements)
+       (org-defuddle--option options
+                             :remove-exact-selectors
+                             org-defuddle-remove-exact-selectors)
+       (org-defuddle--option options
+                             :remove-partial-selectors
+                             org-defuddle-remove-partial-selectors)
+       (org-defuddle--option options
+                             :remove-content-patterns
+                             org-defuddle-remove-content-patterns)
+       (org-defuddle--option options
+                             :remove-low-scoring
+                             org-defuddle-remove-low-scoring)
+       (org-defuddle--standardize-option options)
+       (not (org-defuddle--debug-option options))
+       (not (org-defuddle--profile-option options))
+       (not (org-defuddle--markdown-option options))
+       (not (org-defuddle--separate-markdown-option options))))
+
+(defun org-defuddle--cli-url-command (url options)
+  "Return a CLI command list for parsing URL using OPTIONS."
+  (let ((command (list (org-defuddle--cli-file) "parse" url))
+        (language (org-defuddle--language-option options)))
+    (when (org-defuddle--frontmatter-option options)
+      (setq command (append command (list "--frontmatter"))))
+    (unless (string= language "")
+      (setq command (append command (list "--lang" language))))
+    command))
+
+(defun org-defuddle--cli-url-to-org (url options)
+  "Fetch and parse URL through the Rust CLI using OPTIONS."
+  (let* ((buffer (generate-new-buffer " *org-defuddle-cli*"))
+         (command (org-defuddle--cli-url-command url options)))
+    (make-process
+     :name "org-defuddle-cli"
+     :buffer buffer
+     :command command
+     :noquery t
+     :sentinel
+     (lambda (process _event)
+       (when (memq (process-status process) '(exit signal))
+         (let* ((exit-code (process-exit-status process))
+                (output-buffer (process-buffer process))
+                (output (when (buffer-live-p output-buffer)
+                          (with-current-buffer output-buffer
+                            (buffer-substring-no-properties
+                             (point-min)
+                             (point-max))))))
+           (when (buffer-live-p output-buffer)
+             (kill-buffer output-buffer))
+           (if (zerop exit-code)
+               (org-defuddle--insert-org-buffer
+                (string-trim-right (or output "")))
+             (message "org-defuddle CLI failed: %s"
+                      (string-trim (or output ""))))))))))
 
 (defun org-defuddle--insert-org-buffer (org)
   "Insert ORG into a new Org buffer and display it."
@@ -954,11 +1058,13 @@ to `org-defuddle-html-to-org'."
 
 (defun org-defuddle--html-url-to-org (url options)
   "Fetch URL as HTML and insert extracted Org using OPTIONS."
-  (org-defuddle--retrieve-body
-   url
-   (lambda (body)
-     (org-defuddle--insert-org-buffer
-      (org-defuddle-html-to-org body url options)))))
+  (if (org-defuddle--cli-compatible-html-url-options-p options)
+      (org-defuddle--cli-url-to-org url options)
+    (org-defuddle--retrieve-body
+     url
+     (lambda (body)
+       (org-defuddle--insert-org-buffer
+        (org-defuddle-html-to-org body url options))))))
 
 (defun org-defuddle--c2-url-to-org (url title)
   "Fetch C2 Wiki URL using TITLE and insert extracted Org."
