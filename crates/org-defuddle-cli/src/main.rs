@@ -54,11 +54,15 @@ where
     let mut output = parse_html_to_org(&html, defuddle_options(&options, url.clone()))
         .map_err(|err| err.to_string())?;
     output = retry_url_with_bot_user_agent(output, &options)?;
+    ensure_meaningful_content(&output, &options)?;
     let rendered = render_output_with_html(&output, &options, Some(&html))?;
 
     if let Some(path) = &options.output {
         fs::write(path, rendered)
             .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+        stdout
+            .write_all(format!("Output written to {}\n", path.display()).as_bytes())
+            .map_err(|err| err.to_string())?;
     } else {
         stdout
             .write_all(rendered.as_bytes())
@@ -713,6 +717,24 @@ fn count_markdown_words(markdown: &str) -> usize {
         .count()
 }
 
+fn ensure_meaningful_content(output: &DefuddleOutput, options: &CliOptions) -> Result<(), String> {
+    if !strip_html_tags(&output.html).trim().is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "No content could be extracted from {}",
+        source_label(options)
+    ))
+}
+
+fn source_label(options: &CliOptions) -> &str {
+    options
+        .source
+        .as_deref()
+        .filter(|source| !source.is_empty() && *source != "-")
+        .unwrap_or("stdin")
+}
+
 fn defuddle_options(options: &CliOptions, url: Option<String>) -> DefuddleOptions {
     DefuddleOptions {
         url,
@@ -810,7 +832,7 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc::{self, Receiver};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn sample_output() -> DefuddleOutput {
         DefuddleOutput {
@@ -932,6 +954,38 @@ mod tests {
             render_output(&output, &markdown_options).unwrap(),
             "# Hello\n\nBody\n"
         );
+    }
+
+    #[test]
+    fn output_file_reports_written_path() {
+        let input_path = unique_temp_path("input", "html");
+        let output_path = unique_temp_path("output", "org");
+        let html = "<!doctype html><html><head><title>File Output</title></head><body><article><h1>File Output</h1><p>Rendered body content goes to the requested file.</p></article></body></html>";
+        fs::write(&input_path, html).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let result = run(
+            vec![
+                "parse".to_string(),
+                input_path.display().to_string(),
+                "--output".to_string(),
+                output_path.display().to_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        let _ = fs::remove_file(&input_path);
+        assert!(result.is_ok());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!("Output written to {}\n", output_path.display())
+        );
+        let rendered = fs::read_to_string(&output_path).unwrap();
+        let _ = fs::remove_file(&output_path);
+        assert!(rendered.contains("* File Output"));
+        assert!(rendered.contains("Rendered body content"));
     }
 
     #[test]
@@ -1098,7 +1152,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        run(
+        let err = run(
             vec![
                 "parse".to_string(),
                 url,
@@ -1110,15 +1164,40 @@ mod tests {
             &mut stdout,
             &mut stderr,
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(String::from_utf8(stdout).unwrap(), "Client Shell\n");
+        assert_eq!(stdout, b"");
         let first = requests
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .to_ascii_lowercase();
         assert!(first.contains("user-agent: customagent"));
         assert!(requests.recv_timeout(Duration::from_millis(100)).is_err());
+        assert!(err.contains("No content could be extracted from http://"));
+    }
+
+    #[test]
+    fn errors_when_url_retry_still_has_no_content() {
+        let shell =
+            b"<!doctype html><html><head><title>Client Shell</title></head><body><div id=\"app\"></div></body></html>"
+                .to_vec();
+        let (url, requests) = serve_responses(vec![
+            TestResponse::new(
+                "HTTP/1.1 200 OK",
+                &[("Content-Type", "text/html")],
+                shell.clone(),
+            ),
+            TestResponse::new("HTTP/1.1 200 OK", &[("Content-Type", "text/html")], shell),
+        ]);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let err = run(vec!["parse".to_string(), url], &mut stdout, &mut stderr).unwrap_err();
+
+        assert_eq!(stdout, b"");
+        assert!(err.contains("No content could be extracted from http://"));
+        assert!(requests.recv_timeout(Duration::from_secs(1)).is_ok());
+        assert!(requests.recv_timeout(Duration::from_secs(1)).is_ok());
     }
 
     #[test]
@@ -1362,5 +1441,16 @@ let answer = 42;
                 .find(|(entry_key, _)| *entry_key == key)
                 .map(|(_, value)| value.to_string())
         }
+    }
+
+    fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "org-defuddle-cli-{prefix}-{}-{id}.{extension}",
+            std::process::id()
+        ))
     }
 }

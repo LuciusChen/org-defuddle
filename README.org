@@ -387,7 +387,9 @@ Implemented:
   decodes declared or detected charsets. Empty URL extractions retry once with
   defuddle's bot user agent unless the user supplied ~--user-agent~; when the
   bot response contains raw Markdown, the CLI extracts it before DOM parsing
-  can collapse whitespace.
+  can collapse whitespace. Extractions that still have no textual body fail
+  with an upstream-style no-content error, and successful ~--output~ writes
+  report the written file path on stdout.
 - Org footnote rendering for several common defuddle patterns, including
   ~fn:/fnref:~ references, Google Docs ~ftnt~ exports, WordPress block
   footnotes, Easy Footnotes, hidden footnote sections, MediaWiki
