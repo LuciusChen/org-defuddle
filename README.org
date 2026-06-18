@@ -601,9 +601,11 @@ Implemented:
   Rust core, dynamic module, and Elisp wrappers. The exact-selector pass covers
   a broader set of upstream chrome selectors for ads, metadata, navigation,
   Substack widgets, GitHub sticky UI, skip links, print-hidden blocks, logos,
-  newsletter prompts, SVG icons, and common sidebars. Button cleanup preserves
-  inline text and extracts media from media-wrapping buttons before removing UI
-  controls. Debug/profile records from this pass use the upstream
+  newsletter prompts, SVG icons, and common sidebars. It also covers selected
+  case-insensitive attribute-selector equivalents and guarded header cleanup for
+  Rust selectors that cannot express upstream browser-only ~:has()~ guards.
+  Button cleanup preserves inline text and extracts media from media-wrapping
+  buttons before removing UI controls. Debug/profile records from this pass use the upstream
   ~removeBySelector~ step name.
 - Upstream defuddle fixture smoke tests that validate selected expected
   metadata and content across JavaScript links, code blocks, syntax highlighter
@@ -666,9 +668,9 @@ Implemented:
 Remaining parity work:
 
 - Finish the remaining selector parity gaps that need conditional Rust
-  equivalents for browser-only selectors such as ~:has()~, case-insensitive CSS
-  attribute matching, and high-risk broad selectors such as bare ~label~, plus
-  the remaining content-pattern removals.
+  equivalents for browser-only selectors such as ~:has()~, remaining
+  case-insensitive CSS attribute edge cases, and high-risk broad selectors such
+  as bare ~label~, plus the remaining content-pattern removals.
 - Continue expanding low-scoring block-pruning heuristics to match the full
   upstream scorer.
 - Expand image/media support to the full upstream fixture set, including

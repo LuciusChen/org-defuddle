@@ -11956,6 +11956,7 @@ fn remove_exact_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<De
             }
         }
     }
+    remove_conditional_exact_noise(document, debug_removals);
 }
 
 fn should_skip_exact_noise_node(node: &NodeRef) -> bool {
@@ -11975,6 +11976,203 @@ fn should_skip_exact_noise_node(node: &NodeRef) -> bool {
         return true;
     }
     is_exact_noise_footnote_node(node) || is_code_table_gutter_node(node)
+}
+
+fn remove_conditional_exact_noise(
+    document: &NodeRef,
+    mut debug_removals: Option<&mut Vec<DebugRemoval>>,
+) {
+    let Ok(matches) = document.select("*") else {
+        return;
+    };
+    let nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node().clone();
+            conditional_exact_noise_selector(&node).map(|selector| (node, selector))
+        })
+        .collect::<Vec<_>>();
+
+    for (node, selector) in nodes {
+        if should_skip_exact_noise_node(&node) {
+            continue;
+        }
+        record_debug_removal(
+            &mut debug_removals,
+            "removeBySelector",
+            Some(selector),
+            Some("conditional exact selector"),
+            &node,
+        );
+        node.detach();
+    }
+}
+
+fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
+    if is_removable_header_node(node) {
+        return Some("header:not(:has(p + p)):not(:has(img))");
+    }
+
+    let element = node.as_element()?;
+    let tag = element.name.local.as_ref();
+    let attrs = element.attributes.borrow();
+    let class = attrs.get("class").unwrap_or_default();
+    let id = attrs.get("id").unwrap_or_default();
+
+    if class_token_eq_ci(class, "ad") && !attr_contains_ci(class, "gradient") {
+        return Some(".ad:not([class*=\"gradient\"])");
+    }
+    if attr_prefix_ci(class, "ad-") {
+        return Some("[class^=\"ad-\" i]");
+    }
+    if attr_suffix_ci(class, "-ad") {
+        return Some("[class$=\"-ad\" i]");
+    }
+    if attr_prefix_ci(id, "ad-") {
+        return Some("[id^=\"ad-\" i]");
+    }
+    if attr_suffix_ci(id, "-ad") {
+        return Some("[id$=\"-ad\" i]");
+    }
+    if attr_contains_ci(attrs.get("alt").unwrap_or_default(), "advert") {
+        return Some("[alt*=\"advert\" i]");
+    }
+    if attr_eq_ci(attrs.get("role").unwrap_or_default(), "banner") {
+        return Some("[role=\"banner\" i]");
+    }
+    if attr_eq_ci(attrs.get("role").unwrap_or_default(), "navigation") {
+        return Some("[role=\"navigation\" i]");
+    }
+    if attr_eq_ci(attrs.get("role").unwrap_or_default(), "dialog") {
+        return Some("[role=\"dialog\" i]");
+    }
+    if attr_eq_ci(attrs.get("role").unwrap_or_default(), "alertdialog") {
+        return Some("[role=\"alertdialog\" i]");
+    }
+    if attr_contains_ci(attrs.get("role").unwrap_or_default(), "complementary") {
+        return Some("[role*=\"complementary\" i]");
+    }
+    if attr_contains_ci(class, "pagination") {
+        return Some("[class*=\"pagination\" i]");
+    }
+    if attr_eq_ci(attrs.get("rel").unwrap_or_default(), "sponsored") {
+        return Some("[rel=\"sponsored\" i]");
+    }
+    if attr_eq_ci(attrs.get("rel").unwrap_or_default(), "tag") {
+        return Some("[rel=\"tag\" i]");
+    }
+    if attr_contains_ci(attrs.get("href").unwrap_or_default(), "source=promotion") {
+        return Some("[href*=\"source=promotion\" i]");
+    }
+    if attr_contains_ci(attrs.get("src").unwrap_or_default(), "author") {
+        return Some("[src*=\"author\" i]");
+    }
+    if tag == "input"
+        && attr_eq_ci(attrs.get("type").unwrap_or_default(), "checkbox")
+        && checkbox_ui_toggle_attr(class, id)
+    {
+        return Some(
+            "input[type=\"checkbox\"][class/id*=\"sidebar|drawer|hamburger|toggle|trigger\" i]",
+        );
+    }
+    if attr_eq_ci(attrs.get("data-print-layout").unwrap_or_default(), "hide") {
+        return Some("[data-print-layout=\"hide\" i]");
+    }
+    if attr_eq_ci(attrs.get("data-block").unwrap_or_default(), "donotprint") {
+        return Some("[data-block=\"donotprint\" i]");
+    }
+    if attr_contains_ci(class, "clickable-icon") {
+        return Some("[class*=\"clickable-icon\" i]");
+    }
+    if tag == "span"
+        && attr_contains_ci(class, "ltx_tag")
+        && attr_contains_ci(class, "ltx_tag_item")
+        && has_ancestor_tag(node, &["li"])
+    {
+        return Some("li span[class*=\"ltx_tag\" i][class*=\"ltx_tag_item\" i]");
+    }
+    if tag == "a"
+        && attrs.get("href").is_some_and(|href| href.starts_with('#'))
+        && attr_contains_ci(class, "anchor")
+    {
+        return Some("a[href^=\"#\"][class*=\"anchor\" i]");
+    }
+    if tag == "a"
+        && attrs.get("href").is_some_and(|href| href.starts_with('#'))
+        && attr_contains_ci(class, "ref")
+        && !class_token_eq_ci(class, "ltx_ref")
+        && !class_token_eq_ci(class, "footnote-backref")
+    {
+        return Some("a[href^=\"#\"][class*=\"ref\" i]:not(.ltx_ref):not(.footnote-backref)");
+    }
+    if attr_contains_ci(
+        attrs.get("data-container").unwrap_or_default(),
+        "most-viewed",
+    ) {
+        return Some("[data-container*=\"most-viewed\" i]");
+    }
+    if attr_contains_ci(attrs.get("data-link-name").unwrap_or_default(), "skip") {
+        return Some("[data-link-name*=\"skip\" i]");
+    }
+    if attr_contains_ci(attrs.get("aria-label").unwrap_or_default(), "skip") {
+        return Some("[aria-label*=\"skip\" i]");
+    }
+    if attr_prefix_ci(attrs.get("title").unwrap_or_default(), "share on") {
+        return Some("[title^=\"Share on\" i]");
+    }
+    if attr_eq_ci(attrs.get("aria-label").unwrap_or_default(), "dismiss") {
+        return Some("[aria-label=\"Dismiss\" i]");
+    }
+    if attr_eq_ci(attrs.get("aria-label").unwrap_or_default(), "close") {
+        return Some("[aria-label=\"Close\" i]");
+    }
+    if attr_eq_ci(
+        attrs.get("data-optimizely").unwrap_or_default(),
+        "related-articles-section",
+    ) {
+        return Some("[data-optimizely=\"related-articles-section\" i]");
+    }
+    None
+}
+
+fn is_removable_header_node(node: &NodeRef) -> bool {
+    if tag_name(node).as_deref() != Some("header") {
+        return false;
+    }
+    count_selector(node, "img, picture") == 0 && count_selector(node, "p + p") == 0
+}
+
+fn checkbox_ui_toggle_attr(class: &str, id: &str) -> bool {
+    ["sidebar", "drawer", "hamburger", "toggle", "trigger"]
+        .into_iter()
+        .any(|needle| attr_contains_ci(class, needle) || attr_contains_ci(id, needle))
+}
+
+fn class_token_eq_ci(class: &str, token: &str) -> bool {
+    class
+        .split_whitespace()
+        .any(|part| part.eq_ignore_ascii_case(token))
+}
+
+fn attr_eq_ci(value: &str, expected: &str) -> bool {
+    value.eq_ignore_ascii_case(expected)
+}
+
+fn attr_contains_ci(value: &str, needle: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
+}
+
+fn attr_prefix_ci(value: &str, prefix: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .starts_with(&prefix.to_ascii_lowercase())
+}
+
+fn attr_suffix_ci(value: &str, suffix: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .ends_with(&suffix.to_ascii_lowercase())
 }
 
 fn is_exact_noise_footnote_node(node: &NodeRef) -> bool {
@@ -27244,6 +27442,110 @@ Output: [0,1]</code></pre>
         ] {
             assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
         }
+    }
+
+    #[test]
+    fn conditional_exact_selector_cleanup_matches_case_insensitive_attrs() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Case Insensitive Selectors</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Case Insensitive Selectors</h1>
+              <p>The visible paragraph anchors extraction and should remain after selector cleanup.</p>
+              <div class="Ad-rail">Uppercase ad class marker</div>
+              <div id="top-AD">Uppercase ad id marker</div>
+              <a rel="SPONSORED" href="/sponsor">Sponsored marker</a>
+              <a href="/pay?Source=Promotion">Source promotion marker</a>
+              <div role="Complementary">Complementary role marker</div>
+              <div data-print-layout="HIDE">Print layout marker</div>
+              <a aria-label="Skip to Content" href="#main">Skip marker</a>
+              <button aria-label="DISMISS">Dismiss marker</button>
+              <a title="Share on Example" href="/share">Share title marker</a>
+              <div data-optimizely="RELATED-ARTICLES-SECTION">Optimizely related marker</div>
+              <input type="checkbox" class="SidebarToggle" checked>
+              <p>The concluding paragraph keeps the article substantial and readable.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/case-insensitive-selectors".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("visible paragraph anchors extraction"));
+        for marker in [
+            "Uppercase ad class marker",
+            "Uppercase ad id marker",
+            "Sponsored marker",
+            "Source promotion marker",
+            "Complementary role marker",
+            "Print layout marker",
+            "Skip marker",
+            "Dismiss marker",
+            "Share title marker",
+            "Optimizely related marker",
+        ] {
+            assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
+        }
+        assert!(!output.html.contains("SidebarToggle"), "{}", output.html);
+    }
+
+    #[test]
+    fn conditional_exact_selector_cleanup_handles_headers_conservatively() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Header Cleanup</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Header Cleanup</h1>
+              <header><a href="/">Home</a><span>Navigation marker</span></header>
+              <p>The visible paragraph anchors extraction after the navigation header.</p>
+              <header>
+                <p>First deck paragraph remains as content.</p>
+                <p>Second deck paragraph remains as content.</p>
+              </header>
+              <p>The concluding paragraph keeps extraction stable.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/header-cleanup".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("visible paragraph anchors extraction"));
+        assert!(!output.org.contains("Navigation marker"));
+        assert!(output
+            .org
+            .contains("First deck paragraph remains as content."));
+        assert!(output
+            .org
+            .contains("Second deck paragraph remains as content."));
     }
 
     #[test]
