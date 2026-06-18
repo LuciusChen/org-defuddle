@@ -428,7 +428,10 @@ Implemented:
   preserved. Custom
   ~uni-image-full-width~ image elements
   are normalized to ordinary figure blocks. Empty links that contain only
-  small SVG icons are removed as decorative UI.
+  small SVG icons are removed as decorative UI. Inline SVG cleanup preserves
+  substantive diagrams while stripping framework class names and applying
+  selected fallback styles for external-CSS chart classes, Tailwind color
+  utilities, and CSS variable colors.
 - Linked-image rendering and selected lightbox/gallery cleanup: linked
   thumbnails are preserved as Org links, Mastodon multi-image media galleries
   render all linked original images, and same-container full-size duplicate
@@ -677,8 +680,8 @@ Remaining parity work:
 - Continue expanding low-scoring block-pruning heuristics to match the full
   upstream scorer.
 - Expand image/media support to the full upstream fixture set, including
-  additional multi-image gallery patterns, richer platform video/embed
-  handling, and remaining site-specific image/figure elements.
+  richer platform video/embed handling and remaining site-specific
+  image/figure elements.
 - Expand footnote and callout support to the full upstream fixture set, and
   expand MathML-to-LaTeX conversion and MathJax CHTML reconstruction, remaining
   codeblock layouts, broader multi-column layout table handling, richer table

@@ -12836,6 +12836,7 @@ fn remove_heading_permalink_anchors(document: &NodeRef) {
 
 fn normalize_images(document: &NodeRef) {
     remove_obsolete_embed_elements(document);
+    normalize_svg_fallback_styles(document);
     promote_noscript_images(document);
     normalize_picture_images(document);
     normalize_standalone_source_images(document);
@@ -12846,6 +12847,126 @@ fn normalize_images(document: &NodeRef) {
     normalize_custom_image_elements(document);
     dedupe_figure_images(document);
     dedupe_adjacent_lazy_images(document);
+}
+
+fn normalize_svg_fallback_styles(document: &NodeRef) {
+    let Ok(matches) = document.select("svg, svg *") else {
+        return;
+    };
+    let nodes = matches.map(|m| m.as_node().clone()).collect::<Vec<_>>();
+    for node in nodes {
+        normalize_svg_fallback_node(&node);
+    }
+}
+
+fn normalize_svg_fallback_node(node: &NodeRef) {
+    let Some(element) = node.as_element() else {
+        return;
+    };
+    let class = element.attributes.borrow().get("class").map(str::to_owned);
+    let mut attrs = element.attributes.borrow_mut();
+
+    normalize_svg_css_attr(&mut attrs, "fill");
+    normalize_svg_css_attr(&mut attrs, "stroke");
+
+    if let Some(class) = class {
+        apply_svg_class_fallbacks(&mut attrs, &class);
+        attrs.remove("class");
+    }
+}
+
+fn normalize_svg_css_attr(attrs: &mut kuchiki::Attributes, name: &str) {
+    let Some(value) = attrs.get(name).map(str::to_owned) else {
+        return;
+    };
+    if let Some(normalized) = svg_css_color_fallback(&value) {
+        attrs.insert(name, normalized);
+    }
+}
+
+fn apply_svg_class_fallbacks(attrs: &mut kuchiki::Attributes, class: &str) {
+    let tokens = class.split_whitespace().collect::<Vec<_>>();
+    if tokens.iter().any(|token| *token == "gridline") {
+        attrs.insert("stroke-opacity", "0.2".to_string());
+        attrs.insert("stroke", "currentColor".to_string());
+    }
+    if tokens.iter().any(|token| *token == "path-area") {
+        attrs.insert("fill", "none".to_string());
+    }
+    if tokens.iter().any(|token| *token == "path-line") {
+        attrs.insert("stroke", "currentColor".to_string());
+        attrs.insert("fill", "none".to_string());
+    }
+
+    for token in tokens {
+        if let Some(color) = svg_tailwind_class_color(token, "fill-") {
+            attrs.insert("fill", color);
+        } else if let Some(color) = svg_tailwind_class_color(token, "stroke-") {
+            attrs.insert("stroke", color);
+        } else if let Some(size) = token
+            .strip_prefix("text-[")
+            .and_then(|value| value.strip_suffix("]"))
+            .filter(|value| value.ends_with("px"))
+        {
+            set_svg_style_property(attrs, "font-size", size);
+        } else if token == "font-semibold" {
+            set_svg_style_property(attrs, "font-weight", "600");
+        } else if token == "font-bold" {
+            set_svg_style_property(attrs, "font-weight", "700");
+        }
+    }
+}
+
+fn svg_tailwind_class_color(token: &str, prefix: &str) -> Option<String> {
+    let color = token.strip_prefix(prefix)?;
+    let value = match color {
+        "amber-500" => "#f59e0b",
+        "amber-600" => "#d97706",
+        "green-600" => "#16a34a",
+        "orange-500" => "#f97316",
+        "slate-300" => "#cbd5e1",
+        "slate-400" => "#94a3b8",
+        "zinc-400" => "#a1a1aa",
+        _ => return None,
+    };
+    Some(value.to_string())
+}
+
+fn set_svg_style_property(attrs: &mut kuchiki::Attributes, property: &str, value: &str) {
+    let declaration = format!("{property}:{value}");
+    let Some(existing) = attrs.get("style").map(str::to_owned) else {
+        attrs.insert("style", declaration);
+        return;
+    };
+    if existing
+        .split(';')
+        .map(str::trim)
+        .any(|part| part.starts_with(property))
+    {
+        return;
+    }
+    let trimmed = existing.trim_end_matches(';').trim();
+    if trimmed.is_empty() {
+        attrs.insert("style", declaration);
+    } else {
+        attrs.insert("style", format!("{trimmed};{declaration}"));
+    }
+}
+
+fn svg_css_color_fallback(value: &str) -> Option<String> {
+    [
+        ("--background-color-card", "Canvas"),
+        ("--text-color-body", "currentColor"),
+        ("--color-amber-600", "#d97706"),
+        ("--color-green-600", "#16a34a"),
+        ("--color-slate-400", "#94a3b8"),
+        ("--color-slate-300", "#cbd5e1"),
+        ("--color-zinc-400", "#a1a1aa"),
+        ("--color-orange-500", "#f97316"),
+        ("--color-amber-500", "#f59e0b"),
+    ]
+    .into_iter()
+    .find_map(|(needle, fallback)| value.contains(needle).then(|| fallback.to_string()))
 }
 
 fn remove_obsolete_embed_elements(document: &NodeRef) {
