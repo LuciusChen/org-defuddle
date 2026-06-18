@@ -370,8 +370,9 @@ Implemented:
   Markdown renderer handles selected upstream Turndown edge cases including
   link destinations with spaces, titles, and escaped parentheses, image syntax
   after literal exclamation marks, linked images, and ragged table column
-  padding, plus MathML/data-latex conversion with MathML preferred over
-  degraded attributes and standalone inline math promoted to block math.
+  padding, ~wbr~ joins, and document ~base href~ URL resolution, plus
+  MathML/data-latex conversion with MathML preferred over degraded attributes
+  and standalone inline math promoted to block math.
 - Upstream-compatible JSON response names at the CLI and dynamic-module
   boundary, including ~content~, ~wordCount~, ~parseTime~, and
   ~contentMarkdown~, while retaining org-defuddle extensions such as ~org~,

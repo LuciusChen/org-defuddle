@@ -944,7 +944,8 @@ fn parse_html_to_org_once(
     remove_webmention_chrome(&document);
     sanitize_links(&document);
     remove_heading_permalink_anchors(&document);
-    resolve_relative_urls(&document, &metadata.url);
+    let relative_base_url = document_base_url(&document, &metadata.url);
+    resolve_relative_urls(&document, &relative_base_url);
     remove_lightbox_duplicate_images(&document);
     let mut no_content_pattern_debug = None;
     remove_eyebrow_label(&document, &mut no_content_pattern_debug);
@@ -14506,6 +14507,12 @@ fn resolve_relative_urls(document: &NodeRef, base_url: &str) {
     }
 }
 
+fn document_base_url(document: &NodeRef, page_url: &str) -> String {
+    select_first_attr_raw(document, "base[href]", "href")
+        .and_then(|href| absolutize_url((!page_url.trim().is_empty()).then_some(page_url), &href))
+        .unwrap_or_else(|| page_url.to_string())
+}
+
 fn remove_orphan_headings(document: &NodeRef) {
     let Ok(matches) = document.select("h1, h2, h3, h4, h5, h6") else {
         return;
@@ -18645,6 +18652,7 @@ fn html_fragment_to_markdown(html: &str) -> String {
 struct MarkdownRenderer {
     out: String,
     list_depth: usize,
+    suppress_next_space: bool,
 }
 
 impl MarkdownRenderer {
@@ -18652,6 +18660,7 @@ impl MarkdownRenderer {
         Self {
             out: String::new(),
             list_depth: 0,
+            suppress_next_space: false,
         }
     }
 
@@ -18676,6 +18685,7 @@ impl MarkdownRenderer {
         let tag = element.name.local.as_ref();
         match tag {
             "script" | "style" | "noscript" | "template" => {}
+            "wbr" => self.suppress_next_space = true,
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = tag[1..].parse::<usize>().unwrap_or(2).clamp(1, 6);
                 let text = self.render_inline_children(node);
@@ -18990,6 +19000,7 @@ impl MarkdownRenderer {
         let mut nested = MarkdownRenderer {
             out: String::new(),
             list_depth: self.list_depth,
+            suppress_next_space: false,
         };
         for child in node.children() {
             nested.render_node(&child, true);
@@ -19001,6 +19012,7 @@ impl MarkdownRenderer {
         let mut nested = MarkdownRenderer {
             out: String::new(),
             list_depth: self.list_depth,
+            suppress_next_space: false,
         };
         for child in node.children() {
             nested.render_node(&child, false);
@@ -19014,7 +19026,9 @@ impl MarkdownRenderer {
             return;
         }
         let text = escape_markdown_text(&text);
-        if needs_space_before(&self.out, &text) {
+        if self.suppress_next_space {
+            self.suppress_next_space = false;
+        } else if needs_space_before(&self.out, &text) {
             self.out.push(' ');
         }
         self.out.push_str(&text);
@@ -30420,6 +30434,11 @@ line break text.">
         );
         assert!(link_with_spaces.contains("[Open page](<myapp:open shared page> \"Shared page\")"));
 
+        let normal_link = html_fragment_to_markdown(
+            r#"<article><p><a href="https://example.com/page">Open page</a></p></article>"#,
+        );
+        assert!(normal_link.contains("[Open page](https://example.com/page)"));
+
         let link_with_parentheses = html_fragment_to_markdown(
             r#"<article><p><a href="https://example.com/page(1)">Open page</a></p></article>"#,
         );
@@ -30431,11 +30450,26 @@ line break text.">
         assert!(image_after_exclamation.contains("! ![IMG]"));
         assert!(!image_after_exclamation.contains("!!["));
 
+        let normal_image = html_fragment_to_markdown(
+            r#"<article><p>Hello world</p><img src="https://example.com/img.png" alt="photo"></article>"#,
+        );
+        assert!(normal_image.contains("![photo](https://example.com/img.png)"));
+
+        let exclamation_not_before_image =
+            html_fragment_to_markdown(r#"<article><p>Hello! This is great!</p></article>"#);
+        assert!(exclamation_not_before_image.contains("Hello! This is great!"));
+
         let linked_image_after_exclamation = html_fragment_to_markdown(
             r#"<article><p>Hello!<a href="https://example.com"><img src="https://example.com/img.png" alt="photo"></a></p></article>"#,
         );
         assert!(linked_image_after_exclamation.contains("! [![photo]"));
         assert!(!linked_image_after_exclamation.contains("![!["));
+
+        let wbr_text = html_fragment_to_markdown(
+            r#"<article><p>Super<wbr>cali<wbr>fragilistic</p><p><a href="https://example.com">long<wbr>word</a></p></article>"#,
+        );
+        assert!(wbr_text.contains("Supercalifragilistic"));
+        assert!(wbr_text.contains("[longword](https://example.com)"));
 
         let wider_body_rows = html_fragment_to_markdown(
             r#"<article>
@@ -30485,6 +30519,47 @@ line break text.">
         assert!(escaped_pipe_header.contains("A \\| B"));
         assert!(escaped_pipe_header.contains("| --- | --- |"));
         assert!(!escaped_pipe_header.contains("| --- | --- | --- |"));
+    }
+
+    #[test]
+    fn markdown_content_resolves_relative_urls_against_base_href() {
+        let with_base = parse_html_to_org(
+            r#"
+            <!doctype html>
+            <html>
+              <head><title>Base href</title><base href="/html/2312.00752v2/"></head>
+              <body><article><h1>Base href</h1><p>Content</p><img src="x1.png" alt="figure"></article></body>
+            </html>
+            "#,
+            DefuddleOptions {
+                url: Some("https://arxiv.org/html/2312.00752".to_string()),
+                separate_markdown: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(with_base
+            .content_markdown
+            .contains("https://arxiv.org/html/2312.00752v2/x1.png"));
+
+        let without_base = parse_html_to_org(
+            r#"
+            <!doctype html>
+            <html>
+              <head><title>No base href</title></head>
+              <body><article><h1>No base href</h1><p>Content</p><img src="x1.png" alt="figure"></article></body>
+            </html>
+            "#,
+            DefuddleOptions {
+                url: Some("https://arxiv.org/html/2312.00752".to_string()),
+                separate_markdown: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(without_base
+            .content_markdown
+            .contains("https://arxiv.org/html/x1.png"));
     }
 
     #[test]
