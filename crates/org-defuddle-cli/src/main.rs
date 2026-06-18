@@ -30,6 +30,16 @@ struct CliOptions {
     user_agent: Option<String>,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct FetchOptions {
+    url: Option<String>,
+    method: String,
+    headers: Vec<(String, String)>,
+    data: Option<String>,
+    language: Option<String>,
+    user_agent: Option<String>,
+}
+
 fn main() -> ExitCode {
     match run(
         std::env::args().skip(1),
@@ -49,6 +59,12 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    if args.first().is_some_and(|command| command == "fetch") {
+        let options = parse_fetch_args(args.into_iter().skip(1))?;
+        return run_fetch(&options, stdout);
+    }
+
     let options = parse_args(args)?;
     let (html, url) = read_source(&options)?;
     let mut output = parse_html_to_org(&html, defuddle_options(&options, url.clone()))
@@ -69,6 +85,24 @@ where
             .map_err(|err| err.to_string())?;
         stdout.write_all(b"\n").map_err(|err| err.to_string())?;
     }
+    Ok(())
+}
+
+fn run_fetch(options: &FetchOptions, stdout: &mut dyn Write) -> Result<(), String> {
+    let url = options.url.as_deref().ok_or_else(|| fetch_usage())?;
+    let user_agent = options.user_agent.as_deref().unwrap_or(DEFAULT_UA);
+    let body = fetch_body(
+        url,
+        options.method.as_str(),
+        &options.headers,
+        options.data.as_deref(),
+        user_agent,
+        options.language.as_deref(),
+        false,
+    )?;
+    stdout
+        .write_all(body.as_bytes())
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -194,6 +228,77 @@ where
     Ok(options)
 }
 
+fn parse_fetch_args<I, S>(args: I) -> Result<FetchOptions, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut args = args.into_iter().map(Into::into).peekable();
+    let mut options = FetchOptions {
+        method: "GET".to_string(),
+        ..FetchOptions::default()
+    };
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => return Err(fetch_usage()),
+            "-X" | "--method" => {
+                options.method = args
+                    .next()
+                    .ok_or_else(|| format!("{arg} requires an HTTP method"))?
+                    .to_ascii_uppercase();
+            }
+            "-H" | "--header" => {
+                let raw = args
+                    .next()
+                    .ok_or_else(|| format!("{arg} requires a header"))?;
+                options.headers.push(parse_header_arg(&raw)?);
+            }
+            "-d" | "--data" => {
+                options.data = Some(
+                    args.next()
+                        .ok_or_else(|| format!("{arg} requires a request body"))?,
+                );
+            }
+            "-l" | "--lang" => {
+                options.language = Some(
+                    args.next()
+                        .ok_or_else(|| format!("{arg} requires a language code"))?,
+                );
+            }
+            "-u" | "--user-agent" => {
+                options.user_agent = Some(
+                    args.next()
+                        .ok_or_else(|| format!("{arg} requires a user agent"))?,
+                );
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown fetch option: {arg}")),
+            _ => {
+                if options.url.is_some() {
+                    return Err(format!("unexpected extra fetch URL: {arg}"));
+                }
+                options.url = Some(arg);
+            }
+        }
+    }
+
+    if options.url.is_none() {
+        return Err(fetch_usage());
+    }
+    Ok(options)
+}
+
+fn parse_header_arg(raw: &str) -> Result<(String, String), String> {
+    let Some((name, value)) = raw.split_once(':') else {
+        return Err(format!("invalid header {raw:?}; expected NAME: VALUE"));
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(format!("invalid header {raw:?}; header name is empty"));
+    }
+    Ok((name.to_string(), value.trim_start().to_string()))
+}
+
 fn read_source(options: &CliOptions) -> Result<(String, Option<String>), String> {
     match options.source.as_deref() {
         Some("-") | None => {
@@ -249,14 +354,72 @@ fn initial_user_agent(source: &str) -> &'static str {
 }
 
 fn fetch_page(source: &str, user_agent: &str, language: Option<&str>) -> Result<String, String> {
-    let env = |name: &str| std::env::var(name).ok();
-    fetch_page_with_env(source, user_agent, language, &env)
+    fetch_body(
+        source,
+        "GET",
+        &[(
+            "Accept".to_string(),
+            "text/html,application/xhtml+xml".to_string(),
+        )],
+        None,
+        user_agent,
+        language,
+        true,
+    )
 }
 
+fn fetch_body(
+    source: &str,
+    method: &str,
+    headers: &[(String, String)],
+    data: Option<&str>,
+    user_agent: &str,
+    language: Option<&str>,
+    require_html: bool,
+) -> Result<String, String> {
+    let env = |name: &str| std::env::var(name).ok();
+    fetch_body_with_env(
+        source,
+        method,
+        headers,
+        data,
+        user_agent,
+        language,
+        require_html,
+        &env,
+    )
+}
+
+#[cfg(test)]
 fn fetch_page_with_env(
     source: &str,
     user_agent: &str,
     language: Option<&str>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, String> {
+    fetch_body_with_env(
+        source,
+        "GET",
+        &[(
+            "Accept".to_string(),
+            "text/html,application/xhtml+xml".to_string(),
+        )],
+        None,
+        user_agent,
+        language,
+        true,
+        env,
+    )
+}
+
+fn fetch_body_with_env(
+    source: &str,
+    method: &str,
+    headers: &[(String, String)],
+    data: Option<&str>,
+    user_agent: &str,
+    language: Option<&str>,
+    require_html: bool,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
     let mut builder = ureq::AgentBuilder::new()
@@ -270,15 +433,26 @@ fn fetch_page_with_env(
     }
     let agent = builder.build();
     let mut request = agent
-        .get(source)
+        .request(method, source)
         .set("User-Agent", user_agent)
-        .set("Accept", "text/html,application/xhtml+xml");
+        .set("Accept", "*/*");
+    for (name, value) in headers {
+        request = request.set(name, value);
+    }
     if let Some(language) = language.filter(|language| !language.trim().is_empty()) {
         request = request.set("Accept-Language", language.trim());
     }
 
-    let response = request.call().map_err(fetch_error_message)?;
-    validate_fetch_response(&response)?;
+    let response = if let Some(data) = data {
+        request.send_string(data).map_err(fetch_error_message)?
+    } else {
+        request.call().map_err(fetch_error_message)?
+    };
+    if require_html {
+        validate_fetch_response(&response)?;
+    } else {
+        validate_fetch_length(&response)?;
+    }
     let content_type = response.header("content-type").unwrap_or("").to_string();
 
     let mut bytes = Vec::new();
@@ -361,6 +535,10 @@ fn validate_fetch_response(response: &ureq::Response) -> Result<(), String> {
     if !is_html_content_type(content_type) {
         return Err(format!("Not an HTML page (content-type: {content_type})"));
     }
+    validate_fetch_length(response)
+}
+
+fn validate_fetch_length(response: &ureq::Response) -> Result<(), String> {
     if let Some(length) = response
         .header("content-length")
         .and_then(|length| length.parse::<u64>().ok())
@@ -804,7 +982,8 @@ fn property_requests_markdown(property: &str) -> bool {
 }
 
 fn usage() -> String {
-    "Usage: org-defuddle parse [source] [options]".to_string()
+    "Usage: org-defuddle parse [source] [options]\n       org-defuddle fetch <url> [options]"
+        .to_string()
 }
 
 fn parse_usage() -> String {
@@ -821,6 +1000,20 @@ fn parse_usage() -> String {
         "      --debug               Include debug/profile fields",
         "  -l, --lang <code>         Accepted for defuddle CLI compatibility",
         "  -u, --user-agent <value>  Accepted for defuddle CLI compatibility",
+    ]
+    .join("\n")
+}
+
+fn fetch_usage() -> String {
+    [
+        "Usage: org-defuddle fetch <url> [options]",
+        "",
+        "Options:",
+        "  -X, --method <method>     HTTP method (default: GET)",
+        "  -H, --header <header>     Add request header as NAME: VALUE",
+        "  -d, --data <body>         Send request body",
+        "  -l, --lang <code>         Set Accept-Language",
+        "  -u, --user-agent <value>  Set User-Agent",
     ]
     .join("\n")
 }
@@ -902,6 +1095,34 @@ mod tests {
         assert_eq!(options.source.as_deref(), Some("page.html"));
         assert!(options.separate_markdown);
         assert!(wants_markdown_output(&options));
+    }
+
+    #[test]
+    fn parses_fetch_options() {
+        let options = parse_fetch_args([
+            "https://example.com/api",
+            "--method",
+            "post",
+            "--header",
+            "Content-Type: application/json",
+            "--data",
+            "{\"ok\":true}",
+            "--lang",
+            "en",
+            "--user-agent",
+            "agent",
+        ])
+        .unwrap();
+
+        assert_eq!(options.url.as_deref(), Some("https://example.com/api"));
+        assert_eq!(options.method, "POST");
+        assert_eq!(
+            options.headers,
+            vec![("Content-Type".to_string(), "application/json".to_string())]
+        );
+        assert_eq!(options.data.as_deref(), Some("{\"ok\":true}"));
+        assert_eq!(options.language.as_deref(), Some("en"));
+        assert_eq!(options.user_agent.as_deref(), Some("agent"));
     }
 
     #[test]
@@ -1308,6 +1529,47 @@ let answer = 42;
     }
 
     #[test]
+    fn fetch_command_returns_non_html_body_and_forwards_request_options() {
+        let (url, request) = serve_once(
+            "HTTP/1.1 200 OK",
+            &[("Content-Type", "application/json")],
+            br#"{"ok":true}"#.to_vec(),
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        run(
+            vec![
+                "fetch".to_string(),
+                url,
+                "--method".to_string(),
+                "POST".to_string(),
+                "--header".to_string(),
+                "Content-Type: application/json".to_string(),
+                "--header".to_string(),
+                "X-Test: yes".to_string(),
+                "--data".to_string(),
+                "{\"hello\":true}".to_string(),
+                "--user-agent".to_string(),
+                "agent".to_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(String::from_utf8(stdout).unwrap(), "{\"ok\":true}");
+        let request = request.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(request.starts_with("POST /article HTTP/1.1"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("content-type: application/json"));
+        assert!(request.to_ascii_lowercase().contains("x-test: yes"));
+        assert!(request.to_ascii_lowercase().contains("user-agent: agent"));
+        assert!(request.ends_with("{\"hello\":true}"));
+    }
+
+    #[test]
     fn decodes_url_response_charset() {
         let mut body = b"<!doctype html><html><head><title>Caf".to_vec();
         body.push(0xe9);
@@ -1406,6 +1668,28 @@ let answer = 42;
                     request.extend_from_slice(&buffer[..read]);
                     if request.windows(4).any(|window| window == b"\r\n\r\n") {
                         break;
+                    }
+                }
+                if let Some(header_end) = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers.lines().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    });
+                    if let Some(content_length) = content_length {
+                        while request.len().saturating_sub(header_end) < content_length {
+                            let read = stream.read(&mut buffer).unwrap();
+                            if read == 0 {
+                                break;
+                            }
+                            request.extend_from_slice(&buffer[..read]);
+                        }
                     }
                 }
                 tx.send(String::from_utf8_lossy(&request).into_owned())

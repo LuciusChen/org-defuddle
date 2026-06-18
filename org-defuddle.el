@@ -115,11 +115,13 @@ output when `org-defuddle-use-cli-url-fetch' is non-nil."
   :group 'org-defuddle)
 
 (defcustom org-defuddle-use-cli-url-fetch t
-  "Whether generic HTML URL extraction may use the Rust CLI fetch stack.
+  "Whether URL extraction may use the Rust CLI fetch stack.
 
-The CLI path is used only when the requested options can be represented
-without changing output semantics.  Unsupported options fall back to
-Emacs `url-retrieve' plus the dynamic module."
+Generic HTML URL extraction uses the CLI path only when requested
+options can be represented without changing output semantics.  Site
+specific API helper requests use the CLI fetch subcommand when it is
+available, and fall back to Emacs `url-retrieve' if the fetch process
+fails."
   :type 'boolean
   :group 'org-defuddle)
 
@@ -547,8 +549,8 @@ CLIENT-NAME and CLIENT-VERSION identify the Innertube client."
   (re-search-forward "\r?\n\r?\n" nil 'move)
   (buffer-substring-no-properties (point) (point-max)))
 
-(defun org-defuddle--retrieve-body (url callback &optional headers method data)
-  "Fetch URL and call CALLBACK with the response body.
+(defun org-defuddle--retrieve-body-with-url (url callback headers method data)
+  "Fetch URL with `url-retrieve' and call CALLBACK with the response body.
 
 HEADERS, METHOD, and DATA configure the request."
   (let ((url-request-extra-headers headers)
@@ -560,6 +562,59 @@ HEADERS, METHOD, and DATA configure the request."
        (unwind-protect
            (funcall callback (org-defuddle--response-body))
          (kill-buffer (current-buffer)))))))
+
+(defun org-defuddle--cli-fetch-command (url headers method data)
+  "Return a CLI fetch command for URL using HEADERS, METHOD, and DATA."
+  (let ((command (list (org-defuddle--cli-file) "fetch" url)))
+    (when (and method (not (string= (upcase method) "GET")))
+      (setq command (append command (list "--method" method))))
+    (dolist (header headers)
+      (setq command
+            (append command
+                    (list "--header"
+                          (format "%s: %s" (car header) (cdr header))))))
+    (when data
+      (setq command (append command (list "--data" data))))
+    command))
+
+(defun org-defuddle--retrieve-body-with-cli (url callback headers method data)
+  "Fetch URL with the Rust CLI and call CALLBACK with the response body.
+
+On CLI failure, fall back to `org-defuddle--retrieve-body-with-url'."
+  (let* ((buffer (generate-new-buffer " *org-defuddle-fetch*"))
+         (command (org-defuddle--cli-fetch-command url headers method data)))
+    (make-process
+     :name "org-defuddle-fetch"
+     :buffer buffer
+     :command command
+     :noquery t
+     :sentinel
+     (lambda (process _event)
+       (when (memq (process-status process) '(exit signal))
+         (let* ((exit-code (process-exit-status process))
+                (output-buffer (process-buffer process))
+                (body (when (buffer-live-p output-buffer)
+                        (with-current-buffer output-buffer
+                          (buffer-substring-no-properties
+                           (point-min)
+                           (point-max))))))
+           (when (buffer-live-p output-buffer)
+             (kill-buffer output-buffer))
+           (if (zerop exit-code)
+               (funcall callback (or body ""))
+             (org-defuddle--retrieve-body-with-url
+              url callback headers method data))))))))
+
+(defun org-defuddle--retrieve-body (url callback &optional headers method data)
+  "Fetch URL and call CALLBACK with the response body.
+
+HEADERS, METHOD, and DATA configure the request."
+  (if (and org-defuddle-use-cli-url-fetch
+           (org-defuddle--cli-file))
+      (org-defuddle--retrieve-body-with-cli
+       url callback headers method data)
+    (org-defuddle--retrieve-body-with-url
+     url callback headers method data)))
 
 (defun org-defuddle--cli-compatible-html-url-options-p (options)
   "Return non-nil when OPTIONS can use the CLI URL backend."

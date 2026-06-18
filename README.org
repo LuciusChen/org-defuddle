@@ -94,16 +94,18 @@ target/release/org-defuddle parse article.html --frontmatter
 target/release/org-defuddle parse article.html --property title
 target/release/org-defuddle parse article.html --property contentMarkdown
 target/release/org-defuddle parse article.html --output article.org
+target/release/org-defuddle fetch https://example.com/api --header 'Accept: application/json'
 #+end_src
 
 CLI URL fetching includes a defuddle-style user agent, optional
 ~--user-agent~, optional ~--lang~ as ~Accept-Language~, HTML content-type
 validation, a 5MB response limit, redirects, charset decoding, proxy
-environment variables, and ~NO_PROXY~ matching. Full Turndown parity and the
-rest of defuddle's Node fetch layer are still tracked as parity gaps. If a URL
-extraction is empty and the user did not set ~--user-agent~, the CLI retries
-once with defuddle's bot user agent and can recover raw Markdown from the
-pre-DOM response body.
+environment variables, and ~NO_PROXY~ matching. The ~fetch~ subcommand exposes
+the same fetch stack for JSON/XML/text API helper requests with custom method,
+headers, body, user agent, and language. Full Turndown parity remains tracked as
+a parity gap. If a URL extraction is empty and the user did not set
+~--user-agent~, the CLI retries once with defuddle's bot user agent and can
+recover raw Markdown from the pre-DOM response body.
 
 Images are included by default.  To omit images from extracted Org output:
 
@@ -298,10 +300,6 @@ Known remaining gaps:
   upstream-style ~scoreAndRemove~ low-scoring cleanup, and upstream-style
   ~removeByContentPattern~ cleanup. Coverage is still narrower than upstream's
   full debug removals.
-- URL fetching exists in both Emacs and the Rust CLI.  The Emacs generic HTML
-  URL path uses the Rust CLI fetch stack when options can be represented
-  without changing output semantics; site-specific Emacs API helper requests
-  still use Emacs ~url-retrieve~.
 
 Implemented:
 
@@ -400,6 +398,11 @@ Implemented:
   proxies, charsets, size limits, bot-user-agent retry, and raw Markdown
   recovery while keeping dynamic-module parsing for direct HTML/buffer input
   and option sets the CLI cannot represent.
+- Site-specific Emacs API helper requests for C2, X/Twitter, Bilibili,
+  YouTube, and Reddit use the Rust CLI ~fetch~ subcommand when available,
+  preserving the same proxy, redirect, charset, size-limit, method, header, and
+  request-body behavior as the CLI fetch stack, with ~url-retrieve~ retained as
+  an error fallback.
 - Org footnote rendering for several common defuddle patterns, including
   ~fn:/fnref:~ references, Google Docs ~ftnt~ exports, WordPress block
   footnotes, Easy Footnotes, hidden footnote sections, MediaWiki
