@@ -18743,7 +18743,10 @@ impl MarkdownRenderer {
     }
 
     fn render_link(&mut self, node: &NodeRef, element: &ElementData) {
-        let href = element.attributes.borrow().get("href").map(str::to_owned);
+        let attrs = element.attributes.borrow();
+        let href = attrs.get("href").map(str::to_owned);
+        let title = attrs.get("title").map(str::to_owned);
+        drop(attrs);
         if href.as_deref().is_none_or(is_dangerous_url) {
             for child in node.children() {
                 self.render_node(&child, true);
@@ -18764,10 +18767,17 @@ impl MarkdownRenderer {
         }
 
         self.ensure_inline_space("[");
+        let label = label.trim();
+        let label = if label.starts_with("![") {
+            label.to_string()
+        } else {
+            escape_markdown_link_text(label)
+        };
         self.out.push('[');
-        self.out.push_str(&escape_markdown_link_text(label.trim()));
+        self.out.push_str(&label);
         self.out.push_str("](");
-        self.out.push_str(&escape_markdown_url(href.trim()));
+        self.out
+            .push_str(&markdown_link_destination(href.trim(), title.as_deref()));
         self.out.push(')');
     }
 
@@ -18775,12 +18785,14 @@ impl MarkdownRenderer {
         let attrs = element.attributes.borrow();
         let src = attrs.get("src").or_else(|| attrs.get("data-src"));
         let alt = attrs.get("alt").unwrap_or("");
+        let title = attrs.get("title");
         if let Some(src) = src.filter(|src| !src.trim().is_empty() && !is_dangerous_url(src)) {
             self.ensure_inline_space("!");
             self.out.push_str("![");
             self.out.push_str(&escape_markdown_link_text(alt.trim()));
             self.out.push_str("](");
-            self.out.push_str(&escape_markdown_url(src.trim()));
+            self.out
+                .push_str(&markdown_link_destination(src.trim(), title));
             self.out.push(')');
         }
     }
@@ -18862,7 +18874,7 @@ impl MarkdownRenderer {
             return;
         }
 
-        let rendered_rows: Vec<Vec<String>> = rows
+        let mut rendered_rows: Vec<Vec<String>> = rows
             .iter()
             .map(|row| {
                 direct_row_cells(row)
@@ -18870,17 +18882,25 @@ impl MarkdownRenderer {
                     .map(|cell| markdown_table_cell(&self.render_inline_children(&cell)))
                     .collect::<Vec<_>>()
             })
-            .filter(|cells| cells.iter().any(|cell| !cell.trim().is_empty()))
             .collect();
-        if rendered_rows.is_empty() {
+        let max_columns = rendered_rows.iter().map(Vec::len).max().unwrap_or(0);
+        if max_columns == 0
+            || !rendered_rows
+                .iter()
+                .flatten()
+                .any(|cell| !cell.trim().is_empty())
+        {
             return;
+        }
+        for cells in &mut rendered_rows {
+            cells.resize(max_columns, String::new());
         }
 
         self.ensure_blank_line();
         for (index, cells) in rendered_rows.iter().enumerate() {
             self.render_table_row(cells);
             if index == 0 && (rendered_rows.len() > 1 || row_has_header_cells(&rows[0])) {
-                let separator = vec!["---".to_string(); cells.len()];
+                let separator = vec!["---".to_string(); max_columns];
                 self.render_table_row(&separator);
             }
         }
@@ -18956,6 +18976,10 @@ impl MarkdownRenderer {
     }
 
     fn ensure_inline_space(&mut self, next: &str) {
+        if next == "!" && self.out.ends_with('!') {
+            self.out.push(' ');
+            return;
+        }
         if needs_space_before(&self.out, next) {
             self.out.push(' ');
         }
@@ -23045,8 +23069,34 @@ fn escape_markdown_link_text(text: &str) -> String {
         .replace('\n', " ")
 }
 
+fn markdown_link_destination(url: &str, title: Option<&str>) -> String {
+    let destination = if url.chars().any(char::is_whitespace) {
+        format!("<{}>", escape_markdown_angle_destination(url))
+    } else {
+        escape_markdown_url(url)
+    };
+    let Some(title) = title.map(str::trim).filter(|title| !title.is_empty()) else {
+        return destination;
+    };
+    format!("{destination} \"{}\"", escape_markdown_title(title))
+}
+
+fn escape_markdown_angle_destination(url: &str) -> String {
+    url.replace('>', "%3E").replace('\n', " ")
+}
+
+fn escape_markdown_title(title: &str) -> String {
+    title
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+}
+
 fn escape_markdown_url(url: &str) -> String {
-    url.replace(')', "%29").replace(' ', "%20")
+    url.replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
+        .replace(' ', "%20")
 }
 
 fn markdown_code_span(text: &str) -> String {
@@ -30304,6 +30354,80 @@ line break text.">
         assert!(output
             .content_markdown
             .contains("Org remains the primary output"));
+    }
+
+    #[test]
+    fn markdown_conversion_matches_upstream_edge_cases() {
+        let link_with_spaces = html_fragment_to_markdown(
+            r#"<article><p><a href="myapp:open shared page" title="Shared page">Open page</a></p></article>"#,
+        );
+        assert!(link_with_spaces.contains("[Open page](<myapp:open shared page> \"Shared page\")"));
+
+        let link_with_parentheses = html_fragment_to_markdown(
+            r#"<article><p><a href="https://example.com/page(1)">Open page</a></p></article>"#,
+        );
+        assert!(link_with_parentheses.contains("[Open page](https://example.com/page\\(1\\))"));
+
+        let image_after_exclamation = html_fragment_to_markdown(
+            r#"<article><p>Yey!<img src="https://example.com/img.png" alt="IMG"></p></article>"#,
+        );
+        assert!(image_after_exclamation.contains("! ![IMG]"));
+        assert!(!image_after_exclamation.contains("!!["));
+
+        let linked_image_after_exclamation = html_fragment_to_markdown(
+            r#"<article><p>Hello!<a href="https://example.com"><img src="https://example.com/img.png" alt="photo"></a></p></article>"#,
+        );
+        assert!(linked_image_after_exclamation.contains("! [![photo]"));
+        assert!(!linked_image_after_exclamation.contains("![!["));
+
+        let wider_body_rows = html_fragment_to_markdown(
+            r#"<article>
+              <table>
+                <tr><th>A</th><th>B</th></tr>
+                <tr><td>1</td><td>2</td><td>3</td></tr>
+                <tr><td>4</td><td>5</td><td>6</td></tr>
+              </table>
+            </article>"#,
+        );
+        assert!(wider_body_rows.contains("| A | B |  |"));
+        assert!(wider_body_rows.contains("| --- | --- | --- |"));
+        assert!(wider_body_rows.contains("| 1 | 2 | 3 |"));
+
+        let wider_header_row = html_fragment_to_markdown(
+            r#"<article>
+              <table>
+                <tr><th>A</th><th>B</th><th>C</th></tr>
+                <tr><td>1</td><td>2</td></tr>
+                <tr><td>3</td></tr>
+              </table>
+            </article>"#,
+        );
+        assert!(wider_header_row.contains("| 1 | 2 |  |"));
+        assert!(wider_header_row.contains("| 3 |  |  |"));
+
+        let empty_first_row = html_fragment_to_markdown(
+            r#"<article>
+              <table>
+                <tr><th></th></tr>
+                <tr><td>1</td><td>2</td></tr>
+              </table>
+            </article>"#,
+        );
+        assert!(empty_first_row.contains("|  |  |"));
+        assert!(empty_first_row.contains("| --- | --- |"));
+        assert!(empty_first_row.contains("| 1 | 2 |"));
+
+        let escaped_pipe_header = html_fragment_to_markdown(
+            r#"<article>
+              <table>
+                <tr><th>A | B</th><th>Example</th></tr>
+                <tr><td>OR</td><td>value</td></tr>
+              </table>
+            </article>"#,
+        );
+        assert!(escaped_pipe_header.contains("A \\| B"));
+        assert!(escaped_pipe_header.contains("| --- | --- |"));
+        assert!(!escaped_pipe_header.contains("| --- | --- | --- |"));
     }
 
     #[test]

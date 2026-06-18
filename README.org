@@ -366,7 +366,11 @@ Implemented:
 - Compatibility Markdown generation through ~markdown~- and
   ~separateMarkdown~-style options across the Rust core, dynamic module, Elisp
   wrappers, and CLI. The Rust response exposes the upstream-style
-  ~contentMarkdown~ field while preserving Org as the primary output.
+  ~contentMarkdown~ field while preserving Org as the primary output. The
+  Markdown renderer handles selected upstream Turndown edge cases including
+  link destinations with spaces, titles, and escaped parentheses, image syntax
+  after literal exclamation marks, linked images, and ragged table column
+  padding.
 - Upstream-compatible JSON response names at the CLI and dynamic-module
   boundary, including ~content~, ~wordCount~, ~parseTime~, and
   ~contentMarkdown~, while retaining org-defuddle extensions such as ~org~,
