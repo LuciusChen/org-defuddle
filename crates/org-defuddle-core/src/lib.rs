@@ -337,12 +337,13 @@ enum SchemaTextFallback {
 
 static WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\p{L}\p{N}][\p{L}\p{N}'_-]*").unwrap());
 
-static NOISE_ATTR_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"(?i)(advert|ad-|ads|banner|breadcrumb|byline|cookie|comment|copyright|footer|header|login|menu|nav|newsletter|pagination|popular|promo|recommend|related|share|sidebar|social|sponsor|subscribe|tag|toc|trending|widget)",
-    )
-    .unwrap()
-});
+const NOISE_ATTR_PATTERN: &str = r"(advert|ad-|ads|banner|breadcrumb|byline|cookie|comment|copyright|feedback|footer|header|login|menu|nav|newsletter|pagination|popular|promo|recommend|related|share|sidebar|social|sponsor|subscribe|tag|toc|trending|widget)";
+
+static NOISE_ATTR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(&format!("(?i){NOISE_ATTR_PATTERN}")).unwrap());
+
+static NOISE_ATTR_ANCHORED_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(&format!("(?i)^(?:{NOISE_ATTR_PATTERN})$")).unwrap());
 
 static EXPLICIT_NO_CONTENT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bno[-_\s]?content\b").unwrap());
@@ -505,15 +506,13 @@ const ENTRY_POINT_SELECTORS: &[&str] = &[
 ];
 
 const EXACT_NOISE_SELECTORS: &[&str] = &[
-    "script",
+    "script:not([type^=\"math/\"])",
     "style",
     "noscript",
     "template",
     "svg script",
     "meta",
     "link",
-    "audio:not([src])",
-    "video:not([src])",
     ".jwplayer",
     "[class^=\"ad-\"]",
     "[class$=\"-ad\"]",
@@ -523,7 +522,7 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     "[alt*=\"advert\"]",
     "[rel=\"sponsored\"]",
     "[href*=\"source=promotion\"]",
-    ".ad",
+    ".ad:not([class*=\"gradient\"])",
     ".ads",
     ".advertisement",
     ".promo",
@@ -591,7 +590,7 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     "#toc",
     "[href*=\"#toc\"]",
     ".aside",
-    "aside",
+    "aside:not([class*=\"callout\"])",
     "button",
     "canvas",
     "date",
@@ -12011,6 +12010,13 @@ fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
     if is_removable_header_node(node) {
         return Some("header:not(:has(p + p)):not(:has(img))");
     }
+    if is_empty_media_without_source(node) {
+        return match tag_name(node).as_deref() {
+            Some("audio") => Some("audio:not([src]):not(:has(source))"),
+            Some("video") => Some("video:not([src]):not(:has(source))"),
+            _ => None,
+        };
+    }
 
     let element = node.as_element()?;
     let tag = element.name.local.as_ref();
@@ -12047,6 +12053,12 @@ fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
     }
     if attr_eq_ci(attrs.get("role").unwrap_or_default(), "alertdialog") {
         return Some("[role=\"alertdialog\" i]");
+    }
+    if attr_eq_ci(attrs.get("role").unwrap_or_default(), "listbox") {
+        return Some("[role=\"listbox\" i]");
+    }
+    if attr_eq_ci(attrs.get("role").unwrap_or_default(), "option") {
+        return Some("[role=\"option\" i]");
     }
     if attr_contains_ci(attrs.get("role").unwrap_or_default(), "complementary") {
         return Some("[role*=\"complementary\" i]");
@@ -12131,7 +12143,20 @@ fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
     ) {
         return Some("[data-optimizely=\"related-articles-section\" i]");
     }
+    if attr_eq_ci(class, "logo") {
+        return Some("[class=\"logo\" i]");
+    }
     None
+}
+
+fn is_empty_media_without_source(node: &NodeRef) -> bool {
+    if !matches!(tag_name(node).as_deref(), Some("audio" | "video")) {
+        return false;
+    }
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    element.attributes.borrow().get("src").is_none() && count_selector(node, "source") == 0
 }
 
 fn is_removable_header_node(node: &NodeRef) -> bool {
@@ -12291,8 +12316,10 @@ fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<
             if contains_article_body_marker(node) {
                 return None;
             }
-            let attrs = element_attr_fingerprint(&m);
-            if !attrs.is_empty() && EXPLICIT_NO_CONTENT_RE.is_match(&attrs) {
+            let attrs = partial_selector_attr_fingerprint(&m);
+            let id = partial_selector_id(&m);
+            let fingerprint = partial_selector_fingerprint(&attrs, &id);
+            if !fingerprint.is_empty() && EXPLICIT_NO_CONTENT_RE.is_match(&fingerprint) {
                 return Some(node.clone());
             }
             if is_comment_widget_node(node) {
@@ -12334,7 +12361,7 @@ fn remove_partial_noise(document: &NodeRef, mut debug_removals: Option<&mut Vec<
             if is_likely_content_container(node) || is_meaningful_content_subtree(node) {
                 return None;
             }
-            if !attrs.is_empty() && NOISE_ATTR_RE.is_match(&attrs) {
+            if partial_selector_noise_match(&attrs, &id) {
                 Some(node.clone())
             } else {
                 None
@@ -22053,6 +22080,70 @@ fn element_attr_fingerprint(node: &kuchiki::NodeDataRef<ElementData>) -> String 
     element_attr_string(&node)
 }
 
+fn partial_selector_attr_fingerprint(node: &kuchiki::NodeDataRef<ElementData>) -> String {
+    let tag = node.name.local.as_ref();
+    let attrs = node.attributes.borrow();
+    if matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+        return attrs.get("class").unwrap_or_default().to_string();
+    }
+
+    [
+        attrs.get("class"),
+        attrs.get("data-component"),
+        attrs.get("data-test"),
+        attrs.get("data-testid"),
+        attrs.get("data-test-id"),
+        attrs.get("data-qa"),
+        attrs.get("data-cy"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn partial_selector_id(node: &kuchiki::NodeDataRef<ElementData>) -> String {
+    let tag = node.name.local.as_ref();
+    if matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+        return String::new();
+    }
+    node.attributes
+        .borrow()
+        .get("id")
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn partial_selector_fingerprint(attrs: &str, id: &str) -> String {
+    [attrs.trim(), id.trim()]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn partial_selector_noise_match(attrs: &str, id: &str) -> bool {
+    let attrs = attrs.trim();
+    if !attrs.is_empty() && NOISE_ATTR_RE.is_match(attrs) {
+        return true;
+    }
+
+    let id = id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    if partial_selector_id_has_delimiter(id) {
+        NOISE_ATTR_RE.is_match(id)
+    } else {
+        NOISE_ATTR_ANCHORED_RE.is_match(id)
+    }
+}
+
+fn partial_selector_id_has_delimiter(id: &str) -> bool {
+    id.chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '_' | '-' | ':' | '.'))
+}
+
 fn element_attr_string(element: &ElementData) -> String {
     let attrs = element.attributes.borrow();
     [
@@ -27546,6 +27637,166 @@ Output: [0,1]</code></pre>
         assert!(output
             .org
             .contains("Second deck paragraph remains as content."));
+    }
+
+    #[test]
+    fn exact_selector_cleanup_preserves_guarded_media_and_math_content() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Guarded Exact Selectors</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Guarded Exact Selectors</h1>
+              <p>The visible paragraph anchors extraction before guarded selector examples.</p>
+              <script type="math/tex">E = mc^2</script>
+              <video id="source-video"><source src="/media/source.mp4" type="video/mp4"></video>
+              <audio id="source-audio"><source src="/media/audio.mp3" type="audio/mpeg"></audio>
+              <video id="empty-video"></video>
+              <audio id="empty-audio"></audio>
+              <div class="ad gradient">Gradient explanation remains as article content.</div>
+              <aside class="callout-note"><p>Callout aside body remains for downstream rendering.</p></aside>
+              <p>The concluding paragraph keeps the article substantial and readable.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/guarded-exact-selectors".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_partial_selectors: false,
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                standardize: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("visible paragraph anchors extraction"));
+        assert!(output.html.contains("type=\"math/tex\""), "{}", output.html);
+        assert!(
+            output.html.contains("id=\"source-video\""),
+            "{}",
+            output.html
+        );
+        assert!(
+            output.html.contains("id=\"source-audio\""),
+            "{}",
+            output.html
+        );
+        assert!(output
+            .org
+            .contains("[[https://example.com/media/source.mp4]]"));
+        assert!(output
+            .org
+            .contains("[[https://example.com/media/audio.mp3]]"));
+        assert!(
+            !output.html.contains("id=\"empty-video\""),
+            "{}",
+            output.html
+        );
+        assert!(
+            !output.html.contains("id=\"empty-audio\""),
+            "{}",
+            output.html
+        );
+        assert!(output
+            .org
+            .contains("Gradient explanation remains as article content."));
+        assert!(output
+            .org
+            .contains("Callout aside body remains for downstream rendering."));
+    }
+
+    #[test]
+    fn conditional_exact_selector_cleanup_removes_case_insensitive_ui_roles() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Conditional Role Selectors</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Conditional Role Selectors</h1>
+              <p>The visible paragraph anchors extraction before role widgets.</p>
+              <div role="ListBox">Listbox marker</div>
+              <div role="OPTION">Option marker</div>
+              <div class="LOGO">Logo marker</div>
+              <p>The concluding paragraph keeps the article substantial and readable.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/conditional-role-selectors".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("visible paragraph anchors extraction"));
+        for marker in ["Listbox marker", "Option marker", "Logo marker"] {
+            assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
+        }
+    }
+
+    #[test]
+    fn partial_selector_cleanup_respects_upstream_id_and_heading_guards() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Partial Selector Guards</title>
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Partial Selector Guards</h1>
+              <p>The first paragraph anchors extraction before partial selector examples.</p>
+              <div id="feedback-form">Delimited feedback widget marker</div>
+              <div data-test-id="share-panel">Data attribute share marker</div>
+              <h2 id="related">Heading id marker remains</h2>
+              <p>Body under the id heading keeps that heading attached to real content.</p>
+              <h2 class="share-panel">Heading class share marker</h2>
+              <p>Body under the class heading keeps that heading attached to real content.</p>
+              <p>The inline anchor <span id="loopsandfeedback">delimiterless id marker remains</span> should not be stripped.</p>
+              <p>The concluding paragraph keeps the article substantial and readable.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/partial-selector-guards".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("first paragraph anchors extraction"));
+        assert!(!output.org.contains("Delimited feedback widget marker"));
+        assert!(!output.org.contains("Data attribute share marker"));
+        assert!(output.org.contains("Heading id marker remains"));
+        assert!(output.org.contains("Heading class share marker"));
+        assert!(output.org.contains("delimiterless id marker remains"));
     }
 
     #[test]

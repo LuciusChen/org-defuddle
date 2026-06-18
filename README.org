@@ -603,10 +603,14 @@ Implemented:
   Substack widgets, GitHub sticky UI, skip links, print-hidden blocks, logos,
   newsletter prompts, SVG icons, and common sidebars. It also covers selected
   case-insensitive attribute-selector equivalents and guarded header cleanup for
-  Rust selectors that cannot express upstream browser-only ~:has()~ guards.
+  Rust selectors that cannot express upstream browser-only ~:has()~ guards,
+  while preserving guarded math scripts, source-backed audio/video, gradient ad
+  content, and callout asides. Partial selector cleanup follows upstream-style
+  heading preservation and id guards for delimiter-less content anchors and
+  delimited UI ids.
   Button cleanup preserves inline text and extracts media from media-wrapping
-  buttons before removing UI controls. Debug/profile records from this pass use the upstream
-  ~removeBySelector~ step name.
+  buttons before removing UI controls. Debug/profile records from this pass use
+  the upstream ~removeBySelector~ step name.
 - Upstream defuddle fixture smoke tests that validate selected expected
   metadata and content across JavaScript links, code blocks, syntax highlighter
   cleanup including selected table-based codeblock layouts, hidden nodes with
@@ -668,9 +672,8 @@ Implemented:
 Remaining parity work:
 
 - Finish the remaining selector parity gaps that need conditional Rust
-  equivalents for browser-only selectors such as ~:has()~, remaining
-  case-insensitive CSS attribute edge cases, and high-risk broad selectors such
-  as bare ~label~, plus the remaining content-pattern removals.
+  equivalents for remaining browser-only selectors and high-risk broad selectors
+  such as bare ~label~, plus the remaining content-pattern removals.
 - Continue expanding low-scoring block-pruning heuristics to match the full
   upstream scorer.
 - Expand image/media support to the full upstream fixture set, including
