@@ -3,7 +3,7 @@ mod partial_selectors;
 use kuchiki::traits::*;
 use kuchiki::{ElementData, NodeData, NodeRef};
 use once_cell::sync::Lazy;
-use regex::Regex;
+use regex::{Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -488,6 +488,47 @@ static LOW_SCORING_NAVIGATION_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static LOW_SCORING_NAVIGATION_SET: Lazy<RegexSet> = Lazy::new(|| {
+    RegexSet::new([
+        r"(?i)\badvertisement\b",
+        r"(?i)\ball\s+rights\s+reserved\b",
+        r"(?i)\bbanner\b",
+        r"(?i)\bcookie\b",
+        r"(?i)\bcomments\b",
+        r"(?i)\bcopyright\b",
+        r"(?i)\bfollow\s+me\b",
+        r"(?i)\bfollow\s+us\b",
+        r"(?i)\bfooter\b",
+        r"(?i)\bheader\b",
+        r"(?i)\bhomepage\b",
+        r"(?i)\blogin\b",
+        r"(?i)\bmenu\b",
+        r"(?i)\bmore\s+articles\b",
+        r"(?i)\bmore\s+like\s+this\b",
+        r"(?i)\bmost\s+read\b",
+        r"(?i)\bnav\b",
+        r"(?i)\bnavigation\b",
+        r"(?i)\bnewsletter\b",
+        r"(?i)\bpopular\b",
+        r"(?i)\bprivacy\b",
+        r"(?i)\brecommended\b",
+        r"(?i)\bregister\b",
+        r"(?i)\brelated\b",
+        r"(?i)\bresponses\b",
+        r"(?i)\bshare\b",
+        r"(?i)\bsidebar\b",
+        r"(?i)\bsign\s+in\b",
+        r"(?i)\bsign\s+up\b",
+        r"(?i)\bsignup\b",
+        r"(?i)\bsocial\b",
+        r"(?i)\bsponsored\b",
+        r"(?i)\bsubscribe\b",
+        r"(?i)\bterms\b",
+        r"(?i)\btrending\b",
+    ])
+    .unwrap()
+});
+
 static LOW_SCORING_SOCIAL_PROFILE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)\b(linkedin\.com/(in|company)/|twitter\.com/\w|x\.com/\w|facebook\.com/\w|instagram\.com/\w|threads\.net/\w|mastodon\.\w)",
@@ -496,6 +537,51 @@ static LOW_SCORING_SOCIAL_PROFILE_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static LOW_SCORING_BYLINE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bBy\s+[A-Z]").unwrap());
+
+static LOW_SCORING_DATE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}|\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*)",
+    )
+    .unwrap()
+});
+
+static CONTENT_SCORE_DATE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s+\d{4})\b",
+    )
+    .unwrap()
+});
+
+static CONTENT_SCORE_AUTHOR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\b(?:by|written by|author:)\s+[A-Za-z\s]+\b").unwrap());
+
+const LOW_SCORING_NON_CONTENT_PATTERNS: &[&str] = &[
+    "advert",
+    "ad-",
+    "ads",
+    "banner",
+    "cookie",
+    "copyright",
+    "footer",
+    "header",
+    "homepage",
+    "menu",
+    "nav",
+    "newsletter",
+    "popular",
+    "privacy",
+    "recommended",
+    "related",
+    "rights",
+    "share",
+    "sidebar",
+    "social",
+    "sponsored",
+    "subscribe",
+    "terms",
+    "trending",
+    "widget",
+];
 
 static FOOTNOTE_MARKER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[?\d+\]?$").unwrap());
 
@@ -13097,7 +13183,7 @@ fn score_non_content_block(node: &NodeRef) -> i32 {
     }
 
     let mut score = text.matches(',').count() as i32;
-    score -= LOW_SCORING_NAVIGATION_RE.find_iter(&text).count() as i32 * 10;
+    score -= LOW_SCORING_NAVIGATION_SET.matches(&text).iter().count() as i32 * 10;
 
     let links = count_selector(node, "a");
     if link_count_density(node, words) > 0.5 {
@@ -13118,18 +13204,21 @@ fn score_non_content_block(node: &NodeRef) -> i32 {
     if words < 80 && has_social_profile_link(node) {
         score -= 15;
     }
-    if words < 15 && LOW_SCORING_BYLINE_RE.is_match(&text) && CONTENT_DATE_RE.is_match(&text) {
+    if words < 15 && LOW_SCORING_BYLINE_RE.is_match(&text) && LOW_SCORING_DATE_RE.is_match(&text) {
         score -= 10;
     }
     if is_low_scoring_card_grid(node, words) {
         score -= 15;
     }
-    if node
-        .as_element()
-        .map(element_attr_string)
-        .is_some_and(|attrs| NOISE_ATTR_RE.is_match(&attrs))
-    {
-        score -= 8;
+    if let Some(element) = node.as_element() {
+        let attrs = element.attributes.borrow();
+        let class = attrs.get("class").unwrap_or_default().to_ascii_lowercase();
+        let id = attrs.get("id").unwrap_or_default().to_ascii_lowercase();
+        score -= LOW_SCORING_NON_CONTENT_PATTERNS
+            .iter()
+            .filter(|pattern| class.contains(**pattern) || id.contains(**pattern))
+            .count() as i32
+            * 8;
     }
 
     score
@@ -13227,8 +13316,32 @@ fn has_social_profile_link(node: &NodeRef) -> bool {
         link.attributes
             .borrow()
             .get("href")
-            .is_some_and(|href| LOW_SCORING_SOCIAL_PROFILE_RE.is_match(href))
+            .is_some_and(is_social_profile_href)
     })
+}
+
+fn is_social_profile_href(href: &str) -> bool {
+    if !LOW_SCORING_SOCIAL_PROFILE_RE.is_match(href) {
+        return false;
+    }
+    let href = href.to_ascii_lowercase();
+    !has_excluded_social_action_path(&href, "twitter.com/", "intent")
+        && !has_excluded_social_action_path(&href, "x.com/", "intent")
+        && !has_excluded_social_action_path(&href, "facebook.com/", "share")
+}
+
+fn has_excluded_social_action_path(href: &str, host: &str, action: &str) -> bool {
+    let Some(path) = href.split_once(host).map(|(_, path)| path) else {
+        return false;
+    };
+    let Some(rest) = path.strip_prefix(action) else {
+        return false;
+    };
+    rest.chars().next().is_none_or(|ch| !is_regex_word_char(ch))
+}
+
+fn is_regex_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 fn has_ancestor_tag(node: &NodeRef, tags: &[&str]) -> bool {
@@ -19254,26 +19367,100 @@ fn score_element(node: &NodeRef) -> f64 {
     let paragraphs = count_selector(node, "p");
     let commas = text.matches(',').count();
     let images = count_selector(node, "img");
-    let links = count_selector(node, "a");
     let link_text_len = selector_text_len(node, "a") as f64;
     let text_len = text.chars().count().max(1) as f64;
     let link_density = (link_text_len / text_len).min(0.5);
 
     let mut score = words as f64 + (paragraphs as f64 * 10.0) + commas as f64;
     score -= (images as f64 / words.max(1) as f64) * 3.0;
-    score -= links.saturating_sub(paragraphs + 3) as f64 * 2.0;
 
     if let Some(element) = node.as_element() {
-        let attrs = element_attr_string(element).to_lowercase();
-        if CONTENT_ATTR_RE.is_match(&attrs) {
-            score += 20.0;
+        let attrs = element.attributes.borrow();
+        let style = attrs.get("style").unwrap_or_default();
+        let align = attrs.get("align").unwrap_or_default();
+        if style.contains("float: right") || style.contains("text-align: right") || align == "right"
+        {
+            score += 5.0;
         }
-        if NOISE_ATTR_RE.is_match(&attrs) {
-            score -= 40.0;
+        let class = attrs.get("class").unwrap_or_default().to_ascii_lowercase();
+        if ["content", "article", "post"]
+            .into_iter()
+            .any(|indicator| class.contains(indicator))
+        {
+            score += 15.0;
         }
     }
 
+    if CONTENT_SCORE_DATE_RE.is_match(&text) {
+        score += 10.0;
+    }
+    if CONTENT_SCORE_AUTHOR_RE.is_match(&text) {
+        score += 10.0;
+    }
+    if has_scoring_footnote_reference(node) {
+        score += 10.0;
+    }
+    if contains_footnote_list(node) {
+        score += 10.0;
+    }
+    score -= count_selector(node, "table") as f64 * 5.0;
+    score += score_table_cell_bonus(node);
+
     score * (1.0 - link_density)
+}
+
+fn score_table_cell_bonus(node: &NodeRef) -> f64 {
+    if tag_name(node).as_deref() != Some("td") {
+        return 0.0;
+    }
+    let Some(table) = node
+        .ancestors()
+        .find(|ancestor| tag_name(ancestor).as_deref() == Some("table"))
+    else {
+        return 0.0;
+    };
+    let Some(element) = table.as_element() else {
+        return 0.0;
+    };
+    let attrs = element.attributes.borrow();
+    let width = attrs.get("width").and_then(dimension_number).unwrap_or(0.0);
+    let align = attrs.get("align").unwrap_or_default();
+    let class = attrs.get("class").unwrap_or_default().to_ascii_lowercase();
+    if width <= 400.0
+        && align != "center"
+        && !class.contains("content")
+        && !class.contains("article")
+    {
+        return 0.0;
+    }
+    drop(attrs);
+
+    let Ok(cells) = table.select("td") else {
+        return 0.0;
+    };
+    let cells = cells.map(|cell| cell.as_node().clone()).collect::<Vec<_>>();
+    let Some(index) = cells.iter().position(|cell| cell == node) else {
+        return 0.0;
+    };
+    if index > 0 && index + 1 < cells.len() {
+        10.0
+    } else {
+        0.0
+    }
+}
+
+fn has_scoring_footnote_reference(node: &NodeRef) -> bool {
+    count_selector(
+        node,
+        "sup.footnoteref, a[role=\"doc-noteref\"], a[data-type=\"noteref\"], sup.reference, sup.footnote-reference, span.footnote-reference, span.footnote-link, a.citation, a[id^=\"fnref\"]",
+    ) > 0
+}
+
+fn contains_footnote_list(node: &NodeRef) -> bool {
+    is_footnote_container_node(node)
+        || node
+            .descendants()
+            .any(|descendant| is_footnote_container_node(&descendant))
 }
 
 fn is_article_card_candidate(node: &NodeRef) -> bool {
@@ -31288,6 +31475,45 @@ Output: [0,1]</code></pre>
         .unwrap();
         assert!(without_removal.org.contains("primary article paragraph"));
         assert!(without_removal.org.contains("Popular story one"));
+    }
+
+    #[test]
+    fn low_scoring_matches_upstream_signal_accounting() {
+        let document = kuchiki::parse_html().one(
+            r#"<html><body>
+              <div id="repeated">share share share</div>
+              <div id="patterns" class="footer-social">alpha beta gamma</div>
+              <div id="plain"><p>Alpha beta gamma delta.</p></div>
+              <div id="content" class="article" style="float: right">
+                <p>By Ada Lovelace, March 4, 2026.</p>
+                <table><tr><td>data</td></tr></table>
+                <sup class="footnoteref">1</sup>
+                <ol class="footnotes"><li>Reference text</li></ol>
+              </div>
+              <table width="600"><tr>
+                <td id="left">left</td><td id="middle">middle</td><td id="right">right</td>
+              </tr></table>
+            </body></html>"#,
+        );
+        let repeated = select_first_node(&document, "#repeated").unwrap();
+        let patterns = select_first_node(&document, "#patterns").unwrap();
+        let plain = select_first_node(&document, "#plain").unwrap();
+        let content = select_first_node(&document, "#content").unwrap();
+        let middle = select_first_node(&document, "#middle").unwrap();
+
+        assert_eq!(score_non_content_block(&repeated), -10);
+        assert_eq!(score_non_content_block(&patterns), -16);
+        assert!(score_element(&content) > score_element(&plain) + 30.0);
+        assert_eq!(score_table_cell_bonus(&middle), 10.0);
+
+        assert!(!is_social_profile_href(
+            "https://twitter.com/intent/tweet?url=https://example.com"
+        ));
+        assert!(!is_social_profile_href(
+            "https://facebook.com/share.php?u=https://example.com"
+        ));
+        assert!(is_social_profile_href("https://x.com/ada"));
+        assert!(is_social_profile_href("https://linkedin.com/in/ada"));
     }
 
     #[test]

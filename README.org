@@ -362,7 +362,12 @@ Implemented:
   from this pass use the upstream ~removeByContentPattern~ step name.
 - Configurable low-score block cleanup through a ~removeLowScoring~-style
   option exposed as ~:remove-low-scoring~ in Elisp. Debug removals from this
-  pass use the upstream ~scoreAndRemove~ step name.
+  pass use the upstream ~scoreAndRemove~ step name. The scorer follows the
+  inspected upstream text, paragraph, comma, image, alignment, date, author,
+  content-class, footnote, nested-table, table-cell, link-density, navigation,
+  social-profile, byline, article-card, and 25 class/id penalty signals.
+  Navigation indicators are counted once per indicator as upstream does, and
+  social share/intent action URLs are not mistaken for author profiles.
 - Configurable small-image cleanup through a ~removeSmallImages~-style option
   exposed as ~:remove-small-images~ in Elisp.
 - Configurable Org-oriented standardization through a ~standardize~-style
@@ -486,8 +491,9 @@ Implemented:
   such as ~object~, ~embed~, and ~applet~ are removed during media cleanup.
   Selected noisy media iframes and players, including known paywall, comment,
   TTS/audio-player, and empty iframe shells, are removed by selector cleanup.
-- Defuddle-inspired content container scoring, including selected non-semantic
-  ~article/content~ id/class containers used by page builders and short
+- Upstream-style content container scoring, including non-semantic
+  ~article/content~ id/class containers used by page builders, footnote and
+  legacy table-layout bonuses, link-density scaling, and short
   article-card/listing avoidance during main-content selection.
 - Low-content retry for short or empty extractions, including upstream-style
   partial-selector retries below 200 words, hidden-element retries below 50
@@ -737,8 +743,6 @@ Remaining parity work:
   equivalents for browser-only CSS selectors and high-risk broad selectors
   beyond the implemented UI-label subset, plus the remaining content-pattern
   removals.
-- Continue expanding low-scoring block-pruning heuristics to match the full
-  upstream scorer.
 - Expand image/media support to the full upstream fixture set, including
   richer platform video/embed handling and remaining site-specific
   image/figure elements.
