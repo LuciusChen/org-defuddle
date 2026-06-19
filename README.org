@@ -747,20 +747,22 @@ Implemented:
 - Project-level agent instructions in ~AGENTS.md~ adapted from
   ~/repos/coding-guidelines~.
 
-Remaining parity work:
+Remaining audit and future parity work:
 
 - Continue auditing content-pattern, debug, profile, and browser-state parity
   against upstream pages outside the fixture set. Exact/partial selector cleanup
   now tracks the inspected upstream selector tables and guards, but serialized
   HTML still cannot recover browser-only state that was absent from the input.
-- Expand image/media support to the full upstream fixture set, including
-  richer platform video/embed handling and remaining site-specific
-  image/figure elements.
+- Continue auditing image/media support on pages and upstream snapshots beyond
+  the inspected fixture set, especially richer platform video/embed handling
+  and site-specific image/figure variants.
 - Continue auditing footnote, callout, and math behavior on pages outside the
   inspected fixture set, and expand MathML-to-LaTeX conversion and MathJax CHTML
   reconstruction, remaining codeblock layouts, broader multi-column layout
   table handling, richer table rendering, and SVG handling.
-- Expand schema.org text fallback coverage and port site-specific extractors,
-  including richer per-extractor ~variables~ parity for custom fields.
+- Continue auditing schema.org text fallback coverage and richer
+  per-extractor ~variables~ parity for custom fields. The upstream extractor
+  names in the inspected snapshot have Rust implementations, while custom
+  fields and live browser-only details remain intentionally narrower.
 - Continue deepening fixture-specific Org assertions and add exact-output
   comparisons where Org formatting has a stable upstream-independent contract.
