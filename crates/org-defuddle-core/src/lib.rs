@@ -1005,7 +1005,10 @@ fn parse_html_to_org_once(
     record_profile(&mut profile, "extractMetadata", step_start);
 
     let step_start = Instant::now();
-    let data_attribute_body_html = extract_steam_event(&document).map(|event| event.body_html);
+    let steam_event = extract_steam_event(&document);
+    let data_attribute_body_html = steam_event.as_ref().map(|event| event.body_html.as_str());
+    let wikipedia_document = is_wikipedia_domain(&metadata.domain)
+        && find_node_by_id(&document, "mw-content-text").is_some();
     record_profile(&mut profile, "extractDataAttributeContent", step_start);
 
     if options.standardize {
@@ -1056,7 +1059,11 @@ fn parse_html_to_org_once(
     record_profile(&mut profile, "preMainCleanup", step_start);
 
     let step_start = Instant::now();
-    let main = select_configured_main_content(&document, options.content_selector.as_deref())
+    let extractor_content_selector = options
+        .content_selector
+        .as_deref()
+        .or(wikipedia_document.then_some("#mw-content-text"));
+    let main = select_configured_main_content(&document, extractor_content_selector)
         .or_else(|| find_main_content(&document))
         .unwrap_or_else(|| document.clone());
     let debug_content_selector = options.debug.then(|| element_selector_path(&main));
@@ -1109,8 +1116,8 @@ fn parse_html_to_org_once(
     record_profile(&mut profile, "removeCoverImage", step_start);
 
     let step_start = Instant::now();
-    let fallback = schema_text_fallback(&document, &main, &schema)
-        .or_else(|| data_attribute_content_fallback(data_attribute_body_html.as_deref(), &main));
+    let fallback = data_attribute_content_fallback(data_attribute_body_html)
+        .or_else(|| schema_text_fallback(&document, &main, &schema));
     let (mut body_html, mut body_org, mut word_count) = match fallback {
         Some(SchemaTextFallback::Node(node)) => {
             let html = serialize_node(&node)?;
@@ -1147,6 +1154,28 @@ fn parse_html_to_org_once(
     let step_start = Instant::now();
     let org = build_org_document(&metadata, &body_org, word_count);
     record_profile(&mut profile, "buildOrgDocument", step_start);
+    let extractor_type = if steam_event.is_some() {
+        extractor_type("bbcodedata")
+    } else if wikipedia_document {
+        extractor_type("wikipedia")
+    } else {
+        None
+    };
+    let variables = if steam_event.is_some() {
+        extractor_variables([
+            ("title", Some(metadata.title.clone())),
+            ("author", Some(metadata.author.clone())),
+            ("published", Some(metadata.published.clone())),
+        ])
+    } else if wikipedia_document {
+        extractor_variables([
+            ("title", Some(metadata.title.clone())),
+            ("author", Some("Wikipedia".to_string())),
+            ("site", Some("Wikipedia".to_string())),
+        ])
+    } else {
+        None
+    };
 
     Ok(DefuddleOutput {
         title: metadata.title,
@@ -1165,8 +1194,8 @@ fn parse_html_to_org_once(
         org,
         content_markdown: String::new(),
         frontmatter: String::new(),
-        extractor_type: None,
-        variables: None,
+        extractor_type,
+        variables,
         debug: options.debug.then(|| DebugInfo {
             content_selector: debug_content_selector.unwrap_or_default(),
             removals: debug_removals,
@@ -11030,10 +11059,14 @@ fn known_site_name_for_domain(domain: &str) -> Option<String> {
     if domain == "news.ycombinator.com" {
         return Some("Hacker News".to_string());
     }
-    if domain == "wikipedia.org" || domain.ends_with(".wikipedia.org") {
+    if is_wikipedia_domain(domain) {
         return Some("Wikipedia".to_string());
     }
     None
+}
+
+fn is_wikipedia_domain(domain: &str) -> bool {
+    domain == "wikipedia.org" || domain.ends_with(".wikipedia.org")
 }
 
 fn is_lesswrong_domain(domain: &str) -> bool {
@@ -11542,13 +11575,7 @@ fn schema_text_fallback(
         .or_else(|| Some(SchemaTextFallback::Text(schema_text)))
 }
 
-fn data_attribute_content_fallback(
-    body_html: Option<&str>,
-    current_main: &NodeRef,
-) -> Option<SchemaTextFallback> {
-    if count_words(&current_main.text_contents()) > 5 {
-        return None;
-    }
+fn data_attribute_content_fallback(body_html: Option<&str>) -> Option<SchemaTextFallback> {
     let body_html = body_html?;
     let fragment = kuchiki::parse_html().one(format!("<html><body>{body_html}</body></html>"));
     select_first_node(&fragment, "body").map(SchemaTextFallback::Node)
@@ -24183,6 +24210,93 @@ mod tests {
         assert!(output.org.contains(":URL: https://example.com/post"));
         assert!(output.org.contains("[[https://example.com/more][more]]"));
         assert!(!output.org.contains("related links"));
+    }
+
+    #[test]
+    fn reports_wikipedia_extractor_identity_and_uses_content_selector() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head>
+            <meta property="og:title" content="Example topic - Wikipedia">
+          </head>
+          <body>
+            <nav>This navigation text must remain outside extracted content.</nav>
+            <div id="mw-content-text">
+              <h1>Example topic</h1>
+              <p>This encyclopedia article contains the readable body selected by the extractor.</p>
+            </div>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://en.wikipedia.org/wiki/Example_topic".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.extractor_type.as_deref(), Some("wikipedia"));
+        assert_eq!(
+            output
+                .variables
+                .as_ref()
+                .and_then(|variables| variables.get("author"))
+                .map(String::as_str),
+            Some("Wikipedia")
+        );
+        assert!(output.org.contains("encyclopedia article"));
+        assert!(!output.org.contains("navigation text"));
+    }
+
+    #[test]
+    fn reports_bbcode_extractor_identity_and_prefers_event_body() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head>
+            <script type="application/ld+json">
+              {"@type":"Article","articleBody":"This schema body is longer than the page shell but must not override an explicit Steam event body."}
+            </script>
+          </head>
+          <body>
+            <div id="application_config"
+              data-partnereventstore='[{"event_name":"Patch Event","announcement_body":{"headline":"Patch 1.2.3","posttime":1736942400,"body":"[p]The event body is authoritative and includes the release details.[/p]"}}]'
+              data-groupvanityinfo='[{"group_name":"Example Game"}]'>
+            </div>
+            <main>
+              <p>This page shell has enough unrelated words that generic content scoring could otherwise select it instead.</p>
+            </main>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://store.example.com/news/patch".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.extractor_type.as_deref(), Some("bbcodedata"));
+        assert_eq!(output.title, "Patch 1.2.3");
+        assert_eq!(output.author, "Example Game");
+        assert!(output.org.contains("event body is authoritative"));
+        assert!(!output.org.contains("page shell has enough"));
+        assert!(!output.org.contains("schema body is longer"));
+        assert_eq!(
+            output
+                .variables
+                .as_ref()
+                .and_then(|variables| variables.get("published"))
+                .map(String::as_str),
+            Some("2025-01-15T12:00:00.000Z")
+        );
     }
 
     #[test]
