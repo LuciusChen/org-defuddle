@@ -302,10 +302,10 @@ Known remaining gaps:
   upstream-style ~scoreAndRemove~ low-scoring cleanup, and upstream-style
   ~removeByContentPattern~ cleanup. Coverage is still narrower than upstream's
   full debug removals. Profile JSON uses the 16 upstream generic-pipeline stage
-  names; stages that require a live browser shadow tree or computed mobile
-  styles are present with zero time because serialized HTML cannot carry that
-  state. Site-specific extractor responses omit debug/profile data as upstream
-  does. Debug JSON uses upstream ~contentSelector~ naming and retains
+  names. Serialized shadow bridges and inline mobile media rules are processed;
+  browser-only state that was never serialized cannot be recovered.
+  Site-specific extractor responses omit debug/profile data as upstream does.
+  Debug JSON uses upstream ~contentSelector~ naming and retains
   ~content_selector~ as an org-defuddle compatibility alias.
 
 Implemented:
@@ -505,6 +505,11 @@ Implemented:
   content container.
 - React streaming SSR segment materialization for selected pages whose article
   body is delivered through ~$RC~ scripts or hidden streamed segments.
+- Shadow DOM content recovery from upstream's ~data-defuddle-shadow~ bridge and
+  declarative ~template[shadowrootmode]~ markup. Custom-element hosts are
+  replaced with inert ~div~ containers so recovered content remains visible.
+- Upstream-style 600px mobile visibility rules from inline
+  ~@media (max-width: ...)~ styles are applied before hidden-element cleanup.
 - Steam-style data-attribute event extraction, including selected BBCode
   paragraph, URL, and YouTube preview rendering.
 - Selected MediaWiki/Wikipedia metadata normalization, including known site

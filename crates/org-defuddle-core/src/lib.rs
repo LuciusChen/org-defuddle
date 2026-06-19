@@ -393,6 +393,9 @@ static HIDDEN_STYLE_RE: Lazy<Regex> = Lazy::new(|| {
 static DISPLAY_NONE_STYLE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(^|;)\s*display\s*:\s*none\s*;?").unwrap());
 
+static MOBILE_MAX_WIDTH_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)max-width[^:]*:\s*(\d+)").unwrap());
+
 static STYLE_WIDTH_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bwidth\s*:\s*(\d+(?:\.\d+)?)").unwrap());
 
@@ -1023,20 +1026,25 @@ fn parse_html_to_org_once(
     )? {
         return Ok(output);
     }
+    let schema = extract_json_ld(&document);
+    let mut metadata = extract_metadata(&document, options.url.as_deref());
+    let steam_event = extract_steam_event(&document);
+    let data_attribute_body_html = steam_event.as_ref().map(|event| event.body_html.as_str());
+    let wikipedia_document = is_wikipedia_domain(&metadata.domain)
+        && find_node_by_id(&document, "mw-content-text").is_some();
     let mut debug_removals = Vec::new();
+
+    let step_start = Instant::now();
+    flatten_serialized_shadow_roots(&document);
+    record_profile(&mut profile, "flattenShadowRoots", step_start);
 
     let step_start = Instant::now();
     materialize_react_streaming_content(&document);
     record_profile(&mut profile, "resolveStreamedContent", step_start);
 
-    let schema = extract_json_ld(&document);
-
-    let mut metadata = extract_metadata(&document, options.url.as_deref());
-
-    let steam_event = extract_steam_event(&document);
-    let data_attribute_body_html = steam_event.as_ref().map(|event| event.body_html.as_str());
-    let wikipedia_document = is_wikipedia_domain(&metadata.domain)
-        && find_node_by_id(&document, "mw-content-text").is_some();
+    let step_start = Instant::now();
+    apply_serialized_mobile_styles(&document);
+    record_profile(&mut profile, "applyMobileStyles", step_start);
 
     sanitize_schema_fallback_candidate(&document, &schema);
 
@@ -11522,6 +11530,225 @@ fn materialize_react_streaming_content(document: &NodeRef) {
     }
 }
 
+fn flatten_serialized_shadow_roots(document: &NodeRef) {
+    let mut replacements = Vec::new();
+
+    if let Ok(matches) = document.select("[data-defuddle-shadow]") {
+        replacements.extend(matches.filter_map(|matched| {
+            let host = matched.as_node().clone();
+            let shadow_html = element_attr(&host, "data-defuddle-shadow")?;
+            (!shadow_html.is_empty()).then_some((host, shadow_html))
+        }));
+    }
+
+    for (host, shadow_html) in replacements.into_iter().rev() {
+        remove_element_attr(&host, "data-defuddle-shadow");
+        replace_shadow_host(&host, &shadow_html);
+    }
+
+    let Ok(matches) = document.select("template[shadowrootmode], template[shadowroot]") else {
+        return;
+    };
+    let templates = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for template in templates.into_iter().rev() {
+        let Some(host) = template.parent() else {
+            continue;
+        };
+        let template_contents = template
+            .as_element()
+            .and_then(|element| element.template_contents.as_ref())
+            .unwrap_or(&template);
+        let shadow_html = template_contents
+            .children()
+            .filter_map(|child| serialize_node(&child).ok())
+            .collect::<String>();
+        replace_shadow_host(&host, &shadow_html);
+    }
+}
+
+fn replace_shadow_host(host: &NodeRef, shadow_html: &str) {
+    if shadow_html.is_empty() {
+        return;
+    }
+    let fragment = kuchiki::parse_html().one(format!("<html><body>{shadow_html}</body></html>"));
+    let Some(body) = select_first_node(&fragment, "body") else {
+        return;
+    };
+    let children = body.children().collect::<Vec<_>>();
+    if children.is_empty() {
+        return;
+    }
+
+    let is_custom_element = tag_name(host).is_some_and(|tag| tag.contains('-'));
+    if is_custom_element {
+        let replacement_document =
+            kuchiki::parse_html().one("<html><body><div></div></body></html>");
+        let Some(replacement) = select_first_node(&replacement_document, "div") else {
+            return;
+        };
+        for child in children {
+            replacement.append(child);
+        }
+        host.insert_before(replacement);
+        host.detach();
+    } else {
+        for child in host.children().collect::<Vec<_>>() {
+            child.detach();
+        }
+        for child in children {
+            host.append(child);
+        }
+    }
+}
+
+fn apply_serialized_mobile_styles(document: &NodeRef) {
+    let Ok(styles) = document.select("style") else {
+        return;
+    };
+    let styles = styles
+        .map(|style| style.as_node().text_contents())
+        .collect::<Vec<_>>();
+
+    for css in styles {
+        for (condition, body) in css_media_blocks(&css) {
+            let Some(max_width) = MOBILE_MAX_WIDTH_RE
+                .captures(condition)
+                .and_then(|captures| captures.get(1))
+                .and_then(|width| width.as_str().parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if max_width < 600 {
+                continue;
+            }
+
+            for (selector, declarations) in css_style_rules(body) {
+                if !HIDDEN_STYLE_RE.is_match(declarations) {
+                    continue;
+                }
+                let Ok(matches) = document.select(selector) else {
+                    continue;
+                };
+                let nodes = matches
+                    .map(|matched| matched.as_node().clone())
+                    .collect::<Vec<_>>();
+                for node in nodes {
+                    append_inline_style(&node, declarations);
+                }
+            }
+        }
+    }
+}
+
+fn css_media_blocks(css: &str) -> Vec<(&str, &str)> {
+    let lower = css.to_ascii_lowercase();
+    let mut blocks = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find("@media") {
+        let start = cursor + offset + "@media".len();
+        let Some(open_offset) = css[start..].find('{') else {
+            break;
+        };
+        let open = start + open_offset;
+        let Some(close) = css_matching_brace(css, open) else {
+            break;
+        };
+        blocks.push((css[start..open].trim(), &css[open + 1..close]));
+        cursor = close + 1;
+    }
+    blocks
+}
+
+fn css_style_rules(css: &str) -> Vec<(&str, &str)> {
+    let mut rules = Vec::new();
+    let mut cursor = 0;
+    while cursor < css.len() {
+        let Some(open_offset) = css[cursor..].find('{') else {
+            break;
+        };
+        let open = cursor + open_offset;
+        let Some(close) = css_matching_brace(css, open) else {
+            break;
+        };
+        let selector = css[cursor..open].trim();
+        if !selector.is_empty() && !selector.starts_with('@') {
+            let declarations = css[open + 1..close].trim();
+            if !declarations.is_empty() {
+                rules.push((selector, declarations));
+            }
+        }
+        cursor = close + 1;
+    }
+    rules
+}
+
+fn css_matching_brace(css: &str, open: usize) -> Option<usize> {
+    let bytes = css.as_bytes();
+    let mut depth = 0_u32;
+    let mut quote = None;
+    let mut in_comment = false;
+    let mut escaped = false;
+    let mut index = open;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_comment {
+            if byte == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                in_comment = false;
+                index += 2;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == delimiter {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            in_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == b'{' {
+            depth += 1;
+        } else if byte == b'}' {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn append_inline_style(node: &NodeRef, declarations: &str) {
+    let Some(element) = node.as_element() else {
+        return;
+    };
+    let mut attrs = element.attributes.borrow_mut();
+    let existing = attrs.get("style").unwrap_or("").trim();
+    let declarations = declarations.trim().trim_end_matches(';');
+    let combined = if existing.is_empty() {
+        declarations.to_string()
+    } else {
+        format!("{};{declarations}", existing.trim_end_matches(';'))
+    };
+    attrs.insert("style", combined);
+}
+
 fn materialize_best_hidden_react_segment(document: &NodeRef) {
     let Some(body) = select_first_node(document, "body") else {
         return;
@@ -17416,6 +17643,12 @@ fn tag_name(node: &NodeRef) -> Option<String> {
 fn element_attr(node: &NodeRef, attr: &str) -> Option<String> {
     node.as_element()
         .and_then(|element| element.attributes.borrow().get(attr).map(str::to_owned))
+}
+
+fn remove_element_attr(node: &NodeRef, attr: &str) {
+    if let Some(element) = node.as_element() {
+        element.attributes.borrow_mut().remove(attr);
+    }
 }
 
 fn is_descendant_of(node: &NodeRef, ancestor: &NodeRef) -> bool {
@@ -24277,6 +24510,134 @@ mod tests {
         assert!(output.org.contains(":URL: https://example.com/post"));
         assert!(output.org.contains("[[https://example.com/more][more]]"));
         assert!(!output.org.contains("related links"));
+    }
+
+    #[test]
+    fn flattens_serialized_shadow_dom_content() {
+        let html = r##"
+        <!doctype html>
+        <html>
+          <head><title>Shadow article</title></head>
+          <body>
+            <article>
+              <h1>Shadow article</h1>
+              <reader-card data-defuddle-shadow="&lt;p&gt;Readable shadow text with an &lt;a href='/details'&gt;internal link&lt;/a&gt;.&lt;/p&gt;">
+                <p>Unrendered light DOM fallback.</p>
+              </reader-card>
+              <p>The normal article conclusion remains outside the component.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/article".to_string()),
+                content_selector: Some("article".to_string()),
+                profile: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("Readable shadow text"));
+        assert!(output
+            .org
+            .contains("[[https://example.com/details][internal link]]"));
+        assert!(output.org.contains("normal article conclusion"));
+        assert!(!output.org.contains("Unrendered light DOM fallback"));
+        assert!(!output.html.contains("reader-card"));
+        assert!(!output.html.contains("data-defuddle-shadow"));
+        assert!(output
+            .profile
+            .expect("profile should be present")
+            .contains_key("flattenShadowRoots"));
+    }
+
+    #[test]
+    fn flattens_declarative_shadow_dom_content() {
+        let html = r##"
+        <!doctype html>
+        <html>
+          <head><title>Declarative shadow article</title></head>
+          <body>
+            <article>
+              <h1>Declarative shadow article</h1>
+              <content-panel>
+                <template shadowrootmode="open">
+                  <p>Readable declarative shadow content.</p>
+                </template>
+                <p>Light DOM fallback must not be extracted.</p>
+              </content-panel>
+              <p>The final article paragraph remains visible.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/declarative-shadow".to_string()),
+                content_selector: Some("article".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("Readable declarative shadow content"));
+        assert!(output.org.contains("final article paragraph"));
+        assert!(!output.org.contains("Light DOM fallback"));
+        assert!(!output.html.contains("content-panel"));
+        assert!(!output.html.contains("shadowrootmode"));
+    }
+
+    #[test]
+    fn applies_matching_mobile_media_rules_before_hidden_cleanup() {
+        let html = r##"
+        <!doctype html>
+        <html>
+          <head>
+            <title>Mobile styles</title>
+            <style>
+              @media screen and (max-width: 800px) {
+                .desktop-only { display: none; }
+              }
+              @media (max-width: 599px) {
+                .narrow-only-rule { display: none; }
+              }
+            </style>
+          </head>
+          <body>
+            <article>
+              <h1>Mobile styles</h1>
+              <p class="desktop-only">Desktop navigation must be removed at the upstream mobile width.</p>
+              <p class="narrow-only-rule">A rule below the 600 pixel extraction width must not apply.</p>
+              <p>The stable article paragraph remains in the extracted content.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/mobile-styles".to_string()),
+                content_selector: Some("article".to_string()),
+                profile: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!output.org.contains("Desktop navigation"));
+        assert!(output.org.contains("below the 600 pixel"));
+        assert!(output.org.contains("stable article paragraph"));
+        assert!(output
+            .profile
+            .expect("profile should be present")
+            .contains_key("applyMobileStyles"));
     }
 
     #[test]
