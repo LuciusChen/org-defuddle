@@ -338,9 +338,11 @@ Implemented:
   short signature footers, plus orphan heading cleanup that preserves selected
   heading-only wrappers before real content, content-marked article heading
   wrappers, and parent headings that introduce lower-level sections.
-- A first content-pattern cleanup pass for common defuddle cases: same-page
+- Content-pattern cleanup for common defuddle cases: same-page
   table-of-contents lists, leading breadcrumb blocks, section breadcrumb/back-navigation links, pre-content
-  standalone date, read-time, date+read-time, author/title/description metadata, short blog metadata lists, trailing external link lists, standalone author and author/date bylines, non-semantic hero image
+  standalone date, read-time, date+read-time, relative-time article metadata
+  headers, author/title/description metadata, pinned labels, short blog metadata
+  lists, trailing external and tag-only link blocks, standalone author and author/date bylines, non-semantic hero image
   headers, short pre-content subtitle/dek/standfirst nodes, short
   linked/span/paragraph eyebrow category labels before article titles, leading header separators,
   short pre-heading promotional banner links, short category/topic badge blocks,
@@ -351,7 +353,7 @@ Implemented:
   See also sections, selected trailing heading sections, hero header wrappers,
   structural related-post tails, trailing thin CTA sections, tag-link blocks,
   orphaned related-content intro paragraphs, and trailing metadata/share,
-  author-contact/share rails, short author/share widgets, CTA,
+  dedicated author-contact blocks, author-contact/share rails, short author/share widgets, CTA,
   subscribe/related/link-cluster/card-grid/about-author sections,
   newsletter panels including "never miss" update prompts and signup
   blocks/lists,
@@ -359,7 +361,9 @@ Implemented:
   including related article-card grids without explicit grid class names.
 - Configurable content-pattern cleanup through a ~removeContentPatterns~-style
   option exposed as ~:remove-content-patterns~ in Elisp. Debug/profile records
-  from this pass use the upstream ~removeByContentPattern~ step name.
+  from this pass use the upstream ~removeByContentPattern~ step name and
+  upstream reason names for breadcrumb lists, metadata headers, pinned labels,
+  author contacts, social engagement counters, and trailing tag links.
 - Configurable low-score block cleanup through a ~removeLowScoring~-style
   option exposed as ~:remove-low-scoring~ in Elisp. Debug removals from this
   pass use the upstream ~scoreAndRemove~ step name. The scorer follows the

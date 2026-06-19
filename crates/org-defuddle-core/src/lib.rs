@@ -429,6 +429,12 @@ static CONTENT_DATE_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static RELATIVE_TIME_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b\d+\s+(second|minute|hour|day|week|month|year)s?\s+ago\b").unwrap()
+});
+
+static PINNED_LABEL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^pinned$").unwrap());
+
 static READ_TIME_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)\b\d+\s*min(?:ute)?s?\s+read\b|\bread(?:ing)?\s+time\s*:?\s*\d+\s*min(?:ute)?s?\b",
@@ -15239,6 +15245,8 @@ fn remove_content_patterns(
     remove_hero_header_blocks(main, &mut debug_removals);
     remove_audio_player_widgets(main, &mut debug_removals);
     remove_timezone_widgets(main, &mut debug_removals);
+    remove_pinned_labels(main, &mut debug_removals);
+    remove_article_metadata_header_blocks(main, &mut debug_removals);
     remove_category_badges(main, &mut debug_removals);
     remove_table_of_contents(main, &metadata.url, &mut debug_removals);
     remove_see_also_sections(main, &mut debug_removals);
@@ -15250,10 +15258,12 @@ fn remove_content_patterns(
     remove_blog_metadata_lists(main, &mut debug_removals);
     remove_pre_content_metadata(main, metadata, &mut debug_removals);
     remove_pre_content_separators(main, &mut debug_removals);
+    remove_author_contact_blocks(main, &mut debug_removals);
     remove_author_share_widgets(main, &mut debug_removals);
     remove_social_counters(main, &mut debug_removals);
     remove_social_engagement_clusters(main, &mut debug_removals);
     remove_live_blog_status_labels(main, &mut debug_removals);
+    remove_trailing_tag_link_blocks(main, &mut debug_removals);
     remove_trailing_external_link_lists(main, &metadata.url, &mut debug_removals);
     remove_boilerplate_tail(main, &mut debug_removals);
     remove_trailing_heading_sections(main, &mut debug_removals);
@@ -15362,7 +15372,7 @@ fn remove_leading_breadcrumb(main: &NodeRef, debug_removals: &mut Option<&mut Ve
         }
         if is_breadcrumb_node(&node) {
             let target = highest_single_child_wrapper(&node, main);
-            detach_content_pattern(debug_removals, "leading breadcrumb", &target);
+            detach_content_pattern(debug_removals, "breadcrumb navigation list", &target);
             return;
         }
     }
@@ -15550,6 +15560,70 @@ fn timezone_widget_target(node: &NodeRef, main: &NodeRef) -> NodeRef {
     node.parent()
         .filter(|parent| parent != main)
         .unwrap_or_else(|| node.clone())
+}
+
+fn remove_pinned_labels(main: &NodeRef, debug_removals: &mut Option<&mut Vec<DebugRemoval>>) {
+    let Ok(matches) = main.select("p, span, div, time") else {
+        return;
+    };
+    let nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            let text = normalize_ws(&node.text_contents());
+            (node.parent().is_some() && count_words(&text) == 1 && PINNED_LABEL_RE.is_match(&text))
+                .then(|| node.clone())
+        })
+        .collect::<Vec<_>>();
+
+    for node in nodes {
+        if node.parent().is_some() {
+            detach_content_pattern(debug_removals, "pinned label", &node);
+        }
+    }
+}
+
+fn remove_article_metadata_header_blocks(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let Ok(matches) = main.select("div, p") else {
+        return;
+    };
+    let nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            (node.parent().is_some() && is_article_metadata_header_block(main, node))
+                .then(|| node.clone())
+        })
+        .collect::<Vec<_>>();
+
+    for node in nodes {
+        if node.parent().is_some() {
+            detach_content_pattern(debug_removals, "article metadata header block", &node);
+        }
+    }
+}
+
+fn is_article_metadata_header_block(main: &NodeRef, node: &NodeRef) -> bool {
+    let text = normalize_ws(&node.text_contents());
+    let words = count_words(&text);
+    if !(1..=10).contains(&words)
+        || !(CONTENT_DATE_RE.is_match(&text) || RELATIVE_TIME_RE.is_match(&text))
+        || METADATA_LABEL_RE.is_match(&text)
+        || text.contains(['.', '!', '?'])
+        || !is_before_substantive_content_start(main, node)
+        || is_email_header_metadata_node(node)
+    {
+        return false;
+    }
+
+    node.select("p, h1, h2, h3, h4, h5, h6")
+        .ok()
+        .is_none_or(|blocks| {
+            !blocks
+                .into_iter()
+                .any(|block| count_words(&block.as_node().text_contents()) > 8)
+        })
 }
 
 fn remove_category_badges(main: &NodeRef, debug_removals: &mut Option<&mut Vec<DebugRemoval>>) {
@@ -16470,6 +16544,50 @@ fn remove_pre_content_separators(
     }
 }
 
+fn remove_author_contact_blocks(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let Ok(matches) = main.select("div, section, aside") else {
+        return;
+    };
+    for matched in matches {
+        let node = matched.as_node();
+        if node.parent().is_none()
+            || !is_descendant_of(node, main)
+            || !is_trailing_author_contact_node(node)
+        {
+            continue;
+        }
+        let target = walk_up_isolated(node, main);
+        detach_content_pattern(debug_removals, "author contact block", &target);
+        break;
+    }
+}
+
+fn walk_up_isolated(node: &NodeRef, main: &NodeRef) -> NodeRef {
+    let mut target = node.clone();
+    while let Some(parent) = target.parent() {
+        if parent == *main {
+            break;
+        }
+        let mut preceding_words = 0usize;
+        let mut sibling = previous_element_sibling(&target);
+        while let Some(previous) = sibling {
+            preceding_words += count_words(&previous.text_contents());
+            if preceding_words > 10 {
+                break;
+            }
+            sibling = previous_element_sibling(&previous);
+        }
+        if preceding_words > 10 {
+            break;
+        }
+        target = parent;
+    }
+    target
+}
+
 fn remove_author_share_widgets(
     main: &NodeRef,
     debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
@@ -16528,7 +16646,7 @@ fn remove_social_counters(main: &NodeRef, debug_removals: &mut Option<&mut Vec<D
             continue;
         }
         let target = highest_single_child_wrapper(&node, main);
-        detach_content_pattern(debug_removals, "social counter", &target);
+        detach_content_pattern(debug_removals, "social engagement counter", &target);
     }
 }
 
@@ -16566,6 +16684,43 @@ fn remove_live_blog_status_labels(
         let target = highest_same_text_wrapper(&node, main);
         detach_content_pattern(debug_removals, "live blog status label", &target);
     }
+}
+
+fn remove_trailing_tag_link_blocks(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let content_text = normalize_ws(&main.text_contents());
+    let Ok(matches) = main.select("div") else {
+        return;
+    };
+    let nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            let text = normalize_ws(&node.text_contents());
+            if node.parent().is_none()
+                || text.is_empty()
+                || !is_trailing_tag_link_block_node(node)
+                || !text_is_within_trailing_chars(&content_text, &text, 300)
+            {
+                return None;
+            }
+            Some(node.clone())
+        })
+        .collect::<Vec<_>>();
+
+    for node in nodes {
+        if node.parent().is_some() {
+            detach_content_pattern(debug_removals, "trailing tag link block", &node);
+        }
+    }
+}
+
+fn text_is_within_trailing_chars(content: &str, text: &str, max_chars: usize) -> bool {
+    let Some(start) = content.find(text) else {
+        return false;
+    };
+    content[start + text.len()..].chars().count() <= max_chars
 }
 
 fn remove_trailing_external_link_lists(
@@ -30258,7 +30413,7 @@ Output: [0,1]</code></pre>
         let debug = with_removal.debug.expect("debug info should be present");
         assert!(debug.removals.iter().any(|removal| {
             removal.step == "removeByContentPattern"
-                && removal.reason.as_deref() == Some("author date metadata")
+                && removal.reason.as_deref() == Some("article metadata header block")
                 && removal.text.contains("Jane Doe")
         }));
 
@@ -30335,7 +30490,7 @@ Output: [0,1]</code></pre>
         let debug = with_removal.debug.expect("debug info should be present");
         assert!(debug.removals.iter().any(|removal| {
             removal.step == "removeByContentPattern"
-                && removal.reason.as_deref() == Some("read time metadata")
+                && removal.reason.as_deref() == Some("article metadata header block")
                 && removal.text.contains("3 min read")
         }));
 
@@ -30461,7 +30616,7 @@ Output: [0,1]</code></pre>
         let debug = with_removal.debug.expect("debug info should be present");
         assert!(debug.removals.iter().any(|removal| {
             removal.step == "removeByContentPattern"
-                && removal.reason.as_deref() == Some("standalone date metadata")
+                && removal.reason.as_deref() == Some("article metadata header block")
                 && removal.text.contains("March 5, 2026")
         }));
 
@@ -31398,6 +31553,69 @@ Output: [0,1]</code></pre>
         let profile = output.profile.expect("profile should be present");
         assert!(profile.contains_key("removeByContentPattern"));
         assert!(!profile.contains_key("removeContentPatterns"));
+    }
+
+    #[test]
+    fn content_patterns_report_remaining_upstream_removal_classes() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Content Pattern Classes</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Content Pattern Classes</h1>
+              <div class="relative-meta">21 hours ago - Politics &amp; Policy</div>
+              <span>Pinned</span>
+              <p>This primary article paragraph contains enough substantive prose to establish the real content boundary. It explains the implementation details, expected behavior, verification strategy, and compatibility constraints in a readable form that must remain after metadata and trailing chrome are removed from the document.</p>
+              <p>A second paragraph adds enough useful context about extraction, cleanup, rendering, links, structured metadata, and Org conversion to keep the article safely above short-content recovery thresholds.</p>
+              <section class="writer-contact">
+                <div><span>Reporter</span><a href="mailto:ada@example.com">ada@example.com</a></div>
+              </section>
+              <div class="taxonomy-links"><a href="/rust">Rust</a> <a href="/emacs">Emacs</a></div>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/content-pattern-classes".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_low_scoring: false,
+                debug: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("primary article paragraph"));
+        for removed in [
+            "21 hours ago",
+            "Pinned",
+            "ada@example.com",
+            "[[https://example.com/rust][Rust]]",
+        ] {
+            assert!(!output.org.contains(removed), "{removed}\n{}", output.org);
+        }
+        let debug = output.debug.unwrap();
+        for reason in [
+            "article metadata header block",
+            "pinned label",
+            "author contact block",
+            "trailing tag link block",
+        ] {
+            assert!(
+                debug
+                    .removals
+                    .iter()
+                    .any(|removal| removal.reason.as_deref() == Some(reason)),
+                "missing {reason}: {:?}",
+                debug.removals
+            );
+        }
     }
 
     #[test]
