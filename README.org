@@ -417,12 +417,12 @@ Implemented:
   expose real upstream-style ~schemaOrgData~ and ~metaTags~ values from the
   original document head, plus ~extractorType~ and upstream-compatible extractor
   ~variables~ for selected site metadata on C2 Wiki, GitHub, Hacker News,
-  Medium, Discourse, New York Times, LWN, and LeetCode, plus non-standard
-  custom fields such as transcript or selected video-part metadata when a
-  site-specific extractor produces them. Wikipedia content-selector extraction
-  and Steam event BBCode extraction also report their upstream extractor
-  identities and variables; Steam event bodies take precedence over page-shell
-  content.
+  Medium, Discourse, New York Times, LWN, LeetCode, LinkedIn, Substack,
+  X/Twitter, Reddit, Mastodon, Bluesky, and Threads, plus non-standard custom
+  fields such as transcript or selected video-part metadata when a site-specific
+  extractor produces them. Wikipedia content-selector extraction and Steam
+  event BBCode extraction also report their upstream extractor identities and
+  variables; Steam event bodies take precedence over page-shell content.
 - Property-style response selection for upstream names such as ~title~,
   ~domain~, ~wordCount~, ~parseTime~, and ~contentMarkdown~, with snake-case
   aliases for org-defuddle JSON fields.
@@ -775,7 +775,8 @@ Remaining audit and future parity work:
 - Continue auditing schema.org text fallback coverage and richer
   per-extractor ~variables~ parity for custom fields. The upstream extractor
   names in the inspected snapshot have Rust implementations, and selected
-  metadata variables now match the inspected upstream definitions; custom
-  fields and live browser-only details remain intentionally narrower.
+  metadata variables now match the inspected upstream definitions for the
+  audited site-specific extractors; custom fields and live browser-only details
+  remain intentionally narrower.
 - Continue deepening fixture-specific Org assertions and expand exact-output
   comparisons where Org formatting has a stable upstream-independent contract.

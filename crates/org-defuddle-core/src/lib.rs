@@ -3189,6 +3189,7 @@ fn linkedin_output(
     let word_count = count_words(&body);
     let html = serialize_node(&article)?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(&metadata, &["title", "author", "site", "description"]);
 
     Ok(Some(DefuddleOutput {
         title: metadata.title,
@@ -3208,7 +3209,7 @@ fn linkedin_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("linkedin"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -5718,6 +5719,10 @@ fn substack_output(
     let word_count = count_words(&body_org);
     let html = serialize_node(&body_node)?;
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
 
     Ok(Some(DefuddleOutput {
         title: metadata.title,
@@ -5737,7 +5742,7 @@ fn substack_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("substack"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -7436,6 +7441,10 @@ fn x_output(
 
     let word_count = count_words(&body_org);
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -7454,7 +7463,7 @@ fn x_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type(extractor_name),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -8000,6 +8009,10 @@ fn x_async_output(
     }
     let word_count = count_words(&body_org);
     let org = build_org_document(&metadata, &body_org, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
     Ok(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -8018,7 +8031,7 @@ fn x_async_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type(extractor_name),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     })
@@ -8701,6 +8714,10 @@ fn bluesky_output(
     let word_count = count_words(&body);
     let html = serialize_node(&screen)?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -8719,7 +8736,7 @@ fn bluesky_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("bluesky"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -9175,6 +9192,10 @@ fn threads_output(
     let word_count = count_words(&body);
     let html = serialize_node(&pagelets[0])?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -9193,7 +9214,7 @@ fn threads_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("threads"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -9259,6 +9280,10 @@ fn threads_region_output(
     let word_count = count_words(&body);
     let html = serialize_node(region)?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -9277,7 +9302,7 @@ fn threads_region_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("threads"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -10077,6 +10102,10 @@ fn mastodon_output(
     let word_count = count_words(&body);
     let html = serialize_node(&main)?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -10095,7 +10124,7 @@ fn mastodon_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("mastodon"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -10368,6 +10397,7 @@ fn reddit_output(
     let word_count = count_words(&body);
     let html = serialize_node(&post)?;
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = metadata_variables(&metadata, &["title", "author", "site", "description"]);
     Ok(Some(DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -10386,7 +10416,7 @@ fn reddit_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("reddit"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -10417,9 +10447,11 @@ fn reddit_metadata(document: &NodeRef, provided_url: Option<&str>, post: &NodeRe
         .and_then(|url| Url::parse(url).ok())
         .and_then(|url| url.host_str().map(str::to_owned))
         .unwrap_or_default();
+    let description = select_text(post, ".entry .usertext-body .md").unwrap_or_default();
 
     Metadata {
         title,
+        description,
         author,
         published,
         site: if subreddit.is_empty() {
@@ -25691,10 +25723,80 @@ mod tests {
         assert_eq!(output.author, "@ada");
         assert_eq!(output.site, "X (Twitter)");
         assert_eq!(output.domain, "x.com");
+        assert_eq!(variable(&output, "title"), Some("Post by @ada on X"));
+        assert_eq!(variable(&output, "author"), Some("@ada"));
+        assert_eq!(variable(&output, "site"), Some("X (Twitter)"));
+        assert!(matches!(
+            variable(&output, "description"),
+            Some(text) if text.contains("Read this note")
+        ));
+        assert_eq!(variable(&output, "published"), None);
         assert!(output
             .org
             .contains("[[https://example.com/post][this note]]"));
         assert!(output.org.contains("Second paragraph."));
+    }
+
+    #[test]
+    fn substack_article_exposes_upstream_variables() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta property="og:title" content="Substack Parser Notes">
+            <meta property="og:description" content="Notes about parser parity.">
+            <meta property="og:site_name" content="Example Stack">
+            <meta property="article:published_time" content="2026-02-24T00:00:00+00:00">
+            <meta name="author" content="Ada Writer">
+            <meta property="og:url" content="https://example.substack.com/p/parser-notes">
+          </head>
+          <body>
+            <div class="body markup">
+              <p>The article body explains Substack extraction in enough words.</p>
+            </div>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.substack.com/p/parser-notes".to_string()),
+                include_images: true,
+                remove_small_images: true,
+                content_selector: None,
+                include_replies: IncludeReplies::Extractors,
+                remove_hidden_elements: true,
+                remove_exact_selectors: true,
+                remove_partial_selectors: true,
+                remove_content_patterns: true,
+                remove_low_scoring: true,
+                standardize: true,
+                debug: false,
+                profile: false,
+                frontmatter: false,
+                markdown: false,
+                separate_markdown: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.extractor_type.as_deref(), Some("substack"));
+        assert_eq!(output.title, "Substack Parser Notes");
+        assert_eq!(output.author, "Ada Writer");
+        assert_eq!(output.site, "Example Stack");
+        assert_eq!(output.published, "2026-02-24T00:00:00+00:00");
+        assert_eq!(variable(&output, "title"), Some("Substack Parser Notes"));
+        assert_eq!(variable(&output, "author"), Some("Ada Writer"));
+        assert_eq!(variable(&output, "site"), Some("Example Stack"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("Notes about parser parity.")
+        );
+        assert_eq!(
+            variable(&output, "published"),
+            Some("2026-02-24T00:00:00+00:00")
+        );
     }
 
     #[test]
@@ -25735,6 +25837,14 @@ mod tests {
         assert_eq!(output.title, "Post by @openclaw on X");
         assert_eq!(output.author, "@openclaw");
         assert_eq!(output.published, "2026-05-06");
+        assert_eq!(variable(&output, "title"), Some("Post by @openclaw on X"));
+        assert_eq!(variable(&output, "author"), Some("@openclaw"));
+        assert_eq!(variable(&output, "site"), Some("X (Twitter)"));
+        assert_eq!(variable(&output, "published"), Some("2026-05-06"));
+        assert!(matches!(
+            variable(&output, "description"),
+            Some(text) if text.contains("OpenClaw 2026.5.6")
+        ));
         assert!(!output.html.contains("relea<a "));
         assert!(output
             .html
@@ -25870,6 +25980,11 @@ mod tests {
         assert_eq!(output.published, "2026-06-02");
         assert_eq!(output.description, "Article preview");
         assert_eq!(output.image, "https://example.com/cover.png");
+        assert_eq!(variable(&output, "title"), Some("Article Title"));
+        assert_eq!(variable(&output, "author"), Some("@ada"));
+        assert_eq!(variable(&output, "site"), Some("X (Twitter)"));
+        assert_eq!(variable(&output, "published"), Some("2026-06-02"));
+        assert_eq!(variable(&output, "description"), Some("Article preview"));
         assert!(output
             .org
             .contains("*Intro* with [[https://example.com/link][link]]"));
@@ -28169,6 +28284,16 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(with_replies.title, "Reddit Replies");
+        assert_eq!(with_replies.author, "post-user");
+        assert_eq!(with_replies.site, "r/test");
+        assert_eq!(variable(&with_replies, "title"), Some("Reddit Replies"));
+        assert_eq!(variable(&with_replies, "author"), Some("post-user"));
+        assert_eq!(variable(&with_replies, "site"), Some("r/test"));
+        assert!(matches!(
+            variable(&with_replies, "description"),
+            Some(text) if text.contains("The post body should always remain")
+        ));
         assert!(with_replies
             .org
             .contains("The post body should always remain"));
@@ -28346,6 +28471,17 @@ mod tests {
         assert_eq!(with_replies.site, "LinkedIn");
         assert_eq!(with_replies.domain, "www.linkedin.com");
         assert_eq!(with_replies.published, "2026-02-03T04:05:06Z");
+        assert_eq!(
+            variable(&with_replies, "title"),
+            Some("Post by Ada Example on LinkedIn")
+        );
+        assert_eq!(variable(&with_replies, "author"), Some("Ada Example"));
+        assert_eq!(variable(&with_replies, "site"), Some("LinkedIn"));
+        assert!(matches!(
+            variable(&with_replies, "description"),
+            Some(text) if text.contains("Shipping")
+        ));
+        assert_eq!(variable(&with_replies, "published"), None);
         assert!(with_replies.org.contains(
             "[[https://www.linkedin.com/feed/update/urn:li:activity:123][a Rust parser]]"
         ));
@@ -29024,6 +29160,17 @@ mod tests {
         assert_eq!(with_replies.site, "Bluesky");
         assert_eq!(with_replies.domain, "bsky.app");
         assert_eq!(with_replies.published, "2026-03-27");
+        assert_eq!(
+            variable(&with_replies, "title"),
+            Some("Post by Alice Example on Bluesky")
+        );
+        assert_eq!(variable(&with_replies, "author"), Some("Alice Example"));
+        assert_eq!(variable(&with_replies, "site"), Some("Bluesky"));
+        assert_eq!(variable(&with_replies, "published"), Some("2026-03-27"));
+        assert!(matches!(
+            variable(&with_replies, "description"),
+            Some(text) if text.contains("Root post")
+        ));
         assert!(with_replies
             .org
             .contains("[[https://bsky.app/profile/bob.social][@bob.social]]"));
@@ -29152,6 +29299,17 @@ mod tests {
         assert_eq!(with_replies.site, "Threads");
         assert_eq!(with_replies.domain, "www.threads.com");
         assert_eq!(with_replies.published, "2026-04-04");
+        assert_eq!(
+            variable(&with_replies, "title"),
+            Some("Post by @ada on Threads")
+        );
+        assert_eq!(variable(&with_replies, "author"), Some("@ada"));
+        assert_eq!(variable(&with_replies, "site"), Some("Threads"));
+        assert_eq!(variable(&with_replies, "published"), Some("2026-04-04"));
+        assert!(matches!(
+            variable(&with_replies, "description"),
+            Some(text) if text.contains("Launch notes")
+        ));
         assert!(with_replies
             .org
             .contains("[[https://example.com/notes][source]]"));
@@ -29256,6 +29414,17 @@ mod tests {
 
         assert_eq!(output.title, "Post by @server on Threads");
         assert_eq!(output.published, "2026-04-05");
+        assert_eq!(
+            variable(&output, "title"),
+            Some("Post by @server on Threads")
+        );
+        assert_eq!(variable(&output, "author"), Some("@server"));
+        assert_eq!(variable(&output, "site"), Some("Threads"));
+        assert_eq!(variable(&output, "published"), Some("2026-04-05"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("Server-rendered post body.")
+        );
         assert!(output.org.contains("Server-rendered post body."));
         assert!(output.org.contains("** Comments"));
         assert!(output.org.contains("*@reply*"));
@@ -29336,6 +29505,25 @@ mod tests {
         assert_eq!(
             with_images.image,
             "https://cdn.mastodon.example/media/original/one.png"
+        );
+        assert_eq!(
+            with_images.title,
+            "Post by Alice Example on Mastodon Example"
+        );
+        assert_eq!(with_images.author, "Alice Example");
+        assert_eq!(with_images.site, "Mastodon Example");
+        assert_eq!(with_images.published, "2026-06-15");
+        assert_eq!(with_images.description, "A federated gallery post.");
+        assert_eq!(
+            variable(&with_images, "title"),
+            Some("Post by Alice Example on Mastodon Example")
+        );
+        assert_eq!(variable(&with_images, "author"), Some("Alice Example"));
+        assert_eq!(variable(&with_images, "site"), Some("Mastodon Example"));
+        assert_eq!(variable(&with_images, "published"), Some("2026-06-15"));
+        assert_eq!(
+            variable(&with_images, "description"),
+            Some("A federated gallery post.")
         );
         assert!(with_images
             .org
