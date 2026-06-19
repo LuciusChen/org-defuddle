@@ -2628,56 +2628,7 @@ fn selected_upstream_fixtures_smoke() {
             not_contains: &["katex-html", "aria-hidden", "copy-tex"],
         },
     ];
-    let content_only_fixtures = [
-        "elements--srcset-normalization",
-        "elements--base64-placeholder-removal",
-        "elements--svg-placeholder-lazy-image",
-        "codeblocks--react-syntax-highlighter-linenums",
-        "codeblocks--chatgpt-codemirror",
-        "codeblocks--rockthejvm.com-articles-kotlin-101-type-classes",
-        "content-patterns--code-block-boilerplate-and-trailing-section",
-        "issues--221-nextjs-noscript-images",
-        "issues--227-noscript-lazy-images",
-        "elements--image-dedup",
-        "elements--lightbox-image-dedup",
-        "codeblocks--hljs-header",
-        "math--katex-data-math",
-        "math--wikipedia-mathml",
-        "math--mathjax-chtml-no-assistive",
-        "math--katex-centraliser",
-        "table-layout--single-column",
-        "table-layout--blogger-two-column",
-        "elements--data-table",
-        "elements--br-between-blocks",
-        "elements--figure-content-wrapper",
-        "issues--300-nested-layout-tables",
-        "table-layout--peripheral-tables",
-        "issues--284-table-cell-header-scoring",
-        "issues--218-footnote-wrapper-text-lost",
-        "issues--120-dhammatalks-footnotes",
-        "issues--280-texinfo-footnotes",
-        "issues--296-oreilly-noteref-footnotes",
-        "issues--217-writerside-docs",
-        "issues--167-partial-selector-inside-code",
-        "issues--168-links-inside-inline-code",
-        "issues--159-lean-verso-code-blocks",
-        "issues--159-lean-heading-permalink-emoji",
-        "issues--159-lean-verso-grouped-blocks",
-        "issues--159-lean-verso-empty-line-preserved",
-        "issues--159-lean-verso-missing-section-gap",
-        "issues--131-category-links",
-        "issues--sidebar-toggle-checkbox",
-        "headings--fragment-url-not-permalink",
-        "headings--permalink-title-match",
-        "headings--testid-article-header",
-        "small-images--svg-icon-viewbox",
-        "issues--162-aria-hidden-main-content",
-        "issues--106-menu-id",
-        "standardize--span-data-as-paragraph",
-        "elements--empty-table",
-        "content-patterns--live-blog-metadata",
-        "content-patterns--socket-dev-blog",
-    ];
+    let mut metadata_mismatches = Vec::new();
 
     for case in cases {
         let html_path = defuddle_dir
@@ -2715,23 +2666,22 @@ fn selected_upstream_fixtures_smoke() {
         )
         .unwrap_or_else(|err| panic!("failed to parse {}: {err}", case.fixture));
 
-        if !content_only_fixtures.contains(&case.fixture) {
-            assert_eq!(
-                output.title, expected.title,
-                "fixture {} title",
-                case.fixture
-            );
-            assert_eq!(
-                output.author, expected.author,
-                "fixture {} author",
-                case.fixture
-            );
-            assert_eq!(output.site, expected.site, "fixture {} site", case.fixture);
-            assert_eq!(
-                output.published, expected.published,
-                "fixture {} published",
-                case.fixture
-            );
+        for (field, actual, expected) in [
+            ("title", output.title.as_str(), expected.title.as_str()),
+            ("author", output.author.as_str(), expected.author.as_str()),
+            ("site", output.site.as_str(), expected.site.as_str()),
+            (
+                "published",
+                output.published.as_str(),
+                expected.published.as_str(),
+            ),
+        ] {
+            if actual != expected {
+                metadata_mismatches.push(format!(
+                    "{} {}: actual {:?}, expected {:?}",
+                    case.fixture, field, actual, expected
+                ));
+            }
         }
         for expected_text in case.contains {
             assert!(
@@ -2757,6 +2707,12 @@ fn selected_upstream_fixtures_smoke() {
             case.fixture
         );
     }
+
+    assert!(
+        metadata_mismatches.is_empty(),
+        "fixture metadata mismatches:\n{}",
+        metadata_mismatches.join("\n")
+    );
 }
 
 fn read_expected_metadata(path: &std::path::Path) -> ExpectedMetadata {

@@ -283,8 +283,10 @@ For local HTML:
 
 This repository has broad Org-extraction parity for the inspected upstream
 defuddle fixture set, but it is not full public API/CLI parity with defuddle.
-The smoke harness currently covers 202 selected upstream fixtures out of 202
-expected fixture files in the inspected defuddle snapshot.
+The smoke harness covers all 202 upstream fixture HTML files in the inspected
+defuddle snapshot. Every fixture now strictly matches the upstream expected
+~title~, ~author~, ~site~, and ~published~ metadata, alongside fixture-specific
+Org content and cleanup assertions.
 
 Known remaining gaps:
 
@@ -311,9 +313,12 @@ Implemented:
   dates above the H1 before suggested-post timestamps, when structured metadata
   is missing. Short title suffixes that match the page domain, or that match an
   H1-prefixed title and visible site navigation, are used as site-name
-  fallbacks. Selected documentation-style suffixes are stripped when the H1
-  already provides the article title, and short OpenGraph/Twitter titles that
-  look like brand names can fall back to the visible H1. Placeholder metadata values such as
+  fallbacks. Strong separator and guarded dash suffix heuristics follow
+  defuddle's title word counting, including domain-like suffix text. Selected
+  documentation-style suffixes are stripped when the H1 already provides the
+  article title, and short OpenGraph/Twitter titles that look like brand names
+  can fall back to the visible H1. Legacy dated blog permalinks can use a
+  nearby date heading. Placeholder metadata values such as
   unresolved template output or punctuation-only names are skipped in fallback
   chains, and author values with URL suffixes are cleaned after byline cleanup.
   Date-only byline fallbacks are not treated as authors.
@@ -639,8 +644,9 @@ Implemented:
   Button cleanup preserves inline text and extracts media from media-wrapping
   buttons before removing UI controls. Debug/profile records from this pass use
   the upstream ~removeBySelector~ step name.
-- Upstream defuddle fixture smoke tests that validate selected expected
-  metadata and content across JavaScript links, code blocks, syntax highlighter
+- Upstream defuddle fixture smoke tests that validate strict expected metadata
+  for all 202 fixtures and selected Org content across JavaScript links, code
+  blocks, syntax highlighter
   cleanup including selected table-based codeblock layouts, hidden nodes with
   substantial aria-hidden content preservation, content-bearing hidden dialog
   preservation with signature footer retention, visibility-hidden content
@@ -714,5 +720,5 @@ Remaining parity work:
   rendering, and SVG handling.
 - Expand schema.org text fallback coverage and port site-specific extractors,
   including richer per-extractor ~variables~ parity for custom fields.
-- Expand the upstream fixture harness until it covers the full defuddle fixture
-  set with meaningful Org-specific expectations.
+- Continue deepening fixture-specific Org assertions and add exact-output
+  comparisons where Org formatting has a stable upstream-independent contract.

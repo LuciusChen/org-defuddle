@@ -1897,6 +1897,7 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
                     &domain,
                 )
             })
+            .or_else(|| infer_site_name_from_title_fallback(&raw_title))
             .unwrap_or_default();
     }
     let title = if is_lesswrong_domain(&domain) && raw_title.contains("LessWrong") {
@@ -1973,6 +1974,7 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
             mediawiki_last_modified_date(document),
             daring_fireball_published(document, &domain),
             proximity.published,
+            legacy_blog_published(document, &url),
             first_visible_metadata_date(document),
         ])
         .unwrap_or_default(),
@@ -11025,9 +11027,6 @@ fn extract_h1_sibling_metadata(document: &NodeRef) -> ProximityMetadata {
 }
 
 fn known_site_name_for_domain(domain: &str) -> Option<String> {
-    if domain == "chatgpt.com" {
-        return Some("ChatGPT".to_string());
-    }
     if domain == "news.ycombinator.com" {
         return Some("Hacker News".to_string());
     }
@@ -11105,6 +11104,24 @@ where
             break;
         }
     }
+}
+
+fn legacy_blog_published(document: &NodeRef, url: &str) -> Option<String> {
+    static DATED_BLOG_PATH_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^/\d{4}/\d{1,2}/").unwrap());
+    let parsed_url = Url::parse(url).ok()?;
+    if !DATED_BLOG_PATH_RE.is_match(parsed_url.path()) {
+        return None;
+    }
+
+    let headings = document.select("h2, h3").ok()?;
+    for heading in headings {
+        if let Some(parsed) =
+            parse_english_date_to_utc(&normalize_ws(&heading.as_node().text_contents()))
+        {
+            return Some(parsed);
+        }
+    }
+    None
 }
 
 fn h1_following_author_link(document: &NodeRef) -> Option<String> {
@@ -21563,7 +21580,7 @@ fn first_present(values: &[Option<String>]) -> Option<String> {
 fn clean_title(title: &str, site: &str) -> String {
     let title = normalize_ws(title);
     if !site.is_empty() {
-        for sep in [" | ", " - ", " – ", " — ", " :: "] {
+        for sep in [" | ", " / ", " · ", " - ", " – ", " — ", " :: "] {
             let Some((prefix, suffix)) = title.rsplit_once(sep) else {
                 continue;
             };
@@ -21683,6 +21700,62 @@ fn infer_site_name_from_title_matching_h1(
         }
     }
     None
+}
+
+fn infer_site_name_from_title_fallback(title: &str) -> Option<String> {
+    for sep in [" | ", " / ", " · "] {
+        let Some((prefix, suffix)) = title.rsplit_once(sep) else {
+            continue;
+        };
+        let title_words = count_title_words(prefix);
+        let site_words = count_title_words(suffix);
+        if !prefix.trim().is_empty()
+            && !suffix.trim().is_empty()
+            && site_words <= 3
+            && title_words >= 2
+            && title_words >= site_words * 2
+        {
+            return Some(normalize_ws(suffix));
+        }
+    }
+
+    for sep in [" - ", " – ", " — "] {
+        let Some((prefix, suffix)) = title.rsplit_once(sep) else {
+            continue;
+        };
+        let title_words = count_title_words(prefix);
+        let site_words = count_title_words(suffix);
+        if !prefix.trim().is_empty()
+            && !suffix.trim().is_empty()
+            && site_words <= 2
+            && title_words >= 2
+            && title_words > site_words
+        {
+            return Some(normalize_ws(suffix));
+        }
+    }
+    None
+}
+
+fn count_title_words(text: &str) -> usize {
+    let mut count = 0;
+    let mut in_word = false;
+    for ch in text.chars() {
+        if matches!(
+            ch as u32,
+            0x3040..=0x30ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff
+                | 0xac00..=0xd7af
+        ) {
+            count += 1;
+            in_word = false;
+        } else if ch.is_whitespace() {
+            in_word = false;
+        } else if !in_word {
+            count += 1;
+            in_word = true;
+        }
+    }
+    count
 }
 
 fn is_brand_like_suffix(suffix: &str) -> bool {
@@ -27768,6 +27841,36 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
+    fn generic_chatgpt_page_does_not_claim_conversation_metadata() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head><title>ChatGPT</title></head>
+          <body>
+            <main>
+              <h1>Fibonacci in Python</h1>
+              <p>Here is a generator-based implementation with enough context to extract.</p>
+              <p>This page has no conversation turns, so it remains a generic article.</p>
+            </main>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://chatgpt.com/share/example".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.title, "ChatGPT");
+        assert_eq!(output.site, "");
+        assert_eq!(output.extractor_type, None);
+    }
+
+    #[test]
     fn claude_extractor_formats_shared_conversation() {
         let html = r##"
         <!doctype html>
@@ -31754,6 +31857,50 @@ line break text.">
         .unwrap();
 
         assert_eq!(output.title, "Sample Post");
+    }
+
+    #[test]
+    fn infers_short_site_suffixes_with_upstream_title_word_counting() {
+        for (title, expected) in [
+            ("API Reference | Documentation", "Documentation"),
+            ("Introducing Socket Firewall - Socket Blog", "Socket Blog"),
+            ("Quadratic formula - Encyclopedia", "Encyclopedia"),
+            (
+                "MN 37 The Shorter Craving-Destruction Discourse | Cūḷa Taṇhāsaṅkhaya Sutta | sutta on dhammatalks.org",
+                "sutta on dhammatalks.org",
+            ),
+        ] {
+            assert_eq!(
+                infer_site_name_from_title_fallback(title).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn extracts_legacy_blog_date_from_dated_permalink() {
+        let document = kuchiki::parse_html().one(
+            r#"
+            <html><body><main>
+              <h1>Thoughts on various topics</h1>
+              <p>Welcome to my blog.</p>
+              <h3>Thursday, May 27, 2004</h3>
+            </main></body></html>
+            "#,
+        );
+
+        assert_eq!(
+            legacy_blog_published(
+                &document,
+                "https://blog.example.com/2004/05/one-minute-guide.html"
+            )
+            .as_deref(),
+            Some("2004-05-27T00:00:00+00:00")
+        );
+        assert_eq!(
+            legacy_blog_published(&document, "https://blog.example.com/archive.html"),
+            None
+        );
     }
 
     #[test]
