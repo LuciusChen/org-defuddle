@@ -14776,6 +14776,7 @@ fn remove_content_patterns(
     remove_boilerplate_tail(main, &mut debug_removals);
     remove_trailing_heading_sections(main, &mut debug_removals);
     remove_related_content_intros(main, &mut debug_removals);
+    remove_newsletter_signup_blocks(main, &mut debug_removals);
     remove_trailing_related_posts_blocks(main, &mut debug_removals);
     remove_trailing_thin_sections(main, &mut debug_removals);
     remove_trailing_non_content(main, &mut debug_removals);
@@ -15347,6 +15348,104 @@ fn is_related_content_intro_node(node: &NodeRef) -> bool {
             node,
             "a[href], math, [data-mathml], .katex, .katex-mathml, .katex-display, .MathJax, .MathJax_Display, .MathJax_SVG, mjx-container, pre, code, table, img, picture, video, audio, iframe, blockquote, figure",
         ) == 0
+}
+
+fn remove_newsletter_signup_blocks(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let Ok(matches) = main.select("div, section, aside") else {
+        return;
+    };
+    let mut block_target = None;
+    for matched in matches {
+        let node = matched.as_node();
+        if node.parent().is_some() && is_newsletter_signup_element(node, 60) {
+            block_target = Some(newsletter_signup_target(node, main));
+            break;
+        }
+    }
+    if let Some(target) = block_target {
+        if target.parent().is_some() {
+            detach_content_pattern(debug_removals, "newsletter signup", &target);
+        }
+    }
+
+    let Ok(matches) = main.select("ul") else {
+        return;
+    };
+    let lists = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            (node.parent().is_some() && is_newsletter_signup_list(node)).then(|| node.clone())
+        })
+        .collect::<Vec<_>>();
+    for node in lists {
+        if node.parent().is_some() {
+            detach_content_pattern(debug_removals, "newsletter signup list", &node);
+        }
+    }
+}
+
+fn is_newsletter_signup_element(node: &NodeRef, max_words: usize) -> bool {
+    if has_article_content_element(node)
+        || has_math_content(node)
+        || has_ancestor_tag(node, &["pre", "code"])
+    {
+        return false;
+    }
+    let text = normalize_ws(&node.text_contents());
+    let words = count_words(&text);
+    if words < 2 || words > max_words {
+        return false;
+    }
+    let normalized = split_camel_case_boundaries(&text).replace(['\u{2018}', '\u{2019}'], "'");
+    NEWSLETTER_RE.is_match(&normalized)
+}
+
+fn is_newsletter_signup_list(node: &NodeRef) -> bool {
+    if !is_newsletter_signup_element(node, 30) {
+        return false;
+    }
+    let children = element_children(node);
+    !children.is_empty()
+        && children.into_iter().all(|child| {
+            tag_name(&child).as_deref() == Some("li")
+                && count_words(&child.text_contents()) <= 12
+                && count_selector(
+                    &child,
+                    "p, pre, code, table, blockquote, img, picture, figure",
+                ) == 0
+        })
+}
+
+fn newsletter_signup_target(node: &NodeRef, main: &NodeRef) -> NodeRef {
+    let mut target = node.clone();
+    let node_words = count_words(&node.text_contents());
+    while let Some(parent) = target.parent() {
+        if parent == *main {
+            break;
+        }
+        let parent_words = count_words(&parent.text_contents());
+        if parent_words > node_words * 2 + 15 {
+            break;
+        }
+        target = parent;
+    }
+    target
+}
+
+fn split_camel_case_boundaries(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut previous = None;
+    for ch in text.chars() {
+        if previous.is_some_and(|prev: char| prev.is_lowercase() && ch.is_uppercase()) {
+            out.push(' ');
+        }
+        out.push(ch);
+        previous = Some(ch);
+    }
+    out
 }
 
 fn remove_trailing_thin_sections(
@@ -30014,8 +30113,64 @@ Output: [0,1]</code></pre>
         let debug = output.debug.expect("debug info should be present");
         assert!(debug.removals.iter().any(|removal| {
             removal.step == "removeByContentPattern"
-                && removal.reason.as_deref() == Some("trailing non-content")
+                && removal.reason.as_deref() == Some("newsletter signup")
                 && removal.text.contains("Never miss")
+        }));
+    }
+
+    #[test]
+    fn remove_content_patterns_removes_newsletter_signup_blocks_and_lists() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Newsletter Signup Blocks</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Newsletter Signup Blocks</h1>
+              <p>The article body explains the release process before a signup panel that should be removed even when it is not the final child.</p>
+              <section class="chakra-stack">
+                <h2>Subscribe to our newsletter</h2>
+                <p>Get weekly updates in your inbox.</p>
+              </section>
+              <p>A second article paragraph remains after the signup panel and proves the cleanup is not just tail trimming.</p>
+              <ul class="standfirst-links">
+                <li><a href="/alerts">Sign up for email alerts</a></li>
+                <li><a href="/newsletter">Subscribe to our newsletter</a></li>
+              </ul>
+              <p>The final article paragraph remains after the newsletter signup list.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/newsletter-signup-blocks".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: true,
+                debug: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("The article body explains"));
+        assert!(output.org.contains("A second article paragraph remains"));
+        assert!(output.org.contains("final article paragraph remains"));
+        assert!(!output.org.contains("weekly updates"));
+        assert!(!output.org.contains("email alerts"));
+        let debug = output.debug.expect("debug info should be present");
+        assert!(debug.removals.iter().any(|removal| {
+            removal.step == "removeByContentPattern"
+                && removal.reason.as_deref() == Some("newsletter signup")
+                && removal.text.contains("Subscribe to our newsletter")
+        }));
+        assert!(debug.removals.iter().any(|removal| {
+            removal.step == "removeByContentPattern"
+                && removal.reason.as_deref() == Some("newsletter signup list")
+                && removal.text.contains("email alerts")
         }));
     }
 
