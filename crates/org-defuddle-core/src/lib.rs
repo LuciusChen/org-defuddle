@@ -20396,16 +20396,15 @@ impl MarkdownRenderer {
     fn render_list_item(&mut self, node: &NodeRef) {
         self.ensure_newline();
         self.out
-            .push_str(&"  ".repeat(self.list_depth.saturating_sub(1)));
-        if node
-            .parent()
-            .and_then(|parent| tag_name(&parent))
-            .as_deref()
-            == Some("ol")
-        {
-            self.out.push_str("1. ");
+            .push_str(&"\t".repeat(self.list_depth.saturating_sub(1)));
+        if let Some(number) = markdown_ordered_list_number(node) {
+            self.out.push_str(&number.to_string());
+            self.out.push_str(". ");
         } else {
             self.out.push_str("- ");
+        }
+        if let Some(checked) = markdown_task_list_marker(node) {
+            self.out.push_str(if checked { "[x] " } else { "[ ] " });
         }
 
         for child in node.children() {
@@ -20598,6 +20597,33 @@ impl MarkdownRenderer {
             self.out.push(' ');
         }
     }
+}
+
+fn markdown_ordered_list_number(node: &NodeRef) -> Option<usize> {
+    let parent = node.parent()?;
+    if tag_name(&parent).as_deref() != Some("ol") {
+        return None;
+    }
+
+    let mut number = ordered_list_start(&parent).unwrap_or(1);
+    for child in parent.children() {
+        if tag_name(&child).as_deref() != Some("li") {
+            continue;
+        }
+        if child == *node {
+            return Some(number);
+        }
+        number += 1;
+    }
+    Some(number)
+}
+
+fn markdown_task_list_marker(node: &NodeRef) -> Option<bool> {
+    if !has_class_token(node, "task-list-item") {
+        return None;
+    }
+    let checkbox = select_first_node(node, r#"input[type="checkbox"]"#)?;
+    Some(element_attr(&checkbox, "checked").is_some())
 }
 
 #[derive(Debug, Default)]
@@ -33132,6 +33158,45 @@ line break text.">
         assert!(escaped_pipe_header.contains("A \\| B"));
         assert!(escaped_pipe_header.contains("| --- | --- |"));
         assert!(!escaped_pipe_header.contains("| --- | --- | --- |"));
+    }
+
+    #[test]
+    fn markdown_conversion_matches_upstream_list_item_rules() {
+        let ordered_start = html_fragment_to_markdown(
+            r#"<article>
+              <ol start="3">
+                <li>Third item</li>
+                <li>Fourth item</li>
+              </ol>
+            </article>"#,
+        );
+        assert!(ordered_start.contains("3. Third item"));
+        assert!(ordered_start.contains("4. Fourth item"));
+        assert!(!ordered_start.contains("1. Third item"));
+
+        let nested_ordered = html_fragment_to_markdown(
+            r#"<article>
+              <ul>
+                <li>Parent item
+                  <ol start="7">
+                    <li>Nested item</li>
+                  </ol>
+                </li>
+              </ul>
+            </article>"#,
+        );
+        assert!(nested_ordered.contains("- Parent item\n\t7. Nested item"));
+
+        let task_list = html_fragment_to_markdown(
+            r#"<article>
+              <ul>
+                <li class="task-list-item"><input type="checkbox" checked>Done</li>
+                <li class="task-list-item"><input type="checkbox">Todo</li>
+              </ul>
+            </article>"#,
+        );
+        assert!(task_list.contains("- [x] Done"));
+        assert!(task_list.contains("- [ ] Todo"));
     }
 
     #[test]
