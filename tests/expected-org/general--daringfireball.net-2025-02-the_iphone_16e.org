@@ -8,7 +8,7 @@
 :DESCRIPTION: The iPhone 16e is an iPhone for people who don’t want to think much about their phone. But they *do* want an iPhone, not just any “whatever” phone. A just plain iPhone, with a good screen, good enough (and simple) camera, and great battery life.
 :IMAGE: https://daringfireball.net/graphics/df-wide-card.png
 :LANGUAGE: en
-:WORD_COUNT: 2007
+:WORD_COUNT: 1997
 :END:
 
 I’ve spent the last six days using the iPhone 16e, and the experience has been a throwback. In many ways, the iPhone 16e both looks and feels like the modern-day progeny of the early Steve Jobs era iPhones. Early iPhones like the plastic 3G and 3GS, and the glass-back/metal-sides 4 and 4S were simpler offerings. Two colors, black and white. Single-lens inconspicuous cameras. The iPhone 16e feels like their direct descendent.
@@ -27,8 +27,6 @@ So not only does the 16e completely omit the mesa, but the thickness of the enti
 Just look at this screenshot from [[https://www.apple.com/iphone/compare/?modelList=iphone-16-pro,iphone-16,iphone-16e][Apple’s comparison page]], showing all three side-by-side in their black color options:
 
 [[https://daringfireball.net/misc/2025/02/iphones-16pro-16reg-16e.png][https://daringfireball.net/misc/2025/02/iphones-16pro-16reg-16e.png]]
-
-Screenshot showing the iPhones 16 Pro, 16, and 16e side-by-side.
 
 The iPhone 16e looks like a phone with a tiny camera on the back. The iPhone 16 Pro looks like a camera that also happens to be a phone. You can really feel the difference in hand, too — not just the weight, but the balance. [fn:1] You can feel that the 16 Pro’s extra camera hardware adds extra weight. Per Apple’s specs, the iPhone 16e weighs 167g; the 16 Pro 199g — a 16 percent difference. (Also take note of a clever touch: Apple’s default wallpapers for each phone subtly suggest how many camera lenses they have.)
 
@@ -69,6 +67,8 @@ That’s a tidy pricing matrix with $100 increments. The new 16e starting at $60
 
 The iPhone 16e is an iPhone for people who don’t want to think much about their phone. But they /do/ want an iPhone, not just any “whatever” phone. A just plain iPhone, with a good screen, good enough (and simple) camera, and great battery life. I think Apple nailed that with the iPhone 16e.
 
-[fn:1] There’s a decided /feel/ difference with the side rails of the 16e too. The sides feel sharper, less rounded, than the regular 16 and 16 Pro (and the 15/15 Pro, and 14/14 Pro ...). That squareness (sharp-cornered-ness?) isn’t bad, per se, but it does subtly convey a sense of the 16e being a less premium device.
+-----
+
+[fn:1] There’s a decided /feel/ difference with the side rails of the 16e too. The sides feel sharper, less rounded, than the regular 16 and 16 Pro (and the 15/15 Pro, and 14/14 Pro...). That squareness (sharp-cornered-ness?) isn’t bad, per se, but it does subtly convey a sense of the 16e being a less premium device.
 
 [fn:2] One of the most surprising aspects of my professional life in recent years is how much time I spend thinking and writing about magnets. But the “snapping into place” thing does raise the question of why Apple didn’t include magnets in its cases for the 16e.

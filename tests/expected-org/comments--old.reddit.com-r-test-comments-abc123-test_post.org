@@ -29,23 +29,18 @@ Great point! I agree with this.
 *user_alpha* · [[https://reddit.com/r/test/comments/abc123/test_post/comment3/][2025-01-15]] · 8 points
 
 Thanks for the reply!
-
 #+end_quote
-
 #+end_quote
 
 #+begin_quote
 *user_gamma* · [[https://reddit.com/r/test/comments/abc123/test_post/comment4/][2025-01-15]] · 3 points
 
 Different perspective here.
-
 #+end_quote
-
 #+end_quote
 
 #+begin_quote
 *user_delta* · [[https://reddit.com/r/test/comments/abc123/test_post/comment5/][2025-01-15]] · 20 points
 
 Another top-level comment with a [[https://example.com/][link]].
-
 #+end_quote

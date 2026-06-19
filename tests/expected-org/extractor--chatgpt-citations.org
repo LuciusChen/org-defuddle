@@ -4,16 +4,16 @@
 :SITE: ChatGPT
 :DOMAIN: chatgpt.com
 :DESCRIPTION: ChatGPT conversation with 2 messages
-:WORD_COUNT: 733
+:WORD_COUNT: 770
 :END:
 
-** You said
+*You said*
 
 How do I choose a good air purifier for my bedroom? Please explain the key things to look for and cite reliable sources inline.
 
 -----
 
-** ChatGPT said
+*ChatGPT said*
 
 For a bedroom air purifier, the most important thing is not the brand name—it's whether the purifier can clean the volume of air in your room effectively and quietly.
 
@@ -107,7 +107,7 @@ A good bedroom air purifier should ideally have:
 
 *** Example products worth considering
 
-| Attribute | Coway Airmega 100 ilmanpuhdistin €169.00 • POWER.fi + others | Philips PureProtect Quiet 2200 Series €279.00 • Clas Ohlson FI + others | IKEA STARKVIND Air purifier €149.00 • IKEA |
+| Attribute | Coway Airmega 100 ilmanpuhdistin €169.00•POWER.fi + others | Philips PureProtect Quiet 2200 Series €279.00•Clas Ohlson FI + others | IKEA STARKVIND Air purifier €149.00•IKEA |
 | Bedroom-focused | Yes | Yes | Yes |
 | HEPA-style particle filtration | Yes | Yes | Yes |
 | Quiet operation emphasis | Good | Strong | Moderate |
@@ -122,7 +122,10 @@ If you tell me:
 
 I can narrow it down to the most suitable models for your specific room.
 
-[fn:1] [[https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home?utm_source=chatgpt.com][epa.gov]]
-[fn:2] [[https://www.epa.gov/indoor-air-quality-iaq/what-hepa-filter?utm_source=chatgpt.com][epa.gov]]
-[fn:3] [[https://www.wired.com/story/youre-probably-using-your-air-purifier-wrong?utm_source=chatgpt.com][wired.com]]
-[fn:4] [[https://www.techradar.com/home/air-quality/how-to-choose-an-air-purifier-for-hay-fever?utm_source=chatgpt.com][techradar.com]]
+[fn:1] [[https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home?utm_source=chatgpt.com]] [[https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home?utm_source=chatgpt.com][epa.gov]]
+
+[fn:2] [[https://www.epa.gov/indoor-air-quality-iaq/what-hepa-filter?utm_source=chatgpt.com]] [[https://www.epa.gov/indoor-air-quality-iaq/what-hepa-filter?utm_source=chatgpt.com][epa.gov]]
+
+[fn:3] [[https://www.wired.com/story/youre-probably-using-your-air-purifier-wrong?utm_source=chatgpt.com]] [[https://www.wired.com/story/youre-probably-using-your-air-purifier-wrong?utm_source=chatgpt.com][wired.com]]
+
+[fn:4] [[https://www.techradar.com/home/air-quality/how-to-choose-an-air-purifier-for-hay-fever?utm_source=chatgpt.com]] [[https://www.techradar.com/home/air-quality/how-to-choose-an-air-purifier-for-hay-fever?utm_source=chatgpt.com][techradar.com]]

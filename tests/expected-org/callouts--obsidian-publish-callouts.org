@@ -45,6 +45,8 @@ Each type has a different color and icon.
 #+end_src
 #+end_quote
 
+-----
+
 #+begin_quote
 [!abstract]- Abstract
 #+begin_src md
@@ -54,6 +56,8 @@ Each type has a different color and icon.
 #+end_quote
 
 Aliases: ~summary~, ~tldr~
+
+-----
 
 #+begin_quote
 [!tip]- Tip

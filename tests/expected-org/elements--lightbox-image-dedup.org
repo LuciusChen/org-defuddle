@@ -3,7 +3,7 @@
 :URL: https://www.example.com/article/gallery-post
 :DOMAIN: example.com
 :LANGUAGE: en
-:WORD_COUNT: 86
+:WORD_COUNT: 83
 :END:
 
 ** Gallery Post
@@ -19,7 +19,5 @@ Some text between images to provide content for the scoring algorithm to identif
 More article text here with enough words for the content detection scoring algorithm to work properly with this test.
 
 [[https://www.example.com/uploads/inline-photo.jpg][An inline photo]]
-
-An inline photo
 
 Final paragraph of the article with some concluding remarks about the gallery images shown above.

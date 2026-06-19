@@ -1,7 +1,10 @@
-use org_defuddle_core::{parse_html_to_org, DefuddleOptions, IncludeReplies};
+use org_defuddle_core::{
+    parse_html_to_org, render_html_fragment_to_org, DefuddleOptions, IncludeReplies,
+};
 use regex::Regex;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Debug)]
 struct FixtureCase {
@@ -16,6 +19,13 @@ struct ExpectedMetadata {
     author: String,
     site: String,
     published: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpstreamReference {
+    name: String,
+    url: String,
+    content: String,
 }
 
 fn upstream_dir() -> Option<PathBuf> {
@@ -219,8 +229,8 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "extractor--chatgpt-citations",
             contains: &[
-                "** You said",
-                "** ChatGPT said",
+                "*You said*",
+                "*ChatGPT said*",
                 "How do I choose a good air purifier for my bedroom?",
                 "For a bedroom air purifier, the most important thing",
                 "*** The 5 most important things to look for",
@@ -234,8 +244,8 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "extractor--chatgpt-post-thought-content",
             contains: &[
-                "** You said",
-                "** ChatGPT said",
+                "*You said*",
+                "*ChatGPT said*",
                 "Please help me plan a simple weekend picnic.",
                 "Start with a simple checklist before choosing the location.",
                 "Pick a nearby park, check the weather, and choose food that travels well.",
@@ -271,7 +281,7 @@ fn selected_upstream_fixtures_smoke() {
                 "*testuser* · 2025-06-15",
                 "This is the main comment text that should be extracted",
                 "It has multiple paragraphs to test proper content extraction.",
-                "And a link: [[https://example.com][https://example.com]]",
+                "And a link: [[https://example.com/][https://example.com]]",
             ],
             not_contains: &["parent", "context", "favorite", "Example Story Title"],
         },
@@ -280,7 +290,7 @@ fn selected_upstream_fixtures_smoke() {
             contains: &[
                 "1. [[https://example.com/building-a-database-from-scratch][Building a Database from Scratch in Rust]] (example.com)",
                 "384 points · by dev_user · [[https://news.ycombinator.com/item?id=10000001][142 comments]]",
-                "3. [[https://news.ycombinator.com/item?id=10000003][Ask HN: What side projects are you working on?]]",
+                "1. [[https://news.ycombinator.com/item?id=10000003][Ask HN: What side projects are you working on?]]",
                 "[[https://news.ycombinator.com/news?p=2][More]]",
             ],
             not_contains: &["votearrow", "login", "upvote"],
@@ -403,9 +413,9 @@ fn selected_upstream_fixtures_smoke() {
                 "The root cause was a malformed ~<figure>~ in the source HTML.",
                 "- Preserve remaining content after extraction",
                 "** Comments",
-                "*reviewer-bot* · 2026-01-15T10:45:00Z",
+                "*reviewer-bot* · 2026-01-15",
                 "Consider removing just the image element instead of the entire anchor",
-                "*author-one* · 2026-01-15T14:00:00Z",
+                "*author-one* · 2026-01-15",
                 "- Preserve linked text when stripping the image",
             ],
             not_contains: &[
@@ -529,11 +539,10 @@ fn selected_upstream_fixtures_smoke() {
             contains: &[
                 "* arXiv Multi-Citations",
                 "** Introduction",
-                "prior work [35, 2, 5]",
-                "others reference two works [7, 9]",
-                "** References",
-                "Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio",
-                "Ilya Sutskever, Oriol Vinyals, and Quoc V. Le",
+                "prior work [fn:6] [fn:1] [fn:2]",
+                "others reference two works [fn:3] [fn:4]",
+                "[fn:1] Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio",
+                "[fn:6] Ilya Sutskever, Oriol Vinyals, and Quoc V. Le",
             ],
             not_contains: &[
                 "[[[https://arxiv.org",
@@ -557,14 +566,10 @@ fn selected_upstream_fixtures_smoke() {
             contains: &[
                 "* arXiv Footnote Marks",
                 "** Authors",
-                "Rafael Rafailov, Archit Sharma, Eric Mitchell",
+                "Rafael Rafailov 2, Archit Sharma 1, Eric Mitchell 1",
                 "This is the actual article content that follows the author section.",
             ],
-            not_contains: &[
-                "footnotemark",
-                "ltx_note",
-                "Rafael Rafailov 2",
-            ],
+            not_contains: &["footnotemark", "ltx_note"],
         },
         FixtureCase {
             fixture: "author-contact-block",
@@ -784,7 +789,6 @@ fn selected_upstream_fixtures_smoke() {
                 "LinkedIn",
                 "Featured Topics",
                 "Categories",
-                "data:image/png;base64",
                 "Get started for free",
             ],
         },
@@ -797,7 +801,7 @@ fn selected_upstream_fixtures_smoke() {
                 ":PUBLISHED: 2022-09-02T12:45:33.723Z",
                 "/Thanks to Chris Scammell",
                 "/This work was carried out while at/",
-                "ytdyqqynryhcq1ysqbtk.png",
+                "mal6l24rfuoinreeemia.png",
                 "Moebius illustration of a simulacrum living in an AI-generated story",
                 "** Summary",
                 "*TL;DR*: Self-supervised learning may create AGI or its foundation.",
@@ -1112,8 +1116,8 @@ fn selected_upstream_fixtures_smoke() {
             fixture: "table-layout--blogger-two-column",
             contains: &[
                 "* Thoughts on various topics",
+                ":PUBLISHED: 2004-05-27T00:00:00+00:00",
                 "*Note:* Comments are now moderated.",
-                "*** Thursday, May 27, 2004",
                 "#+begin_quote",
                 "*The One Minute Guide to Avoiding Bad Projects*",
                 "1 We also learned that the distinction between making a single false claim",
@@ -1801,6 +1805,7 @@ fn selected_upstream_fixtures_smoke() {
                 "** Section Three",
             ],
             not_contains: &[
+                "Recommended for You",
                 "Expert News by Example Blog",
                 "example.substack.com/embed",
                 "See All Newsletters",
@@ -1915,11 +1920,12 @@ fn selected_upstream_fixtures_smoke() {
             contains: &[
                 "* Engineering Blog",
                 "** Featured",
-                "*** [[https://tailwind-hidden-blog-index/blog/scaling-distributed-systems][Scaling Distributed Systems at Acme]]",
+                "*** Scaling Distributed Systems at Acme",
                 "How we redesigned our message queue infrastructure",
-                "*** [[https://tailwind-hidden-blog-index/blog/ml-pipeline-optimization][Optimizing Our ML Pipeline]]",
-                "*** [[https://tailwind-hidden-blog-index/blog/design-system-v2][Introducing Our Design System v2]]",
-                "*** [[https://tailwind-hidden-blog-index/blog/api-versioning-strategy][Our API Versioning Strategy]]",
+                "[[https://tailwind-hidden-blog-index/blog?tag=infrastructure][Infrastructure]]",
+                "*** Optimizing Our ML Pipeline",
+                "*** Introducing Our Design System v2",
+                "*** Our API Versioning Strategy",
             ],
             not_contains: &["not-machine:hidden", "### [", "](https://example.com/"],
         },
@@ -2600,7 +2606,7 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "math--mathjax",
             contains: &[
-                "$a \\neq 0$",
+                "$$\na \\neq 0\n$$",
                 "there are two solutions to $a x^{2} + b x + c = 0$ and they are",
                 "x = \\frac{- b \\pm \\sqrt{b^{2} - 4 a c}}{2 a}",
                 "$$\n\\begin{aligned}\\overset{\\cdot}{x} & = \\sigma \\left(y - x\\right)",
@@ -2608,7 +2614,7 @@ fn selected_upstream_fixtures_smoke() {
                 "\\mathbf{V}_{1} \\times \\mathbf{V}_{2}",
                 "$k$ heads when flipping $n$ coins is:",
                 "\\overset{\\rightarrow}{\\mathbf{B}}",
-                "$\\sqrt{3 x - 1} + \\left(1 + x\\right)^{2}$",
+                "$$\n\\sqrt{3 x - 1} + \\left(\\right. 1 + x \\left.\\right)^{2}\n$$",
             ],
             not_contains: &[
                 "there are two solutions to and they are",
@@ -2688,10 +2694,10 @@ fn selected_upstream_fixtures_smoke() {
 }
 
 #[test]
-fn all_upstream_fixtures_exact_org_snapshots() {
+fn all_upstream_fixture_org_regression_snapshots() {
     let Some(defuddle_dir) = upstream_dir() else {
         eprintln!(
-            "skipping upstream fixture exact Org snapshots; set ORG_DEFUDDLE_DEFUDDLE_DIR to a defuddle checkout"
+            "skipping upstream fixture Org regression snapshots; set ORG_DEFUDDLE_DEFUDDLE_DIR to a defuddle checkout"
         );
         return;
     };
@@ -2728,6 +2734,122 @@ fn all_upstream_fixtures_exact_org_snapshots() {
             "fixture {fixture} exact Org mismatch"
         );
     }
+}
+
+#[test]
+fn all_upstream_fixture_metadata_matches_reference() {
+    let Some(defuddle_dir) = upstream_dir() else {
+        eprintln!(
+            "skipping upstream fixture metadata comparison; set ORG_DEFUDDLE_DEFUDDLE_DIR to a defuddle checkout"
+        );
+        return;
+    };
+
+    let mut mismatches = Vec::new();
+    for fixture in upstream_fixture_names(&defuddle_dir) {
+        let expected_path = defuddle_dir
+            .join("tests")
+            .join("expected")
+            .join(format!("{fixture}.md"));
+        let expected = read_expected_metadata(&expected_path);
+        let output = parse_upstream_fixture(&defuddle_dir, &fixture);
+
+        for (field, actual, expected) in [
+            ("title", output.title.as_str(), expected.title.as_str()),
+            ("author", output.author.as_str(), expected.author.as_str()),
+            ("site", output.site.as_str(), expected.site.as_str()),
+            (
+                "published",
+                output.published.as_str(),
+                expected.published.as_str(),
+            ),
+        ] {
+            if actual != expected {
+                mismatches.push(format!(
+                    "{fixture} {field}: actual {actual:?}, expected {expected:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "upstream fixture metadata mismatches:\n{}",
+        mismatches.join("\n")
+    );
+}
+
+#[test]
+#[ignore = "manual differential gate; build upstream with npm run build:node first"]
+fn all_upstream_fixture_content_matches_exact_org_rendering() {
+    let defuddle_dir =
+        upstream_dir().expect("set ORG_DEFUDDLE_DEFUDDLE_DIR to the pinned defuddle checkout");
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/defuddle-reference.mjs");
+    let result = Command::new("node")
+        .arg(&script)
+        .arg(&defuddle_dir)
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run {}: {err}", script.display()));
+    assert!(
+        result.status.success(),
+        "upstream reference runner failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let references: Vec<UpstreamReference> = serde_json::from_slice(&result.stdout)
+        .unwrap_or_else(|err| panic!("failed to parse upstream reference output: {err}"));
+    let selected_fixture = std::env::var("ORG_DEFUDDLE_DIFF_FIXTURE").ok();
+    assert_eq!(
+        references.len(),
+        if selected_fixture.is_some() { 1 } else { 202 },
+        "unexpected upstream fixture count"
+    );
+
+    let mut mismatches = Vec::new();
+    for reference in references {
+        if selected_fixture
+            .as_deref()
+            .is_some_and(|selected| selected != reference.name)
+        {
+            continue;
+        }
+        let html_path = defuddle_dir
+            .join("tests")
+            .join("fixtures")
+            .join(format!("{}.html", reference.name));
+        let html = std::fs::read_to_string(&html_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", html_path.display()));
+        let output = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                url: Some(reference.url),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", reference.name));
+        let expected_org = render_html_fragment_to_org(&reference.content);
+        let actual_org = output
+            .org
+            .split_once("\n:END:\n\n")
+            .map(|(_, body)| body.to_string())
+            .unwrap_or_else(|| output.org.clone());
+        if actual_org != expected_org {
+            if selected_fixture.is_some() {
+                panic!(
+                    "exact upstream-content Org mismatch for {}\n--- expected\n{}\n--- actual\n{}",
+                    reference.name, expected_org, actual_org
+                );
+            }
+            mismatches.push(reference.name);
+        }
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "exact upstream-content Org mismatches ({}):\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
 }
 
 fn upstream_fixture_names(defuddle_dir: &std::path::Path) -> Vec<String> {

@@ -6,6 +6,6 @@
 
 ** Authors
 
-Rafael Rafailov, Archit Sharma, Eric Mitchell
+Rafael Rafailov 2, Archit Sharma 1, Eric Mitchell 1
 
 This is the actual article content that follows the author section. The paper presents a novel approach to reinforcement learning from human feedback.

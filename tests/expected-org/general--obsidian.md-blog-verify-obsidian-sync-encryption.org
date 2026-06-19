@@ -76,10 +76,10 @@ let encryptionVersion = 3;
 
 // Derive the encryption/decryption key from your password and salt
 let key = crypto.scryptSync(Buffer.from(password.normalize('NFKC'), 'utf8'), Buffer.from(salt.normalize('NFKC'), 'utf8'),
-	32, {N: 32768, r: 8, p: 1, maxmem: 128 * 32768 * 8 * 2});
+    32, {N: 32768, r: 8, p: 1, maxmem: 128 * 32768 * 8 * 2});
 let aesKey = key;
 if (encryptionVersion === 3) {
-	aesKey = crypto.hkdfSync('sha256', key, '', 'ObsidianAesGcm', 32);
+    aesKey = crypto.hkdfSync('sha256', key, '', 'ObsidianAesGcm', 32);
 }
 
 // Split up the data blob into the 12-bytes IV, the encrypted data, and the 16-bytes auth tag.

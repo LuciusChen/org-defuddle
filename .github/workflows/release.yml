@@ -28,6 +28,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - uses: purcell/setup-emacs@master
         with:
           version: 30.2
@@ -71,13 +75,21 @@ jobs:
           cargo check --workspace
 
       - name: Check out upstream fixtures
-        run: git clone --depth 1 https://github.com/kepano/defuddle.git /private/tmp/defuddle-elisp-source
+        run: |
+          git clone --depth 1 https://github.com/kepano/defuddle.git /private/tmp/defuddle-elisp-source
+          npm --prefix /private/tmp/defuddle-elisp-source ci
+          npm --prefix /private/tmp/defuddle-elisp-source run build:node
 
       - name: Verify release
+        env:
+          ORG_DEFUDDLE_DEFUDDLE_DIR: /private/tmp/defuddle-elisp-source
         run: |
           set -euo pipefail
           cargo fmt --all -- --check
           cargo test --workspace
+          cargo test -p org-defuddle-core --test upstream_fixtures \
+            all_upstream_fixture_content_matches_exact_org_rendering \
+            -- --ignored
           cargo build --release -p org-defuddle-module
           cargo build --release -p org-defuddle-cli
           emacs -Q --batch -L . -L test \

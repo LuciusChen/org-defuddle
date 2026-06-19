@@ -6,7 +6,7 @@
 :WORD_COUNT: 522
 :END:
 
-Time taken by KaTeX to render formulæ : 8 ms [[https://katex-centraliser/centraliser.pdf][PDF version]]
+Time taken by KaTeX to render formulæ: 8 ms [[https://katex-centraliser/centraliser.pdf][PDF version]]
 
 **** Theorem
 

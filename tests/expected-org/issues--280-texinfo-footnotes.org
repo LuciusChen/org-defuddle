@@ -30,6 +30,8 @@ However Widget is still used not only for software package management, but also 
 
 Widget stores no extra state between runs, so there’s no danger of mangling directories when file hierarchies don’t match a database. Widget will never delete any files, directories, or links that appear in a Widget directory, so it’s always possible to rebuild the target tree.
 
+-----
+
 [fn:1] As of an ancient release. These are now old versions but the example still holds valid.
 
 [fn:2] [[https://www.example.com/news/using-widget-to-manage-your-dotfiles.html][https://www.example.com/news/using-widget-to-manage-your-dotfiles.html]]

@@ -1,6 +1,6 @@
 * Footnotes with span fnref:id pattern
 :PROPERTIES:
-:WORD_COUNT: 40
+:WORD_COUNT: 43
 :END:
 
 The first technique relies on precise calibration. [fn:1]

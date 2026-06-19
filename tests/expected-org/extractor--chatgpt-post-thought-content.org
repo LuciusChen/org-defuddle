@@ -7,13 +7,13 @@
 :WORD_COUNT: 45
 :END:
 
-** You said
+*You said*
 
 Please help me plan a simple weekend picnic.
 
 -----
 
-** ChatGPT said
+*ChatGPT said*
 
 Start with a simple checklist before choosing the location.
 

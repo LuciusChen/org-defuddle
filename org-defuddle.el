@@ -78,6 +78,9 @@
 (declare-function org-defuddle-module-youtube-caption-info
                   "org-defuddle-module"
                   (player-json preferred-language))
+(declare-function org-defuddle-module-youtube-inline-caption-info
+                  "org-defuddle-module"
+                  (html url preferred-language))
 (declare-function org-defuddle-module-parse-youtube-json
                   "org-defuddle-module"
                   (player-json caption-xml chapters-json url language-code))
@@ -261,6 +264,10 @@ language order."
     org-defuddle-module-parse-youtube-org)
   "Functions that must be provided by the Rust dynamic module.")
 
+(defconst org-defuddle--optional-module-functions
+  '(org-defuddle-module-youtube-inline-caption-info)
+  "Functions used when provided by a newer Rust dynamic module.")
+
 (defun org-defuddle--repo-root ()
   "Return the repository root when this file is loaded from the source tree."
   org-defuddle--source-directory)
@@ -317,6 +324,44 @@ language order."
           org-defuddle--module-version
           (org-defuddle--module-release-asset)))
 
+(defun org-defuddle--module-checksums-url ()
+  "Return the checksum manifest URL for the pinned module release."
+  (format "%s/download/%s/SHA256SUMS"
+          org-defuddle--github-release-url
+          org-defuddle--module-version))
+
+(defun org-defuddle--file-sha256 (file)
+  "Return the hexadecimal SHA-256 digest of FILE."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file)
+    (secure-hash 'sha256 (current-buffer))))
+
+(defun org-defuddle--expected-module-sha256 (manifest)
+  "Return this platform module's SHA-256 digest from MANIFEST."
+  (let ((case-fold-search t)
+        (asset (org-defuddle--module-release-asset)))
+    (with-temp-buffer
+      (insert manifest)
+      (goto-char (point-min))
+      (if (re-search-forward
+           (format "^\\([[:xdigit:]]\\{64\\}\\)[ \t]+\\*?%s\r?$"
+                   (regexp-quote asset))
+           nil t)
+          (downcase (match-string 1))
+        (error "Checksum manifest has no entry for %s" asset)))))
+
+(defun org-defuddle--verify-module-checksum (module-file manifest-file)
+  "Verify MODULE-FILE against its entry in MANIFEST-FILE."
+  (let* ((manifest (with-temp-buffer
+                     (insert-file-contents manifest-file)
+                     (buffer-string)))
+         (expected (org-defuddle--expected-module-sha256 manifest))
+         (actual (org-defuddle--file-sha256 module-file)))
+    (unless (string-equal expected actual)
+      (error "Org-defuddle module checksum mismatch: expected %s, got %s"
+             expected actual))))
+
 (defun org-defuddle--verify-module-functions (module-file)
   "Verify that MODULE-FILE provided every required module function."
   (dolist (function org-defuddle--module-functions)
@@ -354,16 +399,24 @@ Install the module at PATH, defaulting to `org-defuddle-module-file'."
                   (org-defuddle--installed-module-file))))
   (let* ((directory (file-name-directory path))
          (url (org-defuddle--module-download-url))
-         (temporary-file nil))
+         (checksums-url (org-defuddle--module-checksums-url))
+         (temporary-file nil)
+         (checksums-file nil))
     (unless (string-prefix-p "https://" url)
       (error "Refusing non-HTTPS module download URL: %s" url))
+    (unless (string-prefix-p "https://" checksums-url)
+      (error "Refusing non-HTTPS checksum download URL: %s" checksums-url))
     (make-directory directory t)
     (setq temporary-file
-          (make-temp-file (expand-file-name ".org-defuddle-module-" directory)))
+          (make-temp-file (expand-file-name ".org-defuddle-module-" directory))
+          checksums-file
+          (make-temp-file (expand-file-name ".org-defuddle-checksums-" directory)))
     (unwind-protect
         (progn
           (message "Downloading org-defuddle module from %s..." url)
           (url-copy-file url temporary-file t)
+          (url-copy-file checksums-url checksums-file t)
+          (org-defuddle--verify-module-checksum temporary-file checksums-file)
           (rename-file temporary-file path t)
           (setq temporary-file nil)
           (if org-defuddle--module-loaded
@@ -372,7 +425,9 @@ Install the module at PATH, defaulting to `org-defuddle-module-file'."
             (org-defuddle--load-module-file path)
             (message "Org-defuddle module installed and loaded from %s" path)))
       (when (and temporary-file (file-exists-p temporary-file))
-        (delete-file temporary-file)))))
+        (delete-file temporary-file))
+      (when (and checksums-file (file-exists-p checksums-file))
+        (delete-file checksums-file)))))
 
 ;;;###autoload
 (defun org-defuddle-load-module (&optional offer-download)
@@ -1108,6 +1163,21 @@ when no supported caption track is present."
    :null-object nil
    :false-object nil))
 
+(defun org-defuddle-youtube-inline-caption-info (html url &optional language)
+  "Return inline YouTube caption info parsed from HTML for URL.
+
+LANGUAGE is an optional preferred language code.  The return value is nil
+when the page has no current, supported caption track or the installed module
+predates inline player-data support."
+  (org-defuddle-load-module)
+  (when (fboundp 'org-defuddle-module-youtube-inline-caption-info)
+    (json-parse-string
+     (org-defuddle-module-youtube-inline-caption-info html url (or language ""))
+     :object-type 'plist
+     :array-type 'list
+     :null-object nil
+     :false-object nil)))
+
 (defun org-defuddle-parse-youtube-json
     (player-json &optional caption-xml chapters-json url language-code)
   "Parse YouTube API data and return extracted metadata and Org.
@@ -1350,30 +1420,41 @@ OPTIONS supplies `:language' when present.  BVID is the parsed video id."
      '(("Accept" . "application/json")
        ("User-Agent" . "Mozilla/5.0 (compatible; Defuddle/1.0)")))))
 
+(defun org-defuddle--youtube-output-has-transcript-p (output)
+  "Return non-nil when parsed YouTube OUTPUT contains a transcript."
+  (let ((transcript (plist-get (plist-get output :variables) :transcript)))
+    (and (stringp transcript) (not (string-empty-p transcript)))))
+
 (defun org-defuddle--youtube-insert-result
-    (player-json caption-xml chapters-json url language options)
-  "Insert YouTube Org parsed from API responses.
+    (player-json caption-xml chapters-json url selected-language
+                 preferred-language options video-id remaining-configs)
+  "Insert parsed YouTube Org, or continue trying another client.
 
 PLAYER-JSON, CAPTION-XML, and CHAPTERS-JSON are fetched response bodies.
-URL is the original page URL, LANGUAGE is the selected caption language,
-and OPTIONS is used for the HTML fallback."
+URL and VIDEO-ID identify the video.  SELECTED-LANGUAGE identifies the
+caption track, while PREFERRED-LANGUAGE is the requested language.
+OPTIONS is used for fallback, and REMAINING-CONFIGS are the untried
+Innertube clients."
   (condition-case nil
       (let ((output (org-defuddle-parse-youtube-json
-                     player-json caption-xml chapters-json url language)))
-        (if (and (not (string= language ""))
-                 (string= (or (plist-get output :language) "") ""))
-            (org-defuddle--html-url-to-org url options)
-          (org-defuddle--insert-org-buffer (plist-get output :org))))
+                     player-json caption-xml chapters-json url selected-language)))
+        (if (org-defuddle--youtube-output-has-transcript-p output)
+            (org-defuddle--insert-org-buffer (plist-get output :org))
+          (org-defuddle--youtube-fetch-player-chain
+           url video-id preferred-language options remaining-configs)))
     (error
-     (org-defuddle--html-url-to-org url options))))
+     (org-defuddle--youtube-fetch-player-chain
+      url video-id preferred-language options remaining-configs))))
 
 (defun org-defuddle--youtube-fetch-caption
-    (player-json chapters-json url language options caption-info)
+    (player-json chapters-json url video-id preferred-language options
+                 caption-info remaining-configs)
   "Fetch the YouTube caption selected by CAPTION-INFO and insert Org.
 
-PLAYER-JSON and CHAPTERS-JSON are prior API responses.  URL is the
-original page URL, LANGUAGE is the preferred language, and OPTIONS is
-used for fallback."
+PLAYER-JSON and CHAPTERS-JSON are prior API responses.  URL and VIDEO-ID
+identify the video.  PREFERRED-LANGUAGE is the requested language,
+OPTIONS is used for fallback, and REMAINING-CONFIGS are the untried
+Innertube clients."
   (let ((caption-url (plist-get caption-info :caption_url))
         (selected-language (or (plist-get caption-info :language) "")))
     (if (and caption-url (not (string= caption-url "")))
@@ -1386,20 +1467,24 @@ used for fallback."
             chapters-json
             url
             selected-language
-            options))
+            preferred-language
+            options
+            video-id
+            remaining-configs))
          (append
           '(("User-Agent" . "Mozilla/5.0"))
-          (when (not (string= language ""))
-            `(("Accept-Language" . ,language)))))
-      (org-defuddle--html-url-to-org url options))))
+          (when (not (string= preferred-language ""))
+            `(("Accept-Language" . ,preferred-language)))))
+      (org-defuddle--youtube-fetch-player-chain
+       url video-id preferred-language options remaining-configs))))
 
 (defun org-defuddle--youtube-fetch-chapters
-    (player-json url video-id language options caption-info)
+    (player-json url video-id language options caption-info remaining-configs)
   "Fetch YouTube chapters, then the caption selected by CAPTION-INFO.
 
 PLAYER-JSON is the selected Innertube player response.  URL and VIDEO-ID
 identify the video.  LANGUAGE is preferred and OPTIONS is used for
-fallback."
+fallback.  REMAINING-CONFIGS are the untried Innertube clients."
   (let ((body (org-defuddle--youtube-request-body
                video-id "WEB" "2.20240101.00.00")))
     (org-defuddle--retrieve-body
@@ -1414,12 +1499,113 @@ fallback."
           player-json
           validated-json
           url
+          video-id
           language
           options
-          caption-info)))
+          caption-info
+          remaining-configs)))
      (org-defuddle--youtube-api-headers language)
      "POST"
      body)))
+
+(defun org-defuddle--youtube-insert-html-fallback (page-html url options)
+  "Insert YouTube PAGE-HTML parsed for URL using OPTIONS."
+  (org-defuddle--insert-org-buffer
+   (org-defuddle-html-to-org page-html url options)))
+
+(defun org-defuddle--youtube-insert-inline-result
+    (page-html player-json caption-xml chapters-json url language options)
+  "Insert an inline-caption YouTube result or its static page fallback.
+
+PAGE-HTML is the fetched YouTube document.  PLAYER-JSON, CAPTION-XML,
+and CHAPTERS-JSON are the inline player and fetched timedtext responses.
+URL identifies the video, LANGUAGE identifies the caption track, and
+OPTIONS configures static HTML extraction."
+  (condition-case nil
+      (let ((output (org-defuddle-parse-youtube-json
+                     player-json caption-xml chapters-json url language)))
+        (if (org-defuddle--youtube-output-has-transcript-p output)
+            (org-defuddle--insert-org-buffer (plist-get output :org))
+          (org-defuddle--youtube-insert-html-fallback page-html url options)))
+    (error
+     (org-defuddle--youtube-insert-html-fallback page-html url options))))
+
+(defun org-defuddle--youtube-fetch-inline-caption
+    (page-html player-json chapters-json url selected-language
+               preferred-language options caption-url)
+  "Fetch CAPTION-URL selected from PAGE-HTML and insert YouTube Org.
+
+PLAYER-JSON and CHAPTERS-JSON are the matching inline player and fetched
+chapter responses.  URL identifies the video.  SELECTED-LANGUAGE
+identifies the caption track, PREFERRED-LANGUAGE is the requested
+language, and OPTIONS configures fallback extraction."
+  (org-defuddle--retrieve-body
+   caption-url
+   (lambda (caption-xml)
+     (org-defuddle--youtube-insert-inline-result
+      page-html
+      player-json
+      caption-xml
+      chapters-json
+      url
+      selected-language
+      options))
+   (append
+    '(("User-Agent" . "Mozilla/5.0"))
+    (when (not (string= preferred-language ""))
+      `(("Accept-Language" . ,preferred-language))))))
+
+(defun org-defuddle--youtube-fetch-inline-chapters
+    (page-html url video-id language options caption-info)
+  "Fetch chapters before using inline YouTube CAPTION-INFO.
+
+PAGE-HTML is the fetched YouTube document.  URL and VIDEO-ID identify the
+video, LANGUAGE is preferred, and OPTIONS configures fallback extraction."
+  (let ((body (org-defuddle--youtube-request-body
+               video-id "WEB" "2.20240101.00.00"))
+        (player-json (plist-get caption-info :player_json))
+        (caption-url (plist-get caption-info :caption_url))
+        (selected-language (or (plist-get caption-info :language) "")))
+    (org-defuddle--retrieve-body
+     (org-defuddle--youtube-next-api-url)
+     (lambda (chapters-json)
+       (let ((validated-json
+              (condition-case nil
+                  (let ((_parsed (json-parse-string chapters-json)))
+                    chapters-json)
+                (error "{}"))))
+         (org-defuddle--youtube-fetch-inline-caption
+          page-html
+          player-json
+          validated-json
+          url
+          selected-language
+          language
+          options
+          caption-url)))
+     (org-defuddle--youtube-api-headers language)
+     "POST"
+     body)))
+
+(defun org-defuddle--youtube-fetch-inline-fallback
+    (url video-id language options)
+  "Try inline YouTube player data before falling back to static HTML.
+
+URL and VIDEO-ID identify the video.  LANGUAGE is preferred and OPTIONS
+configures extraction."
+  (org-defuddle--retrieve-body
+   url
+   (lambda (page-html)
+     (let ((caption-info
+            (ignore-errors
+              (org-defuddle-youtube-inline-caption-info
+               page-html url language))))
+       (if (and caption-info
+                (plist-get caption-info :player_json)
+                (plist-get caption-info :caption_url))
+           (org-defuddle--youtube-fetch-inline-chapters
+            page-html url video-id language options caption-info)
+         (org-defuddle--youtube-insert-html-fallback page-html url options))))))
 
 (defun org-defuddle--youtube-fetch-player-chain
     (url video-id language options configs)
@@ -1428,7 +1614,8 @@ fallback."
 URL and VIDEO-ID identify the video.  LANGUAGE is preferred and OPTIONS
 is used for the HTML fallback."
   (if (null configs)
-      (org-defuddle--html-url-to-org url options)
+      (org-defuddle--youtube-fetch-inline-fallback
+       url video-id language options)
     (let* ((config (car configs))
            (name (plist-get config :name))
            (version (plist-get config :version))
@@ -1442,7 +1629,13 @@ is used for the HTML fallback."
                   (org-defuddle-youtube-caption-info player-json language))))
            (if (and caption-info (plist-get caption-info :caption_url))
                (org-defuddle--youtube-fetch-chapters
-                player-json url video-id language options caption-info)
+                player-json
+                url
+                video-id
+                language
+                options
+                caption-info
+                (cdr configs))
              (org-defuddle--youtube-fetch-player-chain
               url video-id language options (cdr configs)))))
        (org-defuddle--youtube-api-headers language user-agent)

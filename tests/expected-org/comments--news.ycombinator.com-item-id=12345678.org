@@ -28,16 +28,12 @@ I agree. The author makes a compelling case for eventual consistency over strong
 *commenter_one* · [[https://news.ycombinator.com/item?id=12345681][2025-01-15]]
 
 Exactly. And the benchmarks in section 3 back this up nicely.
-
 #+end_quote
-
 #+end_quote
-
 #+end_quote
 
 #+begin_quote
 *commenter_three* · [[https://news.ycombinator.com/item?id=12345682][2025-01-15]] · 10 points
 
 We tried a similar approach at our company. The tradeoffs are real but manageable if you plan for them.
-
 #+end_quote

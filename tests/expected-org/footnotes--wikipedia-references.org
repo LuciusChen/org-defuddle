@@ -1,7 +1,7 @@
 * Placeholder topic
 :PROPERTIES:
 :SITE: Wikipedia
-:WORD_COUNT: 138
+:WORD_COUNT: 121
 :END:
 
 The placeholder topic is a widely studied subject in modern research. It was first described in the early twentieth century by several independent scholars. [fn:1]
@@ -11,8 +11,6 @@ Over the following decades, interest in the topic grew as new applications were 
 ** Applications
 
 The topic has been applied in fields ranging from signal processing to materials science. [fn:3] Recent work has extended its use to computational biology. [fn:4]
-
-In particular, the framework has proven useful for modeling complex systems where traditional approaches are insufficient. [fn:4]
 
 [fn:1] Author, A. (2005). "Introduction to placeholder topics." /Journal of Examples/. 10(2): 100-110.
 

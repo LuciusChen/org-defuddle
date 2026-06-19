@@ -5,7 +5,7 @@
 :SITE: Wikipedia
 :DOMAIN: en.wikipedia.org
 :LANGUAGE: en
-:WORD_COUNT: 716
+:WORD_COUNT: 739
 :END:
 
 *Obsidian* is a [[https://en.wikipedia.org/wiki/Personal_knowledge_management][personal knowledge management]] and [[https://en.wikipedia.org/wiki/Note-taking][note-taking]] [[https://en.wikipedia.org/wiki/Application_software][software application]] that operates on files. [fn:2] It allows users to make internal links for notes and then to visualize the connections as a graph. It is designed to help users organize and structure their thoughts and knowledge in a flexible, non-linear way. [fn:3] The software is free for personal use, with commercial licenses and hosted services such as [[https://en.wikipedia.org/wiki/Obsidian_Publish][Obsidian Publish]] and [[https://en.wikipedia.org/wiki/Obsidian_Sync][Obsidian Sync]] available as paid add-ons. [fn:4]
@@ -37,6 +37,22 @@ Obsidian supports an extensive [[https://en.wikipedia.org/wiki/Plug-in_(computin
 Obsidian has received generally favorable reviews from technology publications. /[[https://en.wikipedia.org/wiki/The_Verge][The Verge]]/ praised the application for its flexibility and local-first approach, noting that "Obsidian is a powerful note-taking app that gives you full control of your data." [fn:2] /[[https://en.wikipedia.org/wiki/PC_Magazine][PC Magazine]]/ awarded it an Editors' Choice designation, highlighting its linking capabilities and customizability, though noting a steep learning curve for new users. [fn:3]
 
 The application has been compared to other note-taking tools such as [[https://en.wikipedia.org/wiki/Notion_(productivity_software)][Notion]], [[https://en.wikipedia.org/wiki/Roam_Research][Roam Research]], and [[https://en.wikipedia.org/wiki/Logseq][Logseq]]. Commentators have noted that Obsidian differentiates itself through its local-first storage model and emphasis on user data ownership. [fn:18] However, critics have pointed out that the [[https://en.wikipedia.org/wiki/Proprietary_software][proprietary]] nature of the application itself limits user freedom compared to fully [[https://en.wikipedia.org/wiki/Open-source_software][open-source]] alternatives. [fn:19]
+
+** See also
+
+- [[https://en.wikipedia.org/wiki/Comparison_of_note-taking_software][Comparison of note-taking software]]
+- [[https://en.wikipedia.org/wiki/Personal_knowledge_management][Personal knowledge management]]
+- [[https://en.wikipedia.org/wiki/Zettelkasten][Zettelkasten]]
+- [[https://en.wikipedia.org/wiki/Roam_Research][Roam Research]]
+- [[https://en.wikipedia.org/wiki/Logseq][Logseq]]
+
+** References
+
+** External links
+
+- [[https://obsidian.md/][Official website]]
+- [[https://github.com/obsidianmd][Obsidian on GitHub]]
+- [[https://forum.obsidian.md/][Obsidian Community Forum]]
 
 [fn:1] [[https://obsidian.md/changelog/2024-01-15-desktop-v1.5.8/]["Obsidian 1.5.8"]]. /Obsidian/. January 15, 2024. Retrieved February 10, 2024.
 

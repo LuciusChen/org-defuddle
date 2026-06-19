@@ -8,9 +8,26 @@
 
 This is a list of blog posts. One of the titles contains angle brackets that look like an HTML tag, which must be escaped so a Markdown reader does not treat it as raw HTML and swallow everything that follows it on the page.
 
-[[https://www.example.com/blog/first-post][https://www.example.com/blog/first-post/cover.png]] [[https://www.example.com/blog/first-post][An Ordinary First Post]] A gentle introduction with nothing unusual in its title at all.
+[[https://www.example.com/blog/first-post][https://www.example.com/blog/first-post/cover.png]]
+
+[[https://www.example.com/blog/first-post][An Ordinary First Post]]
+
+A gentle introduction with nothing unusual in its title at all.
+
 by author
-[[https://www.example.com/blog/monte-video][https://www.example.com/blog/monte-video/cover.png]] [[https://www.example.com/blog/monte-video][Monte<video>: A Real Place]] A post whose title embeds a tag-like token. Reach us at <hello@example.com>.
+
+[[https://www.example.com/blog/monte-video][https://www.example.com/blog/monte-video/cover.png]]
+
+[[https://www.example.com/blog/monte-video][Monte<video>: A Real Place]]
+
+A post whose title embeds a tag-like token. Reach us at <hello@example.com>.
+
 by author
-[[https://www.example.com/blog/third-post][https://www.example.com/blog/third-post/cover.png]] [[https://www.example.com/blog/third-post][A Third Post Worth Reading]] The final entry, included so there is content after the tricky title.
+
+[[https://www.example.com/blog/third-post][https://www.example.com/blog/third-post/cover.png]]
+
+[[https://www.example.com/blog/third-post][A Third Post Worth Reading]]
+
+The final entry, included so there is content after the tricky title.
+
 by author

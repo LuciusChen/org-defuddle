@@ -12,6 +12,6 @@ In technical terms, facts and values are orthogonal. [fn:3]
 
 [fn:1] You can pick any recent paper and have no idea what is going on.
 
-[fn:2] The most common areas where this occurs are [[https://en.wikipedia.org/wiki/Analytic_philosophy][analytic philosophy]] and [[https://en.wikipedia.org/wiki/Continental_philosophy][continental philosophy]].
+[fn:2] The most common areas where this occurs are [[https://en.wikipedia.org/wiki/Analytic_philosophy][analytic philosophy]] and [[https://en.wikipedia.org/wiki/Continental_philosophy][continental philosophy]]
 
 [fn:3] Orthogonal means they run independent of one another.

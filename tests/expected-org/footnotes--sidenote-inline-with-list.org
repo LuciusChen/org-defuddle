@@ -10,8 +10,6 @@ This is the first paragraph with a note about roundness [fn:1] and some more tex
 
 This paragraph has another note about influence [fn:2] on the broader industry.
 
------
-
 [fn:1] One of the ugliest roundness examples is the YouTube UI
 
 [fn:2] That's to say, contagious from inwards

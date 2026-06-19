@@ -6,13 +6,16 @@
 
 ** Introduction
 
-Recurrent models typically factor computation along the symbol positions of the input and output sequences, as explored in prior work [35, 2, 5]. Some models use a single citation [12] while others reference two works [7, 9].
+Recurrent models typically factor computation along the symbol positions of the input and output sequences, as explored in prior work [fn:6] [fn:1] [fn:2]. Some models use a single citation [fn:5] while others reference two works [fn:3] [fn:4].
 
-** References
+[fn:1] Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio. Neural machine translation by jointly learning to align and translate. /CoRR/, 2014.
 
-- Dzmitry Bahdanau, Kyunghyun Cho, and Yoshua Bengio. Neural machine translation by jointly learning to align and translate. /CoRR/, 2014.
-- Junyoung Chung, Caglar Gulcehre, KyungHyun Cho, and Yoshua Bengio. Empirical evaluation of gated recurrent neural networks on sequence modeling. 2014.
-- Jonas Gehring, Michael Auli, David Grangier, Denis Yarats, and Yann N. Dauphin. Convolutional sequence to sequence learning. 2017.
-- Alex Graves. Generating sequences with recurrent neural networks. 2013.
-- Sepp Hochreiter and Jurgen Schmidhuber. Long short-term memory. 1997.
-- Ilya Sutskever, Oriol Vinyals, and Quoc V. Le. Sequence to sequence learning with neural networks. 2014.
+[fn:2] Junyoung Chung, Caglar Gulcehre, KyungHyun Cho, and Yoshua Bengio. Empirical evaluation of gated recurrent neural networks on sequence modeling. 2014.
+
+[fn:3] Jonas Gehring, Michael Auli, David Grangier, Denis Yarats, and Yann N. Dauphin. Convolutional sequence to sequence learning. 2017.
+
+[fn:4] Alex Graves. Generating sequences with recurrent neural networks. 2013.
+
+[fn:5] Sepp Hochreiter and Jurgen Schmidhuber. Long short-term memory. 1997.
+
+[fn:6] Ilya Sutskever, Oriol Vinyals, and Quoc V. Le. Sequence to sequence learning with neural networks. 2014.

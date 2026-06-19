@@ -10,7 +10,7 @@
 Install the package and run your first job:
 
 #+begin_src
-			npm install example-sdk
+npm install example-sdk
 
 const sdk = require('example-sdk');
 const result = await sdk.run({ task: 'hello' });
@@ -20,7 +20,7 @@ console.log(result);
 You can also pass options:
 
 #+begin_src typescript
-			interface Options {
+interface Options {
   task: string;
   model?: string;
   maxSteps?: number;

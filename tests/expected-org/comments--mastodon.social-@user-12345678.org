@@ -29,7 +29,6 @@ Here is some more context about the project
 *Bob @bob@other.social* · [[https://mastodon.example/@bob@other.social/12345680][2026-04-20]]
 
 [[https://mastodon.example/@alice][@alice]] This is really cool! Great work.
-
 #+end_quote
 
 #+begin_quote
@@ -41,9 +40,7 @@ Here is some more context about the project
 *Alice @alice* · [[https://mastodon.example/@alice/12345682][2026-04-20]]
 
 [[https://mastodon.example/@carol@third.social][@carol]] Good question! It uses a fallback mechanism for that.
-
 #+end_quote
-
 #+end_quote
 
 #+begin_quote
@@ -56,5 +53,4 @@ Here is some more context about the project
 [[https://example.com/related][Related Project]]
 
 A similar project with different goals
-
 #+end_quote

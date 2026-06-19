@@ -6,7 +6,7 @@
 :SITE: GitHub - test-owner/test-repo
 :DOMAIN: github.com
 :LANGUAGE: en
-:WORD_COUNT: 129
+:WORD_COUNT: 123
 :END:
 
 ** Summary
@@ -30,19 +30,19 @@ The root cause was a malformed ~<figure>~ in the source HTML.
 ** Comments
 
 #+begin_quote
-*reviewer-bot* · 2026-01-15T10:45:00Z
+*reviewer-bot* · 2026-01-15
 
 Consider removing just the image element instead of the entire anchor, to preserve any text content inside the link.
 #+end_quote
 
 #+begin_quote
-*reviewer-bot* · 2026-01-15T10:46:00Z
+*reviewer-bot* · 2026-01-15
 
 The early return here might skip valid figures that happen to contain extra whitespace nodes. Consider checking for actual block-level content instead.
 #+end_quote
 
 #+begin_quote
-*author-one* · 2026-01-15T14:00:00Z
+*author-one* · 2026-01-15
 
 Posted a follow-up commit to address the review comments.
 

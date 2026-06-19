@@ -14,7 +14,7 @@
 
 /This work was carried out while at/ [[https://www.conjecture.dev/][Conjecture]] /./
 
-[[https://res.cloudinary.com/lesswrong-2-0/image/upload/v1674094431/mirroredImages/vJFdjigzmcXMhNTsx/ytdyqqynryhcq1ysqbtk.png]]
+[[https://res.cloudinary.com/lesswrong-2-0/image/upload/v1674094431/mirroredImages/vJFdjigzmcXMhNTsx/mal6l24rfuoinreeemia.png]]
 
 /"Moebius illustration of a simulacrum living in an AI-generated story discovering it is in a simulation" by DALL-E 2/
 
@@ -269,7 +269,7 @@ That said, GPT does store a vast amount of knowledge, and its corrigibility allo
 
 But even when these strategies seem to work, there is no guarantee that they elicit anywhere near optimal question-answering performance, compared to another prompt in the innumerable space of prompts that would cause GPT to attempt the task, or compared to what the [[https://lesswrong.com/w/eliciting-latent-knowledge-elk][model “actually” knows]].
 
-This means that no benchmark which evaluates downstream behavior is guaranteed or even expected to probe the upper limits of GPT’s capabilities. In nostalgebra ist’s words, we have no [[https://lesswrong.com/posts/pv7Qpu8WSge8NRbpB#4__on_ecological_evaluation][ecological evaluation]] of self-supervised language models – one that measures performance in a situation where the model is incentivised to perform as well as it can on the measure [fn:16].
+This means that no benchmark which evaluates downstream behavior is guaranteed or even expected to probe the upper limits of GPT’s capabilities. In nostalgebraist’s words, we have no [[https://lesswrong.com/posts/pv7Qpu8WSge8NRbpB#4__on_ecological_evaluation][ecological evaluation]] of self-supervised language models – one that measures performance in a situation where the model is incentivised to perform as well as it can on the measure [fn:16].
 
 As nostalgebraist [[https://slatestarcodex.com/2020/06/10/the-obligatory-gpt-3-post/#comment-912529][elegantly puts it]]:
 

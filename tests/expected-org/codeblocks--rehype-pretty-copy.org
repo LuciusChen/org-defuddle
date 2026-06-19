@@ -3,7 +3,7 @@
 :AUTHOR: Jane Smith
 :SITE: Jane Smith
 :DESCRIPTION: Test for rehype-pretty-copy injected button and style elements inside code blocks
-:WORD_COUNT: 152
+:WORD_COUNT: 123
 :END:
 
 Some intro text here to make the article long enough for defuddle to pick it up as content. This is a test article with enough words to pass the word count threshold. We need to make sure defuddle picks this up properly so we can test the code block behavior with rehype-pretty-copy output.

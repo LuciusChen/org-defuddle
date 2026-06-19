@@ -19,4 +19,5 @@ We are excited to share an update on our work. Over the past several months the 
 Our goal is to create software that earns trust over time. We believe in building in the open, sharing progress publicly, and making decisions legible. This post outlines what we have been working on and where we are headed next.
 
 --
+
 [[https://example.com/][example.com]]

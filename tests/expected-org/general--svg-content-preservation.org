@@ -11,24 +11,13 @@
 Neural networks are the fundamental building block of modern AI. Let's start with the simplest example: 1 input, 1 parameter, 1 output.
 
 #+begin_export html
-<svg aria-hidden="true" fill="none" height="100%" preserveAspectRatio="xMidYMid meet" viewBox="0 0 400 100" width="100%" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="50" cy="50" fill="Canvas" r="30" stroke="#d97706" stroke-width="2"></circle>
-              <text dominant-baseline="central" fill="currentColor" font-size="16" text-anchor="middle" x="50" y="50">2.0</text>
-              <path d="M 80 50 L 320 50" fill="none" stroke="#94a3b8" stroke-width="2"></path>
-              <circle cx="350" cy="50" fill="Canvas" r="30" stroke="#16a34a" stroke-width="2"></circle>
-              <text dominant-baseline="central" fill="currentColor" font-size="16" text-anchor="middle" x="350" y="50">1.0</text>
-            </svg>
+<svg aria-hidden="true" fill="none" height="100%" preserveAspectRatio="xMidYMid meet" viewBox="0 0 400 100" width="100%" xmlns="http://www.w3.org/2000/svg"> <circle cx="50" cy="50" fill="Canvas" r="30" stroke="#d97706" stroke-width="2"></circle> <text dominant-baseline="central" fill="currentColor" font-size="16" text-anchor="middle" x="50" y="50">2.0</text> <path d="M 80 50 L 320 50" fill="none" stroke="#94a3b8" stroke-width="2"></path> <circle cx="350" cy="50" fill="Canvas" r="30" stroke="#16a34a" stroke-width="2"></circle> <text dominant-baseline="central" fill="currentColor" font-size="16" text-anchor="middle" x="350" y="50">1.0</text> </svg>
 #+end_export
 
 The network multiplies the input by the parameter to produce the output.
 
 #+begin_export html
-<svg aria-hidden="true" fill="none" height="100%" viewBox="0 0 200 100" width="100%" xmlns="http://www.w3.org/2000/svg">
-          <line stroke="#a1a1aa" stroke-dasharray="4 4" stroke-width="1.5" x1="20" x2="180" y1="50" y2="50"></line>
-          <circle cx="50" cy="50" fill="#f97316" r="8"></circle>
-          <circle cx="150" cy="50" fill="#f59e0b" r="8"></circle>
-          <text fill="#f59e0b" style="font-size:14px;font-weight:600" text-anchor="middle" x="100" y="90">-0.50</text>
-        </svg>
+<svg aria-hidden="true" fill="none" height="100%" viewBox="0 0 200 100" width="100%" xmlns="http://www.w3.org/2000/svg"> <line stroke="#a1a1aa" stroke-dasharray="4 4" stroke-width="1.5" x1="20" x2="180" y1="50" y2="50"></line> <circle cx="50" cy="50" fill="#f97316" r="8"></circle> <circle cx="150" cy="50" fill="#f59e0b" r="8"></circle> <text fill="#f59e0b" style="font-size:14px;font-weight:600" text-anchor="middle" x="100" y="90">-0.50</text> </svg>
 #+end_export
 
 Each connection in the network has a weight that determines how strongly the input influences the output.

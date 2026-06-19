@@ -2,8 +2,14 @@
 :PROPERTIES:
 :URL: https://www.example.com/article/test-article
 :DOMAIN: example.com
-:WORD_COUNT: 181
+:WORD_COUNT: 193
 :END:
+
+[[https://www.example.com/images/hero.webp][Hero image caption.]]
+
+Hero image caption. Photo Credit / Agency
+
+** Test article with multiple lazy-loaded images
 
 [[https://www.example.com/images/hero.webp][Hero image caption.]]
 
@@ -17,11 +23,11 @@ Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu 
 
 [[https://www.example.com/images/gallery-1.jpg][First gallery image caption.]]
 
-First gallery image caption. [[https://example.com/source1][Source One]]
+First gallery image caption. Source One
 
 [[https://www.example.com/images/gallery-2.jpg][Second gallery image caption.]]
 
-[[https://example.com/source2][Source Two]]
+Source Two
 
 Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
 

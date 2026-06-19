@@ -6,15 +6,15 @@
 :WORD_COUNT: 150
 :END:
 
-1. [[https://example.com/building-a-database-from-scratch][Building a Database from Scratch in Rust]] (example.com)  
-	384 points · by dev_user · [[https://news.ycombinator.com/item?id=10000001][142 comments]]
-2. [[https://blog.example.org/reverse-engineering-a-wifi-chip][Reverse Engineering a Common Wi-Fi Chip]] (blog.example.org)  
-	251 points · by hw_hacker · [[https://news.ycombinator.com/item?id=10000002][89 comments]]
-3. [[https://news.ycombinator.com/item?id=10000003][Ask HN: What side projects are you working on?]]  
-	127 points · by curious_dev · [[https://news.ycombinator.com/item?id=10000003][205 comments]]
-4. [[https://research.example.net/efficient-llm-inference][Efficient LLM Inference on Consumer Hardware]] (research.example.net)  
-	198 points · by ml_researcher · [[https://news.ycombinator.com/item?id=10000004][73 comments]]
-5. [[https://example.io/open-source-cad-tool][Show HN: An Open-Source CAD Tool for 3D Printing]] (example.io)  
-	56 points · by maker_person · [[https://news.ycombinator.com/item?id=10000005][18 comments]]
+1. [[https://example.com/building-a-database-from-scratch][Building a Database from Scratch in Rust]] (example.com)
+384 points · by dev_user · [[https://news.ycombinator.com/item?id=10000001][142 comments]]
+1. [[https://blog.example.org/reverse-engineering-a-wifi-chip][Reverse Engineering a Common Wi-Fi Chip]] (blog.example.org)
+251 points · by hw_hacker · [[https://news.ycombinator.com/item?id=10000002][89 comments]]
+1. [[https://news.ycombinator.com/item?id=10000003][Ask HN: What side projects are you working on?]]
+127 points · by curious_dev · [[https://news.ycombinator.com/item?id=10000003][205 comments]]
+1. [[https://research.example.net/efficient-llm-inference][Efficient LLM Inference on Consumer Hardware]] (research.example.net)
+198 points · by ml_researcher · [[https://news.ycombinator.com/item?id=10000004][73 comments]]
+1. [[https://example.io/open-source-cad-tool][Show HN: An Open-Source CAD Tool for 3D Printing]] (example.io)
+56 points · by maker_person · [[https://news.ycombinator.com/item?id=10000005][18 comments]]
 
 [[https://news.ycombinator.com/news?p=2][More]]

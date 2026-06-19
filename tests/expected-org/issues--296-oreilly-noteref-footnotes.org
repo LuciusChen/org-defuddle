@@ -33,7 +33,3 @@ After the swap completes, the two variables have exchanged their contents, which
 [fn:1] A minor caveat is that very large values lose some precision when converted to another numeric type.
 
 [fn:2] An exception is when calling certain interop methods, discussed in a later chapter.
-
-[fn:1] A minor caveat is that very large values lose some precision when converted to another numeric type.
-
-[fn:2] An exception is when calling certain interop methods, discussed in a later chapter.

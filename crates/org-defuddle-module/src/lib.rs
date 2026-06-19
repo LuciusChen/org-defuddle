@@ -3,8 +3,8 @@ use org_defuddle_core::{
     bilibili_subtitle_info, bilibili_video_info, output_json_string, output_json_string_for_html,
     output_property, parse_bilibili_api_to_org, parse_c2_wiki_json_to_org,
     parse_fxtwitter_json_to_org, parse_html_to_org, parse_x_oembed_json_to_org,
-    parse_youtube_api_to_org, youtube_caption_info, DefuddleOptions, DefuddleOutput,
-    IncludeReplies,
+    parse_youtube_api_to_org, youtube_caption_info, youtube_inline_caption_info, DefuddleOptions,
+    DefuddleOutput, IncludeReplies,
 };
 
 emacs::plugin_is_GPL_compatible!();
@@ -315,6 +315,29 @@ fn parse_bilibili_org(
 fn youtube_caption_info_json(player_json: String, preferred_language: String) -> Result<String> {
     let info = youtube_caption_info(
         &player_json,
+        if preferred_language.trim().is_empty() {
+            None
+        } else {
+            Some(preferred_language.as_str())
+        },
+    )
+    .map_err(|err| emacs::Error::msg(err.to_string()))?;
+    serde_json::to_string(&info).map_err(|err| emacs::Error::msg(err.to_string()))
+}
+
+#[defun(name = "youtube-inline-caption-info")]
+fn youtube_inline_caption_info_json(
+    html: String,
+    url: String,
+    preferred_language: String,
+) -> Result<String> {
+    let info = youtube_inline_caption_info(
+        &html,
+        if url.trim().is_empty() {
+            None
+        } else {
+            Some(url.as_str())
+        },
         if preferred_language.trim().is_empty() {
             None
         } else {

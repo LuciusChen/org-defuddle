@@ -8,13 +8,14 @@
 :DESCRIPTION: I work at Voodoo, a French company that creates mobile video games. We have a lot of challenges with performance, availability, and scalabil
 :IMAGE: https://miro.medium.com/max/1200/1*EO-pr4RolgcAOj_Uk1rpDA.png
 :LANGUAGE: en
-:WORD_COUNT: 522
+:WORD_COUNT: 391
 :END:
 
 [[https://medium.com/@vincentvallet?source=post_page-----d6e62af173e2----------------------][https://miro.medium.com/fit/c/96/96/1*vFTVh_mYyf0p6m7f77A3vw.jpeg]]
+
 [[https://medium.com/@vincentvallet?source=post_page-----d6e62af173e2----------------------][Vincent Vallet]]
 
-* Why CPU monitoring is important?
+** Why CPU monitoring is important?
 
 I work at [[http://voodoo.io/][Voodoo]], a French company that creates mobile video games. We have a lot of challenges with performance, availability, and scalability because of the insane amount of traffic our infrastructure supports (billions of events/requests per day). In this setting, every metric is important and gives us a lot of information about the state of our system.
 
@@ -23,7 +24,6 @@ When working with Node.js one of the most critical resources to monitor is the C
 For memory, constant monitoring is the best practice to track the worst developer nightmare a.k.a memory leak.
 
 [[https://miro.medium.com/max/60/1*5o3M5niyi911waUrKWVZ0Q.png?q=20]]
-<img class="s t u hy ai" src="https://miro.medium.com/max/3788/1*5o3M5niyi911waUrKWVZ0Q.png" width="1894" height="970" role="presentation" />
 
 Memory leak in action
 
@@ -32,11 +32,10 @@ Stay focused on the CPU!
 #+end_quote
 
 [[https://miro.medium.com/max/60/1*8uOdeOfnUzTaFIY1r7oAMg.png?q=20]]
-<img class="s t u hy ai" src="https://miro.medium.com/max/1994/1*8uOdeOfnUzTaFIY1r7oAMg.png" width="997" height="230" role="presentation" />
 
 Basic CPU monitoring
 
-* CPU profiling: what's the difference with CPU monitoring?
+** CPU profiling: what's the difference with CPU monitoring?
 
 Basically, for Node.js, CPU profiling is nothing more than collecting data about functions which are CPU consuming.
 
@@ -44,12 +43,11 @@ Basically, for Node.js, CPU profiling is nothing more than collecting data about
 
 Node.js provides a way to collect data about CPU with two command lines.
 
-#+begin_src
+#+begin_src c
 node --prof app.js
 #+end_src
 
 [[https://miro.medium.com/max/60/1*e7gjTlzi55udTXbbPeEs2A.png?q=20]]
-<img class="s t u hy ai" src="https://miro.medium.com/max/1698/1*e7gjTlzi55udTXbbPeEs2A.png" width="849" height="534" role="presentation" />
 
 Output of — prof
 
@@ -57,7 +55,6 @@ Output of — prof
 - It is NOT suited for a production environment
 
 [[https://miro.medium.com/max/60/1*CANkRN_yzl9tfrGd2F41wQ.png?q=20][CPU profiling before optimization]]
-<img alt="CPU profiling before optimization" class="s t u hy ai" src="https://miro.medium.com/max/2288/1*CANkRN_yzl9tfrGd2F41wQ.png" width="1144" height="708" />
 
 CPU profiling before optimization
 
@@ -66,12 +63,11 @@ CPU profiling before optimization
 A CPU profiling should be read like this: The wider is the block the more it consumes CPU. So we are looking for the widest blocks.
 
 [[https://miro.medium.com/max/60/1*EO-pr4RolgcAOj_Uk1rpDA.png?q=20][CPU profiling after optimization]]
-<img alt="CPU profiling after optimization" class="s t u hy ai" src="https://miro.medium.com/max/3688/1*EO-pr4RolgcAOj_Uk1rpDA.png" width="1844" height="576" />
 
 CPU profiling after optimization
 
 What do we observe? Blocks are a lot smaller! It means that functions consume less CPU individually.
 
-* Conclusion
+** Conclusion
 
 CPU profiling is a must-have for every Node.js application running on production.

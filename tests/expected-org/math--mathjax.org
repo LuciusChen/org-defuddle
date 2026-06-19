@@ -8,10 +8,14 @@
 
 When
 
-$a \neq 0$, there are two solutions to $a x^{2} + b x + c = 0$ and they are
+$$
+a \neq 0
+$$
+
+, there are two solutions to $a x^{2} + b x + c = 0$ and they are
 
 $$
-x = \frac{- b \pm \sqrt{b^{2} - 4 a c}}{2 a} \text{.}
+x = \frac{- b \pm \sqrt{b^{2} - 4 a c}}{2 a} \text{ }.\text{ }
 $$
 
 ** The Lorenz Equations
@@ -23,13 +27,13 @@ $$
 ** The Cauchy-Schwarz Inequality
 
 $$
-\left(\sum_{k = 1}^{n} a_{k} b_{k}\right)^{2} \leq \left(\sum_{k = 1}^{n} a_{k}^{2}\right) \left(\sum_{k = 1}^{n} b_{k}^{2}\right)
+\left(\sum_{k = 1}^{n} a_{k} b_{k}\right)^{ 2} \leq \left(\sum_{k = 1}^{n} a_{k}^{2}\right) \left(\sum_{k = 1}^{n} b_{k}^{2}\right)
 $$
 
 ** A Cross Product Formula
 
 $$
-\mathbf{V}_{1} \times \mathbf{V}_{2} = \lvert \begin{aligned}\mathbf{i} & \mathbf{j} & \mathbf{k} \\ \frac{\partial X}{\partial u} & \frac{\partial Y}{\partial u} & 0 \\ \frac{\partial X}{\partial v} & \frac{\partial Y}{\partial v} & 0\end{aligned} \lvert
+\mathbf{V}_{1} \times \mathbf{V}_{2} = \begin{vmatrix} \mathbf{i} & \mathbf{j} & \mathbf{k} \\ \frac{\partial X}{\partial u} & \frac{\partial Y}{\partial u} & 0 \\ \frac{\partial X}{\partial v} & \frac{\partial Y}{\partial v} & 0 \end{vmatrix}
 $$
 
 ** The probability of getting
@@ -37,7 +41,7 @@ $$
 $k$ heads when flipping $n$ coins is:
 
 $$
-P \left(E\right) = \left(\frac{n}{k}\right) p^{k} \left(1 - p\right)^{n - k}
+P \left(E\right) = \left(\right. \genfrac{}{}{0pt}{}{n}{k} \left.\right) p^{k} \left(\right. 1 - p \left.\right)^{n - k}
 $$
 
 ** An Identity of Ramanujan
@@ -49,7 +53,7 @@ $$
 ** A Rogers-Ramanujan Identity
 
 $$
-1 + \frac{q^{2}}{\left(1 - q\right)} + \frac{q^{6}}{\left(1 - q\right) \left(1 - q^{2}\right)} + \hdots = \prod_{j = 0}^{\infty} \frac{1}{\left(1 - q^{5 j + 2}\right) \left(1 - q^{5 j + 3}\right)} , \text{for} \lvert q \lvert < 1 .
+1 + \frac{q^{2}}{\left(1 - q\right)} + \frac{q^{6}}{\left(1 - q\right) \left(1 - q^{2}\right)} + \hdots = \prod_{j = 0}^{\infty} \frac{1}{\left(1 - q^{5 j + 2}\right) \left(1 - q^{5 j + 3}\right)} , \text{ for } \left|\right. q \left|\right. < 1 .
 $$
 
 ** Maxwell's Equations
@@ -62,4 +66,8 @@ $$
 
 Finally, while display equations look good for a page of samples, the ability to mix math and text in a paragraph is also important. This expression
 
-$\sqrt{3 x - 1} + \left(1 + x\right)^{2}$ is an example of an inline equation. As you see, MathJax equations can be used this way as well, without unduly disturbing the spacing between lines.
+$$
+\sqrt{3 x - 1} + \left(\right. 1 + x \left.\right)^{2}
+$$
+
+is an example of an inline equation. As you see, MathJax equations can be used this way as well, without unduly disturbing the spacing between lines.

@@ -353,6 +353,13 @@ pub struct YoutubeCaptionInfo {
     pub language: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct YoutubeInlineCaptionInfo {
+    pub player_json: String,
+    pub caption_url: String,
+    pub language: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct Metadata {
     title: String,
@@ -669,30 +676,25 @@ static CALLOUT_TYPES: &[&str] = &[
 ];
 
 const ENTRY_POINT_SELECTORS: &[&str] = &[
-    "article",
-    "main",
-    "#sutta",
-    "[role=\"main\"]",
-    "#postContent",
-    "#postBody",
-    ".PostsPage-postContent",
-    ".ContentStyles-postBody",
-    ".instapaper_body",
-    "#article",
-    "#content",
-    "#main",
-    ".article",
-    ".content",
-    "[data-elementor-type=\"archive\"]",
-    ".entry-content",
-    ".post",
+    "#post",
     ".post-content",
-    ".prose",
-    ".story",
-    "[id*=\"article\"]",
-    "[id*=\"content\"]",
-    "[class*=\"article\"]",
-    "[class*=\"content\"]",
+    ".post-body",
+    ".article-content",
+    "#article-content",
+    ".js-article-content",
+    ".article_post",
+    ".article-wrapper",
+    ".entry-content",
+    ".content-article",
+    ".instapaper_body",
+    ".post",
+    ".markdown-body",
+    "article",
+    "[role=\"article\"]",
+    "main",
+    "[role=\"main\"]",
+    ".article-body",
+    "#content",
     "body",
 ];
 
@@ -867,6 +869,7 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     "[data-orientation=\"vertical\"]",
     ".gh-header-sticky",
     "[data-testid=\"issue-metadata-sticky\"]",
+    ".sr-only",
     "#siteNotice",
     "#siteSub",
     "#contentSub",
@@ -990,6 +993,12 @@ pub fn parse_html_to_org(
     attach_frontmatter(&mut result, options.url.as_deref(), options.frontmatter);
     attach_parse_diagnostics(&mut result, parse_start);
     Ok(result)
+}
+
+pub fn render_html_fragment_to_org(html: &str) -> String {
+    let document = kuchiki::parse_html().one(html);
+    let footnotes = collect_footnotes(&document);
+    html_children_to_org_with_footnotes(&document, &footnotes)
 }
 
 fn retry_introduces_cleanup_regression(current: &DefuddleOutput, retry: &DefuddleOutput) -> bool {
@@ -1186,6 +1195,8 @@ fn parse_html_to_org_once(
     let data_attribute_body_html = steam_event.as_ref().map(|event| event.body_html.as_str());
     let wikipedia_document = is_wikipedia_domain(&metadata.domain)
         && find_node_by_id(&document, "mw-content-text").is_some();
+    let github_document = meta_content(&document, "name", "expected-hostname")
+        .is_some_and(|host| host.eq_ignore_ascii_case("github.com"));
     let mut debug_removals = Vec::new();
 
     let step_start = Instant::now();
@@ -1200,16 +1211,29 @@ fn parse_html_to_org_once(
     apply_serialized_mobile_styles(&document);
     record_profile(&mut profile, "applyMobileStyles", step_start);
 
-    sanitize_schema_fallback_candidate(&document, &schema);
+    if !github_document {
+        sanitize_schema_fallback_candidate(&document, &schema);
+    }
 
     let step_start = Instant::now();
     let extractor_content_selector = options
         .content_selector
         .as_deref()
         .or(wikipedia_document.then_some("#mw-content-text"));
-    let main = select_configured_main_content(&document, extractor_content_selector)
+    let mut main = select_configured_main_content(&document, extractor_content_selector)
         .or_else(|| find_main_content(&document))
         .unwrap_or_else(|| document.clone());
+    if extractor_content_selector.is_none()
+        && matches!(tag_name(&main).as_deref(), Some("body" | "html"))
+        && !github_document
+    {
+        if let Some(schema_text) = schema_content_text(&schema) {
+            if let Some(schema_main) = find_schema_text_content_element(&main, &schema_text) {
+                sanitize_schema_fallback_content(&schema_main);
+                main = schema_main;
+            }
+        }
+    }
     let debug_content_selector = options.debug.then(|| element_selector_path(&main));
     record_profile(&mut profile, "findMainContent", step_start);
 
@@ -1224,6 +1248,7 @@ fn parse_html_to_org_once(
         remove_hidden_elements(&document, options.debug.then_some(&mut debug_removals));
         record_profile(&mut profile, "removeHiddenElements", step_start);
     }
+    let relative_base_url = document_base_url(&document, &metadata.url);
     let step_start = Instant::now();
     normalize_images_with_standardize(&document, options.standardize, options.debug);
     let elapsed = step_start.elapsed();
@@ -1242,6 +1267,9 @@ fn parse_html_to_org_once(
     }
     if !options.include_images {
         remove_content_images(&document);
+    }
+    if github_document {
+        standardize_github_issue_headers(&document);
     }
     if options.remove_exact_selectors || options.remove_partial_selectors {
         let step_start = Instant::now();
@@ -1269,7 +1297,6 @@ fn parse_html_to_org_once(
         remove_heading_permalink_anchors(&document);
         record_profile(&mut profile, "removePermalinkAnchors", step_start);
     }
-    let relative_base_url = document_base_url(&document, &metadata.url);
     let step_start = Instant::now();
     resolve_relative_urls(&document, &relative_base_url);
     record_profile(&mut profile, "resolveRelativeUrls", step_start);
@@ -1355,10 +1382,16 @@ fn parse_html_to_org_once(
         record_profile_elapsed(&mut profile, "standardizeHeadings", elapsed);
         record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
 
+        remove_unsupported_katex_mathml(&main);
         standardize_semantic_role_elements(&main);
+        standardize_article_card_text_blocks(&main);
+        standardize_letter_footer_blocks(&main);
         standardize_simple_span_media_wrappers(&main);
+        standardize_bare_media_alt_captions(&main);
         standardize_container_media_captions(&main);
         standardize_adjacent_media_captions(&main);
+        standardize_figure_caption_text(&main);
+        normalize_github_embedded_code_cards(&main);
     }
     let elapsed = step_start.elapsed();
     record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
@@ -1383,6 +1416,24 @@ fn parse_html_to_org_once(
         let elapsed = step_start.elapsed();
         record_profile_elapsed(&mut profile, "convertBlockSpans", elapsed);
         record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let step_start = Instant::now();
+        remove_empty_elements(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "removeEmptyElements", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let step_start = Instant::now();
+        collapse_consecutive_dividers(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "removeOrphanedDividers", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let step_start = Instant::now();
+        remove_empty_lines(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "removeEmptyLines", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
     }
 
     if let Some(best_cover_url) = remove_cover_image_duplicate(&main, &metadata.image) {
@@ -1390,8 +1441,11 @@ fn parse_html_to_org_once(
     }
 
     let step_start = Instant::now();
-    let fallback = data_attribute_content_fallback(data_attribute_body_html)
-        .or_else(|| schema_text_fallback(&document, &main, &schema));
+    let fallback = data_attribute_content_fallback(data_attribute_body_html).or_else(|| {
+        (!github_document)
+            .then(|| schema_text_fallback(&document, &main, &schema))
+            .flatten()
+    });
     let (mut body_html, mut body_org, mut word_count) = match fallback {
         Some(SchemaTextFallback::Node(node)) => {
             let html = serialize_node(&node)?;
@@ -1843,6 +1897,34 @@ pub fn youtube_caption_info(
         &youtube_caption_tracks(&value),
         preferred_language,
     ))
+}
+
+pub fn youtube_inline_caption_info(
+    html: &str,
+    provided_url: Option<&str>,
+    preferred_language: Option<&str>,
+) -> Result<Option<YoutubeInlineCaptionInfo>, DefuddleError> {
+    let document = kuchiki::parse_html().one(html);
+    let player = if let Some(video_id) = youtube_video_id(provided_url) {
+        youtube_validated_player_response(&document, &video_id)
+    } else {
+        youtube_inline_json(&document, "ytInitialPlayerResponse")
+    };
+    let Some(player) = player else {
+        return Ok(None);
+    };
+    let Some(caption) =
+        youtube_pick_caption_track(&youtube_caption_tracks(&player), preferred_language)
+    else {
+        return Ok(None);
+    };
+    let player_json =
+        serde_json::to_string(&player).map_err(|err| DefuddleError::Json(err.to_string()))?;
+    Ok(Some(YoutubeInlineCaptionInfo {
+        player_json,
+        caption_url: caption.caption_url,
+        language: caption.language,
+    }))
 }
 
 pub fn parse_youtube_api_to_org(
@@ -2490,7 +2572,7 @@ fn hn_comment_permalink_output(
         .unwrap_or_default();
     let comment_org = comment
         .as_ref()
-        .map(render_hn_comment_text)
+        .map(|node| render_hn_comment_text(node, base_url))
         .unwrap_or_default();
     let comment_text = comment
         .as_ref()
@@ -2511,7 +2593,7 @@ fn hn_comment_permalink_output(
         } else {
             body.push_str(&format!("*{author}* · {published}"));
         }
-        body.push_str("\n\n");
+        body.push('\n');
     }
     body.push_str(comment_org.trim());
     body.push('\n');
@@ -2540,7 +2622,7 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
         );
     };
 
-    for (index, row) in rows.enumerate() {
+    for row in rows {
         let row = row.as_node().clone();
         let title_link = select_first_node(&row, ".titleline a");
         let Some(title_link) = title_link else {
@@ -2552,25 +2634,21 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
         else {
             continue;
         };
-        let rank = select_text(&row, ".rank")
-            .map(|rank| rank.trim_end_matches('.').to_string())
-            .filter(|rank| !rank.is_empty())
-            .unwrap_or_else(|| (index + 1).to_string());
         let site = select_text(&row, ".sitestr");
         let subtext = next_element_sibling(&row);
 
-        body.push_str(&format!("{rank}. [[{url}][{title}]]"));
+        body.push_str(&format!("1. [[{url}][{title}]]"));
         if let Some(site) = site.filter(|site| !site.is_empty()) {
             body.push_str(&format!(" ({site})"));
         }
+        body.push('\n');
         if let Some(subtext) = subtext {
             let metadata = hn_listing_metadata(&subtext, base_url);
             if !metadata.is_empty() {
-                body.push_str("  \n\t");
                 body.push_str(&metadata.join(" · "));
+                body.push('\n');
             }
         }
-        body.push('\n');
     }
 
     if let Some(more) = select_first_node(document, "a.morelink") {
@@ -2644,7 +2722,7 @@ fn hn_comment(row: &NodeRef, base_url: &str) -> Option<HackerNewsComment> {
         .unwrap_or_default();
     let score = select_text(row, ".comhead .score").unwrap_or_default();
     let org = select_first_node(row, ".commtext")
-        .map(|node| render_hn_comment_text(&node))
+        .map(|node| render_hn_comment_text(&node, base_url))
         .unwrap_or_default();
     let depth = select_first_node(row, "td.ind img")
         .and_then(|node| element_attr(&node, "width"))
@@ -2668,9 +2746,14 @@ fn render_hn_comments(comments: &[HackerNewsComment]) -> String {
 
     for comment in comments {
         let target_depth = comment.depth + 1;
+        let mut closed_quote = false;
         while open_depth >= target_depth && open_depth > 0 {
-            out.push_str("#+end_quote\n\n");
+            push_hn_end_quote(&mut out);
             open_depth -= 1;
+            closed_quote = true;
+        }
+        if closed_quote && open_depth < target_depth {
+            out.push('\n');
         }
         while open_depth < target_depth {
             out.push_str("#+begin_quote\n");
@@ -2694,14 +2777,25 @@ fn render_hn_comments(comments: &[HackerNewsComment]) -> String {
     }
 
     while open_depth > 0 {
-        out.push_str("#+end_quote\n\n");
+        push_hn_end_quote(&mut out);
         open_depth -= 1;
     }
 
     out
 }
 
-fn render_hn_comment_text(node: &NodeRef) -> String {
+fn push_hn_end_quote(out: &mut String) {
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("#+end_quote\n");
+}
+
+fn render_hn_comment_text(node: &NodeRef, base_url: &str) -> String {
+    resolve_relative_urls(node, base_url);
     let footnotes = FootnoteState::default();
     html_node_to_org_with_footnotes(node, &footnotes)
 }
@@ -2810,7 +2904,7 @@ fn github_output(
         return Ok(None);
     };
     let body_org = match kind {
-        GitHubPageKind::Issue => github_issue_body_org(&primary_body),
+        GitHubPageKind::Issue => github_issue_body_org(document, &primary_body),
         GitHubPageKind::PullRequest => {
             github_pull_request_body_org(document, &primary_body, include_replies)
         }
@@ -2854,12 +2948,13 @@ fn github_output(
 }
 
 fn is_github_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
-    if provided_url
-        .and_then(|url| Url::parse(url).ok())
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
-    {
-        return true;
+    if let Some(parsed) = provided_url.and_then(|url| Url::parse(url).ok()) {
+        if parsed
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+        {
+            return true;
+        }
     }
 
     meta_content(document, "name", "expected-hostname")
@@ -2871,8 +2966,17 @@ fn is_github_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
 }
 
 fn github_document_url(document: &NodeRef, provided_url: Option<&str>) -> Option<String> {
+    let provided_github_url = provided_url
+        .filter(|url| {
+            Url::parse(url).ok().and_then(|parsed| {
+                parsed
+                    .host_str()
+                    .map(|host| host.eq_ignore_ascii_case("github.com"))
+            }) == Some(true)
+        })
+        .map(str::to_owned);
     let raw = first_present(&[
-        provided_url.map(str::to_owned),
+        provided_github_url,
         meta_content(document, "property", "og:url"),
         meta_content(document, "name", "twitter:url"),
         select_attr(document, "link[rel=\"canonical\"]", "href"),
@@ -3054,8 +3158,31 @@ fn github_first_comment_body(document: &NodeRef) -> Option<NodeRef> {
     select_first_node(document, ".comment-body.markdown-body")
 }
 
-fn github_issue_body_org(primary_body: &NodeRef) -> String {
-    html_children_to_org_with_footnotes(primary_body, &FootnoteState::default())
+fn github_issue_body_org(document: &NodeRef, primary_body: &NodeRef) -> String {
+    let mut parts = Vec::new();
+    if let Some(author) = github_issue_author_link_org(document) {
+        parts.push(author);
+    }
+    if let Some(association) = select_text(document, "[data-testid=\"comment-author-association\"]")
+    {
+        parts.push(association);
+    }
+    parts.push(html_children_to_org_with_footnotes(
+        primary_body,
+        &FootnoteState::default(),
+    ));
+    cleanup_org(&parts.join("\n\n"))
+}
+
+fn github_issue_author_link_org(document: &NodeRef) -> Option<String> {
+    let author = select_first_node(document, "[data-testid=\"issue-body-header-author\"]")?;
+    let text = cleanup_inline(&author.text_contents());
+    if text.is_empty() {
+        return None;
+    }
+    let href = element_attr(&author, "href")?;
+    (!href.trim().is_empty() && !is_dangerous_url(&href))
+        .then(|| format!("[[{}][{}]]", escape_link(&href), escape_link_text(&text)))
 }
 
 fn github_pull_request_body_org(
@@ -3124,11 +3251,15 @@ fn render_github_comment(comment: &GitHubComment) -> String {
     out.push_str("#+begin_quote\n");
     if !comment.author.is_empty() || !comment.published.is_empty() {
         if comment.author.is_empty() {
-            out.push_str(&comment.published);
+            out.push_str(&date_part(&comment.published));
         } else if comment.published.is_empty() {
             out.push_str(&format!("*{}*", comment.author));
         } else {
-            out.push_str(&format!("*{}* · {}", comment.author, comment.published));
+            out.push_str(&format!(
+                "*{}* · {}",
+                comment.author,
+                date_part(&comment.published)
+            ));
         }
         out.push_str("\n\n");
     }
@@ -3154,7 +3285,63 @@ fn github_body_html(
     Ok(html)
 }
 
+fn standardize_github_issue_headers(document: &NodeRef) {
+    let Ok(matches) = document.select("[data-testid=\"issue-body-header-author\"]") else {
+        return;
+    };
+    let authors = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    for author in authors {
+        let Some(header) = author.ancestors().find(|ancestor| {
+            element_attr(ancestor, "class").is_some_and(|class| {
+                class
+                    .to_ascii_lowercase()
+                    .contains("issuebodyheader-module__issuebodyheadercontainer")
+            })
+        }) else {
+            continue;
+        };
+        if !seen.insert(node_key(&header)) {
+            continue;
+        }
+
+        let author_text = normalize_ws(&author.text_contents());
+        if author_text.is_empty() {
+            continue;
+        }
+        let author_href = element_attr(&author, "href").unwrap_or_default();
+        let association = select_text(&header, "[data-testid=\"comment-author-association\"]")
+            .unwrap_or_default();
+
+        let Some(wrapper) = new_html_element("div") else {
+            continue;
+        };
+        if let Some(author_paragraph) = new_html_element("p") {
+            if let Some(link) = new_html_element("a") {
+                if let Some(element) = link.as_element() {
+                    element.attributes.borrow_mut().insert("href", author_href);
+                }
+                link.append(NodeRef::new_text(author_text));
+                author_paragraph.append(link);
+            }
+            wrapper.append(author_paragraph);
+        }
+        if !association.trim().is_empty() {
+            if let Some(association_paragraph) = new_html_element("p") {
+                association_paragraph.append(NodeRef::new_text(normalize_ws(&association)));
+                wrapper.append(association_paragraph);
+            }
+        }
+
+        header.insert_before(wrapper);
+        header.detach();
+    }
+}
+
 fn remove_github_chrome(document: &NodeRef) {
+    normalize_github_embedded_code_cards(document);
     for selector in [
         "clipboard-copy",
         ".zeroclipboard-container",
@@ -3174,6 +3361,62 @@ fn remove_github_chrome(document: &NodeRef) {
             node.detach();
         }
     }
+    collapse_consecutive_dividers(document);
+}
+
+fn normalize_github_embedded_code_cards(document: &NodeRef) {
+    let Ok(matches) = document.select("table.js-file-line-container") else {
+        return;
+    };
+    let tables = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for table in tables {
+        let Some(code) = github_blob_table_code_text(&table) else {
+            continue;
+        };
+        let Some(pre) = github_code_pre_node(&code) else {
+            continue;
+        };
+        let target = table
+            .ancestors()
+            .find(|ancestor| {
+                element_attr(ancestor, "class").is_some_and(|class| {
+                    class
+                        .split_whitespace()
+                        .any(|part| part == "Box--condensed")
+                })
+            })
+            .unwrap_or_else(|| table.clone());
+        target.insert_before(pre);
+        target.detach();
+    }
+}
+
+fn is_github_issue_body_header_node(node: &NodeRef) -> bool {
+    element_attr(node, "class").is_some_and(|class| {
+        let class = class.to_ascii_lowercase();
+        class.contains("issuebodyheader")
+            || class.contains("issue-body-header")
+            || class.contains("activityheader")
+    })
+}
+
+fn github_blob_table_code_text(table: &NodeRef) -> Option<String> {
+    let cells = table.select(".blob-code-inner, td.blob-code").ok()?;
+    let lines = cells
+        .map(|cell| cleanup_code_text(&raw_code_text(cell.as_node())))
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn github_code_pre_node(code: &str) -> Option<NodeRef> {
+    let document = kuchiki::parse_html().one(format!(
+        "<html><body><pre><code>{}</code></pre></body></html>",
+        escape_html_text(code)
+    ));
+    select_first_node(&document, "pre")
 }
 
 fn linkedin_output(
@@ -5734,6 +5977,7 @@ fn substack_output(
     };
     let url = substack_document_url(document, provided_url);
     let base_url = url.as_deref().unwrap_or("https://substack.com/");
+    let metadata = substack_metadata(document, kind, url.as_deref());
 
     normalize_images(document);
     sanitize_links(document);
@@ -5743,7 +5987,6 @@ fn substack_output(
         remove_content_images(document);
     }
 
-    let metadata = substack_metadata(document, kind, url.as_deref());
     let body_node = match kind {
         SubstackPageKind::Article => select_first_node(document, ".body.markup"),
         SubstackPageKind::Note => substack_note_body_node(document),
@@ -5751,12 +5994,19 @@ fn substack_output(
     let Some(body_node) = body_node else {
         return Ok(None);
     };
+    if kind == SubstackPageKind::Article {
+        standardize_headings(&body_node, &metadata.title);
+    }
 
     let body_org = match kind {
         SubstackPageKind::Article => {
             html_children_to_org_with_footnotes(&body_node, &collect_footnotes(document))
         }
-        SubstackPageKind::Note => substack_note_body_org(&body_node, &metadata, include_images),
+        SubstackPageKind::Note => substack_note_body_org(
+            &body_node,
+            &metadata,
+            include_images && substack_is_note_permalink(url.as_deref()),
+        ),
     };
     if body_org.trim().is_empty() {
         return Ok(None);
@@ -5813,13 +6063,7 @@ fn is_substack_document(document: &NodeRef, provided_url: Option<&str>) -> bool 
 }
 
 fn substack_page_kind(document: &NodeRef, provided_url: Option<&str>) -> Option<SubstackPageKind> {
-    if provided_url
-        .and_then(|url| Url::parse(url).ok())
-        .is_some_and(|url| {
-            url.path_segments()
-                .is_some_and(|mut segments| segments.any(|segment| segment == "note"))
-        })
-    {
+    if substack_is_note_permalink(provided_url) {
         return Some(SubstackPageKind::Note);
     }
     if select_first_node(document, ".FeedProseMirror").is_some() {
@@ -5829,6 +6073,13 @@ fn substack_page_kind(document: &NodeRef, provided_url: Option<&str>) -> Option<
         return Some(SubstackPageKind::Article);
     }
     None
+}
+
+fn substack_is_note_permalink(url: Option<&str>) -> bool {
+    url.and_then(|url| Url::parse(url).ok()).is_some_and(|url| {
+        url.path_segments()
+            .is_some_and(|mut segments| segments.any(|segment| segment == "note"))
+    })
 }
 
 fn substack_document_url(document: &NodeRef, provided_url: Option<&str>) -> Option<String> {
@@ -5850,10 +6101,14 @@ fn substack_metadata(document: &NodeRef, kind: SubstackPageKind, url: Option<&st
         schema_string(&schema, &["headline", "name"]),
     ])
     .unwrap_or_else(|| "Substack".to_string());
+    let open_graph_site = meta_content(document, "property", "og:site_name");
     let site = first_present(&[
-        meta_content(document, "property", "og:site_name"),
-        meta_content(document, "name", "twitter:site"),
+        open_graph_site
+            .clone()
+            .filter(|site| !site.eq_ignore_ascii_case("Substack")),
         schema_string(&schema, &["publisher.name"]),
+        open_graph_site,
+        meta_content(document, "name", "twitter:site"),
     ])
     .unwrap_or_else(|| "Substack".to_string());
     let author = substack_author(document, kind, &raw_title, &schema);
@@ -5958,10 +6213,10 @@ fn substack_note_body_node(document: &NodeRef) -> Option<NodeRef> {
 fn substack_note_body_org(
     body_node: &NodeRef,
     metadata: &Metadata,
-    include_images: bool,
+    append_metadata_image: bool,
 ) -> String {
     let mut body = html_children_to_org_with_footnotes(body_node, &FootnoteState::default());
-    if include_images && !metadata.image.is_empty() && !body.contains(&metadata.image) {
+    if append_metadata_image && !metadata.image.is_empty() && !body.contains(&metadata.image) {
         body.push_str("\n");
         body.push_str(&format!("[[{}]]\n", metadata.image));
     }
@@ -5983,6 +6238,7 @@ fn medium_output(
     let metadata = medium_metadata(document, provided_url, &article);
     medium_clean_article(&article);
     normalize_images(&article);
+    standardize_headings(&article, &metadata.title);
     sanitize_links(&article);
     resolve_relative_urls(&article, &metadata.url);
     if !include_images {
@@ -7680,11 +7936,62 @@ fn x_article_body_org(document: &NodeRef, article: &NodeRef, include_images: boo
             parts.push(image);
         }
     }
+    standardize_x_article_draft_blocks(article);
     let org = html_node_to_org_with_footnotes(article, &FootnoteState::default());
     if !org.trim().is_empty() {
         parts.push(org.trim().to_string());
     }
     parts.join("\n\n")
+}
+
+fn standardize_x_article_draft_blocks(article: &NodeRef) {
+    let Ok(matches) = article.select(".longform-unstyled, .public-DraftStyleDefault-block") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+
+    for node in nodes {
+        if node.parent().is_none() || !is_descendant_of(&node, article) {
+            continue;
+        }
+        let Some(paragraph) = new_html_element("p") else {
+            continue;
+        };
+        append_x_draft_inline_children(&paragraph, &node);
+        node.insert_before(paragraph);
+        node.detach();
+    }
+
+    if let Ok(matches) = article.select("[data-offset-key]") {
+        let nodes = matches
+            .map(|matched| matched.as_node().clone())
+            .collect::<Vec<_>>();
+        for node in nodes {
+            if let Some(element) = node.as_element() {
+                element.attributes.borrow_mut().remove("data-offset-key");
+            }
+        }
+    }
+}
+
+fn append_x_draft_inline_children(target: &NodeRef, source: &NodeRef) {
+    for child in source.children().collect::<Vec<_>>() {
+        if should_flatten_x_draft_child(&child) {
+            append_x_draft_inline_children(target, &child);
+            child.detach();
+        } else {
+            target.append(child);
+        }
+    }
+}
+
+fn should_flatten_x_draft_child(node: &NodeRef) -> bool {
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    matches!(element.name.local.as_ref(), "div" | "br")
 }
 
 #[derive(Debug, Clone)]
@@ -8086,6 +8393,257 @@ fn x_async_output(
 fn html_fragment_to_org(html: &str) -> String {
     let document = kuchiki::parse_html().one(html);
     html_children_to_org_with_footnotes(&document, &FootnoteState::default())
+}
+
+fn remove_empty_elements(root: &NodeRef) {
+    const ALLOWED_EMPTY_ELEMENTS: &[&str] = &[
+        "area", "audio", "base", "br", "circle", "col", "defs", "ellipse", "embed", "figure", "g",
+        "hr", "iframe", "img", "input", "line", "link", "mask", "meta", "object", "param", "path",
+        "pattern", "picture", "polygon", "polyline", "rect", "source", "stop", "svg", "td", "th",
+        "track", "use", "video", "wbr",
+    ];
+
+    let mut elements = root
+        .select("*")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    elements.reverse();
+
+    for node in elements {
+        let Some(tag) = tag_name(&node) else {
+            continue;
+        };
+        if ALLOWED_EMPTY_ELEMENTS.contains(&tag.as_str())
+            || matches!(tag.as_str(), "pre" | "code")
+            || is_inside_preserved_code_block(&node)
+            || is_math_node(&node)
+            || is_inside_math_tree(&node)
+        {
+            continue;
+        }
+        if tag == "div" && div_contains_only_comma_spans(&node) {
+            node.detach();
+            continue;
+        }
+        let text = node.text_contents();
+        if !text.trim().is_empty() || text.contains('\u{00a0}') {
+            continue;
+        }
+        let empty = node.children().all(|child| match child.data() {
+            NodeData::Text(value) => {
+                let value = value.borrow();
+                value.trim().is_empty() && !value.contains('\u{00a0}')
+            }
+            NodeData::Element(_) => tag_name(&child).as_deref() == Some("br"),
+            _ => false,
+        });
+        if empty {
+            if should_preserve_empty_inline_space(&node, &tag) {
+                node.insert_before(NodeRef::new_text(" "));
+            }
+            node.detach();
+        }
+    }
+}
+
+fn should_preserve_empty_inline_space(node: &NodeRef, tag: &str) -> bool {
+    if !is_standard_inline_element(tag) || matches!(tag, "br" | "wbr") {
+        return false;
+    }
+    let text = node.text_contents();
+    if text.is_empty() || !text.chars().all(|c| c.is_whitespace() || c == '\u{00a0}') {
+        return false;
+    }
+    if !node.children().all(|child| match child.data() {
+        NodeData::Text(value) => {
+            let value = value.borrow();
+            value.chars().all(|c| c.is_whitespace() || c == '\u{00a0}')
+        }
+        NodeData::Element(_) => tag_name(&child).as_deref() == Some("br"),
+        _ => false,
+    }) {
+        return false;
+    }
+    has_renderable_inline_sibling(node, true) && has_renderable_inline_sibling(node, false)
+}
+
+fn has_renderable_inline_sibling(node: &NodeRef, previous: bool) -> bool {
+    let mut current = if previous {
+        node.previous_sibling()
+    } else {
+        node.next_sibling()
+    };
+    while let Some(sibling) = current {
+        match sibling.data() {
+            NodeData::Text(text) => {
+                if !text.borrow().trim().is_empty() {
+                    return true;
+                }
+            }
+            NodeData::Element(_) => {
+                let Some(tag) = tag_name(&sibling) else {
+                    return false;
+                };
+                return is_standard_inline_element(&tag)
+                    && !normalize_ws(&sibling.text_contents()).is_empty();
+            }
+            _ => {}
+        }
+        current = if previous {
+            sibling.previous_sibling()
+        } else {
+            sibling.next_sibling()
+        };
+    }
+    false
+}
+
+fn div_contains_only_comma_spans(node: &NodeRef) -> bool {
+    let children = node
+        .children()
+        .filter(|child| matches!(child.data(), NodeData::Element(_)))
+        .collect::<Vec<_>>();
+    !children.is_empty()
+        && children.iter().all(|child| {
+            tag_name(child).as_deref() == Some("span")
+                && matches!(normalize_ws(&child.text_contents()).as_str(), "" | ",")
+        })
+}
+
+fn collapse_consecutive_dividers(root: &NodeRef) {
+    remove_orphaned_dividers_in(root);
+    collapse_consecutive_dividers_in(root);
+    let Ok(matches) = root.select("body, main, article, section, div, table, tbody, tr, td, th")
+    else {
+        return;
+    };
+    let containers = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for container in containers {
+        collapse_consecutive_dividers_in(&container);
+    }
+}
+
+fn remove_orphaned_dividers_in(container: &NodeRef) {
+    loop {
+        let Some(node) = first_non_empty_child(container) else {
+            break;
+        };
+        if is_divider_like_node(&node) {
+            node.detach();
+        } else {
+            break;
+        }
+    }
+
+    loop {
+        let Some(node) = last_non_empty_child(container) else {
+            break;
+        };
+        if is_divider_like_node(&node) {
+            node.detach();
+        } else {
+            break;
+        }
+    }
+}
+
+fn first_non_empty_child(container: &NodeRef) -> Option<NodeRef> {
+    let mut current = container.first_child();
+    while let Some(node) = current {
+        match node.data() {
+            NodeData::Text(text) if text.borrow().trim().is_empty() => {
+                current = node.next_sibling();
+            }
+            _ => return Some(node),
+        }
+    }
+    None
+}
+
+fn last_non_empty_child(container: &NodeRef) -> Option<NodeRef> {
+    let mut current = container.last_child();
+    while let Some(node) = current {
+        match node.data() {
+            NodeData::Text(text) if text.borrow().trim().is_empty() => {
+                current = node.previous_sibling();
+            }
+            _ => return Some(node),
+        }
+    }
+    None
+}
+
+fn collapse_consecutive_dividers_in(container: &NodeRef) {
+    let mut previous_was_divider = false;
+    let mut current = container.first_child();
+    while let Some(node) = current {
+        let next = node.next_sibling();
+        match node.data() {
+            NodeData::Text(text) if text.borrow().trim().is_empty() => {}
+            NodeData::Element(_) if is_divider_like_node(&node) => {
+                if previous_was_divider {
+                    node.detach();
+                } else {
+                    previous_was_divider = true;
+                }
+            }
+            _ => previous_was_divider = false,
+        }
+        current = next;
+    }
+}
+
+fn is_divider_like_node(node: &NodeRef) -> bool {
+    tag_name(node).as_deref() == Some("hr") || is_trailing_separator_wrapper_node(node)
+}
+
+fn remove_empty_lines(root: &NodeRef) {
+    static LINE_BREAK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\n\r]+").unwrap());
+    static TAB_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\t+").unwrap());
+    static MULTI_SPACE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r" {2,}").unwrap());
+    static BEFORE_PUNCTUATION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+([,.!?:;])").unwrap());
+    static INVISIBLE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"[\u{200b}\u{200d}\u{200e}\u{200f}\u{feff}]+").unwrap());
+    static MULTI_NBSP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\u{a0}{2,}").unwrap());
+
+    let text_nodes = root
+        .descendants()
+        .filter(|node| node.as_text().is_some())
+        .collect::<Vec<_>>();
+    for node in text_nodes {
+        if is_inside_preserved_code_block(&node) || is_inside_math_tree(&node) {
+            continue;
+        }
+        let Some(text) = node.as_text() else {
+            continue;
+        };
+        let original = text.borrow().to_string();
+        if original.is_empty()
+            || original.chars().all(|ch| {
+                matches!(
+                    ch,
+                    '\u{200c}' | '\u{200b}' | '\u{200d}' | '\u{200e}' | '\u{200f}' | '\u{feff}'
+                )
+            })
+        {
+            node.detach();
+            continue;
+        }
+        let cleaned = LINE_BREAK_RE.replace_all(&original, " ");
+        let cleaned = TAB_RE.replace_all(&cleaned, " ");
+        let cleaned = MULTI_SPACE_RE.replace_all(&cleaned, " ");
+        let cleaned = BEFORE_PUNCTUATION_RE.replace_all(&cleaned, "$1");
+        let cleaned = INVISIBLE_RE.replace_all(&cleaned, "");
+        let cleaned = MULTI_NBSP_RE.replace_all(&cleaned, "\u{a0}");
+        if cleaned != original {
+            *text.borrow_mut() = cleaned.into_owned();
+        }
+    }
 }
 
 fn fxtwitter_tweet_text(tweet: &Value) -> Option<String> {
@@ -10602,9 +11160,9 @@ fn chatgpt_output(
         if rendered_messages > 0 {
             body.push_str("\n-----\n\n");
         }
-        body.push_str("** ");
-        body.push_str(&escape_org_headline(&author));
-        body.push_str("\n\n");
+        body.push('*');
+        body.push_str(&escape_link_text(&author));
+        body.push_str("*\n\n");
         body.push_str(message.trim());
         body.push('\n');
         rendered_messages += 1;
@@ -10815,15 +11373,19 @@ fn append_conversation_citation_footnotes(body: &mut String, citations: &[Conver
 
     body.push('\n');
     for (index, citation) in citations.iter().enumerate() {
-        body.push_str("\n[fn:");
+        if index > 0 {
+            body.push('\n');
+        }
+        body.push_str("[fn:");
         body.push_str(&(index + 1).to_string());
         body.push_str("] [[");
         body.push_str(&escape_link(&citation.url));
+        body.push_str("]] [[");
+        body.push_str(&escape_link(&citation.url));
         body.push_str("][");
         body.push_str(&escape_link_text(&citation.label));
-        body.push_str("]]");
+        body.push_str("]]\n");
     }
-    body.push('\n');
 }
 
 fn citation_label(url: &str) -> String {
@@ -11495,7 +12057,7 @@ fn known_site_name_for_domain(domain: &str) -> Option<String> {
 }
 
 fn is_wikipedia_domain(domain: &str) -> bool {
-    domain == "wikipedia.org" || domain.ends_with(".wikipedia.org")
+    domain == "wikipedia" || domain == "wikipedia.org" || domain.ends_with(".wikipedia.org")
 }
 
 fn is_lesswrong_domain(domain: &str) -> bool {
@@ -12405,6 +12967,43 @@ fn find_schema_text_container(document: &NodeRef, schema_text: &str) -> Option<N
         .map(|(node, _, _)| node)
 }
 
+fn find_schema_text_content_element(root: &NodeRef, schema_text: &str) -> Option<NodeRef> {
+    let first_para = schema_text
+        .split("\n\n")
+        .next()
+        .map(normalize_ws)
+        .unwrap_or_default();
+    let search_phrase = first_para.chars().take(100).collect::<String>();
+    let search_phrase = search_phrase.trim();
+    if search_phrase.is_empty() {
+        return None;
+    }
+
+    let schema_words = count_words(schema_text);
+    if schema_words < 20 {
+        return None;
+    }
+
+    let Ok(matches) = root.select("*") else {
+        return None;
+    };
+    matches
+        .filter_map(|matched| {
+            let node = matched.as_node().clone();
+            if node == *root || !is_schema_fallback_container(&node) {
+                return None;
+            }
+            let text = normalize_ws(&node.text_contents());
+            if !text.contains(search_phrase) {
+                return None;
+            }
+            let words = count_words(&text);
+            (words * 10 >= schema_words * 8).then(|| (node, words, text.chars().count()))
+        })
+        .min_by_key(|(_, words, chars)| (*words, *chars))
+        .map(|(node, _, _)| node)
+}
+
 fn is_schema_fallback_container(node: &NodeRef) -> bool {
     let Some(tag) = tag_name(node) else {
         return false;
@@ -12815,6 +13414,13 @@ fn should_skip_exact_noise_node(node: &NodeRef, main: Option<&NodeRef>) -> bool 
     }
     if tag_name(node).as_deref() == Some("a")
         && has_ancestor_tag(node, &["h1", "h2", "h3", "h4", "h5", "h6"])
+    {
+        return true;
+    }
+    if tag_name(node).as_deref() == Some("a")
+        && element_attr(node, "href")
+            .and_then(|href| href_fragment(&href))
+            .is_some_and(|fragment| looks_like_footnote_reference_target(&fragment))
     {
         return true;
     }
@@ -13229,6 +13835,12 @@ fn remove_partial_noise(
                 return None;
             }
             if is_content_heading_wrapper_node(node) {
+                return None;
+            }
+            if is_content_media_heading_header_node(node) {
+                return None;
+            }
+            if is_github_issue_body_header_node(node) {
                 return None;
             }
             if is_pronunciation_annotation_node(node) {
@@ -13739,6 +14351,7 @@ fn normalize_images_with_standardize(document: &NodeRef, standardize: bool, debu
     normalize_image_attribute_casing(document);
     promote_noscript_images(document);
     if standardize {
+        strip_unsafe_elements(document);
         if !debug {
             remove_obsolete_embed_elements(document);
         }
@@ -13891,6 +14504,25 @@ fn remove_obsolete_embed_elements(document: &NodeRef) {
     };
     let nodes = matches.map(|m| m.as_node().clone()).collect::<Vec<_>>();
     for node in nodes {
+        node.detach();
+    }
+}
+
+fn strip_unsafe_elements(document: &NodeRef) {
+    let Ok(matches) =
+        document.select("script, style, noscript, template, frame, frameset, object, embed, applet, base, svg script")
+    else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if tag_name(&node).as_deref() == Some("script")
+            && element_attr(&node, "type").is_some_and(|value| value.starts_with("math/"))
+        {
+            continue;
+        }
         node.detach();
     }
 }
@@ -14139,6 +14771,73 @@ fn standardize_role_paragraphs(root: &NodeRef) {
     }
 }
 
+fn remove_unsupported_katex_mathml(root: &NodeRef) {
+    let Ok(matches) = root.select(".katex math") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if node.parent().is_none() || !is_descendant_of(&node, root) {
+            continue;
+        }
+        if katex_mathml_has_latex_source(&node) {
+            continue;
+        }
+        node.detach();
+    }
+}
+
+fn katex_mathml_has_latex_source(node: &NodeRef) -> bool {
+    ["data-latex", "data-math", "data-tex", "alt", "alttext"]
+        .into_iter()
+        .any(|name| element_attr(node, name).is_some())
+        || select_first_node(node, "annotation[encoding=\"application/x-tex\"]").is_some()
+}
+
+fn standardize_article_card_text_blocks(root: &NodeRef) {
+    let Ok(matches) = root.select("article > div > div") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if node.parent().is_none()
+            || !is_descendant_of(&node, root)
+            || !is_article_card_text_block(&node)
+        {
+            continue;
+        }
+        let Some(paragraph) = new_html_element("p") else {
+            continue;
+        };
+        replace_node_transferring_children(&node, paragraph);
+    }
+}
+
+fn standardize_letter_footer_blocks(root: &NodeRef) {
+    let Ok(matches) = root.select(".letter-footer > div") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if node.parent().is_none()
+            || !is_descendant_of(&node, root)
+            || !is_paragraph_like_div(&node)
+        {
+            continue;
+        }
+        let Some(paragraph) = new_html_element("p") else {
+            continue;
+        };
+        replace_node_transferring_children(&node, paragraph);
+    }
+}
+
 fn standardize_role_lists(root: &NodeRef) {
     let Ok(matches) = root.select("div[role=\"list\"]") else {
         return;
@@ -14336,6 +15035,50 @@ fn standardize_simple_span_media_wrappers(body: &NodeRef) {
     }
 }
 
+fn standardize_bare_media_alt_captions(body: &NodeRef) {
+    let Ok(matches) = body.select("img, picture") else {
+        return;
+    };
+    let media_nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+
+    for media in media_nodes {
+        let Some(parent) = media.parent() else {
+            continue;
+        };
+        if !is_descendant_of(&media, body)
+            || !is_nextjs_image_node(&media)
+            || matches!(
+                tag_name(&parent).as_deref(),
+                Some("a" | "p" | "span" | "figure" | "figcaption" | "picture")
+            )
+            || media.ancestors().any(|ancestor| {
+                matches!(
+                    tag_name(&ancestor).as_deref(),
+                    Some("a" | "figure" | "figcaption")
+                )
+            })
+        {
+            continue;
+        }
+
+        let Some(caption) = media_alt_caption_node(&media, true) else {
+            continue;
+        };
+        let Some((figure, figcaption)) = empty_figure_nodes() else {
+            continue;
+        };
+        media.insert_before(figure.clone());
+        figure.append(media);
+        move_caption_content(&caption, &figcaption);
+    }
+}
+
+fn is_nextjs_image_node(node: &NodeRef) -> bool {
+    element_attr(node, "data-nimg").is_some()
+}
+
 fn single_container_media(container: &NodeRef) -> Option<NodeRef> {
     let matches = container.select("picture, img, video").ok()?;
     let media = matches
@@ -14402,10 +15145,12 @@ fn container_media_caption(
             return Some(sibling);
         }
     }
-    media_alt_caption_node(media)
+    (tag_name(container).as_deref() == Some("figure"))
+        .then(|| media_alt_caption_node(media, false))
+        .flatten()
 }
 
-fn media_alt_caption_node(media: &NodeRef) -> Option<NodeRef> {
+fn media_alt_caption_node(media: &NodeRef, require_sentence: bool) -> Option<NodeRef> {
     let image = match tag_name(media).as_deref() {
         Some("img") => media.clone(),
         Some("picture") => select_first_node(media, "img")?,
@@ -14415,7 +15160,9 @@ fn media_alt_caption_node(media: &NodeRef) -> Option<NodeRef> {
         return None;
     }
     let alt = element_attr(&image, "alt")?;
-    if !is_meaningful_media_caption(&normalize_ws(&alt)) {
+    let alt = normalize_ws(&alt);
+    if !is_meaningful_media_caption(&alt) || require_sentence && !is_alt_text_caption_fallback(&alt)
+    {
         return None;
     }
     let fragment = kuchiki::parse_html().one(format!(
@@ -14423,6 +15170,10 @@ fn media_alt_caption_node(media: &NodeRef) -> Option<NodeRef> {
         escape_html_text(&alt)
     ));
     select_first_node(&fragment, "div")
+}
+
+fn is_alt_text_caption_fallback(text: &str) -> bool {
+    text.ends_with(['.', '!', '?'])
 }
 
 fn is_embedded_media_caption_candidate(node: &NodeRef) -> bool {
@@ -14537,6 +15288,30 @@ fn standardize_adjacent_media_captions(body: &NodeRef) {
     }
 }
 
+fn standardize_figure_caption_text(body: &NodeRef) {
+    let Ok(matches) = body.select("figure") else {
+        return;
+    };
+    let figures = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for figure in figures {
+        if count_selector(&figure, "img, picture, video") == 0 {
+            continue;
+        }
+        let Some(caption) = select_first_node(&figure, "figcaption") else {
+            continue;
+        };
+        let Some(text) = unique_caption_text(&caption) else {
+            continue;
+        };
+        for child in caption.children().collect::<Vec<_>>() {
+            child.detach();
+        }
+        caption.append(NodeRef::new_text(text));
+    }
+}
+
 fn move_caption_content(caption: &NodeRef, figcaption: &NodeRef) {
     if let Some(text) = deduplicated_caption_text(caption) {
         figcaption.append(NodeRef::new_text(text));
@@ -14546,6 +15321,21 @@ fn move_caption_content(caption: &NodeRef, figcaption: &NodeRef) {
     for child in caption.children().collect::<Vec<_>>() {
         figcaption.append(child);
     }
+}
+
+fn unique_caption_text(caption: &NodeRef) -> Option<String> {
+    let mut fragments = Vec::new();
+    collect_caption_text_fragments(caption, &mut fragments);
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+
+    for fragment in fragments {
+        if seen.insert(fragment.clone()) {
+            unique.push(fragment);
+        }
+    }
+
+    (!unique.is_empty()).then(|| unique.join(" "))
 }
 
 fn deduplicated_caption_text(caption: &NodeRef) -> Option<String> {
@@ -14696,13 +15486,7 @@ fn should_remove_small_img(node: &NodeRef, element: &ElementData) -> bool {
     if src.trim().is_empty() && !has_alt_src {
         return true;
     }
-    if !has_alt_src && is_placeholder_image_src(src) {
-        return true;
-    }
-    if !src.trim().is_empty()
-        && !is_valid_image_src(src)
-        && srcset.and_then(best_srcset_url).is_none()
-    {
+    if !has_alt_src && !has_ancestor_tag(node, &["picture"]) && is_placeholder_image_src(src) {
         return true;
     }
 
@@ -14795,42 +15579,101 @@ fn url_width_hint(url: &str) -> Option<usize> {
 }
 
 fn promote_noscript_images(document: &NodeRef) {
-    let Ok(matches) = document.select("noscript img") else {
-        promote_noscript_text_images(document);
-        return;
-    };
-    let images: Vec<NodeRef> = matches.map(|m| m.as_node().clone()).collect();
-    for image in images {
-        let Some(noscript) = image
-            .ancestors()
-            .find(|ancestor| tag_name(ancestor).as_deref() == Some("noscript"))
-        else {
-            continue;
-        };
-        noscript.insert_before(image);
-    }
-    promote_noscript_text_images(document);
-}
-
-fn promote_noscript_text_images(document: &NodeRef) {
     let Ok(matches) = document.select("noscript") else {
         return;
     };
-    let noscripts: Vec<NodeRef> = matches.map(|m| m.as_node().clone()).collect();
+    let noscripts = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
     for noscript in noscripts {
-        let html = noscript.text_contents();
-        if !html.contains("<img") {
-            continue;
-        }
-        let fragment = kuchiki::parse_html().one(format!("<html><body>{html}</body></html>"));
-        let Ok(images) = fragment.select("img") else {
+        let image = select_first_node(&noscript, "img").or_else(|| {
+            let html = noscript.text_contents();
+            if !html.contains("<img") {
+                return None;
+            }
+            let fragment = kuchiki::parse_html().one(format!("<html><body>{html}</body></html>"));
+            select_first_node(&fragment, "img")
+        });
+        let Some(image) = image else {
             continue;
         };
-        let images: Vec<NodeRef> = images.map(|m| m.as_node().clone()).collect();
-        for image in images {
+        let Some(real_src) = element_attr(&image, "src") else {
+            continue;
+        };
+        if real_src.is_empty() || real_src.starts_with("data:") {
+            continue;
+        }
+        let Some(parent) = noscript.parent() else {
+            continue;
+        };
+        let alt = element_attr(&image, "alt").filter(|alt| !alt.is_empty());
+        let srcset = element_attr(&image, "srcset");
+        let mut matched = false;
+        if let Some(alt) = alt.as_deref() {
+            for sibling in parent.children() {
+                if tag_name(&sibling).as_deref() != Some("img") {
+                    continue;
+                }
+                let Some(src) = element_attr(&sibling, "src") else {
+                    continue;
+                };
+                if !src.starts_with("data:")
+                    || element_attr(&sibling, "alt").as_deref() != Some(alt)
+                {
+                    continue;
+                }
+                if let Some(element) = sibling.as_element() {
+                    let mut attrs = element.attributes.borrow_mut();
+                    attrs.insert("src", real_src.clone());
+                    if let Some(srcset) = srcset.as_deref() {
+                        attrs.insert("srcset", srcset.to_string());
+                    }
+                }
+                matched = true;
+                break;
+            }
+        }
+        if matched || !is_noscript_lazy_image_context(&noscript) {
+            continue;
+        }
+        let container = noscript
+            .ancestors()
+            .find(|ancestor| tag_name(ancestor).as_deref() == Some("figure"))
+            .unwrap_or_else(|| parent.clone());
+        let has_real_image = container.select("img").ok().is_some_and(|mut images| {
+            images.any(|matched| {
+                let node = matched.as_node();
+                !has_ancestor_tag(node, &["noscript"])
+                    && element_attr(node, "src")
+                        .is_some_and(|src| !src.is_empty() && !src.starts_with("data:"))
+            })
+        });
+        if !has_real_image {
             noscript.insert_before(image);
         }
     }
+}
+
+fn is_noscript_lazy_image_context(noscript: &NodeRef) -> bool {
+    if has_ancestor_tag(noscript, &["figure"]) {
+        return true;
+    }
+    let Some(parent) = noscript.parent() else {
+        return false;
+    };
+    if parent.children().any(|sibling| {
+        sibling != *noscript
+            && element_attr(&sibling, "class")
+                .is_some_and(|class| class.to_ascii_lowercase().contains("lazy"))
+    }) {
+        return true;
+    }
+    element_attr(&parent, "class").is_some_and(|class| {
+        let class = class.to_ascii_lowercase();
+        ["image", "img", "picture", "photo", "media"]
+            .iter()
+            .any(|marker| class.contains(marker))
+    })
 }
 
 fn normalize_picture_images(document: &NodeRef) {
@@ -14840,7 +15683,7 @@ fn normalize_picture_images(document: &NodeRef) {
     let pictures: Vec<NodeRef> = matches.map(|m| m.as_node().clone()).collect();
     for picture in pictures {
         let best_srcset = best_picture_srcset(&picture);
-        let best_src = best_srcset.as_deref().and_then(best_srcset_url);
+        let best_src = best_srcset.as_deref().and_then(first_srcset_url);
         let Some(img) = select_first_node(&picture, "img") else {
             let Some(srcset) = best_srcset else {
                 continue;
@@ -14868,16 +15711,13 @@ fn normalize_picture_images(document: &NodeRef) {
                 attrs.insert("srcset", srcset);
             }
             if let Some(src) = best_src {
-                let current = attrs.get("src").unwrap_or_default();
-                if is_placeholder_image_src(current) || !is_valid_image_src(current) {
-                    attrs.insert("src", src);
-                }
+                attrs.insert("src", src);
             } else if attrs
                 .get("src")
                 .map(is_placeholder_image_src)
                 .unwrap_or(false)
             {
-                if let Some(src) = attrs.get("srcset").and_then(best_srcset_url) {
+                if let Some(src) = attrs.get("srcset").and_then(first_srcset_url) {
                     attrs.insert("src", src);
                 }
             }
@@ -14918,7 +15758,7 @@ fn image_from_source_node(source: &NodeRef) -> Option<NodeRef> {
     let source_attrs = source_element.attributes.borrow();
     let srcset = get_attr_case_insensitive(&source_attrs, "srcset")
         .or_else(|| get_attr_case_insensitive(&source_attrs, "data-srcset"))?;
-    let src = best_srcset_url(&srcset)?;
+    let src = first_srcset_url(&srcset)?;
     if !is_valid_image_src(&src) {
         return None;
     }
@@ -15094,13 +15934,6 @@ fn normalize_lazy_images(document: &NodeRef) {
         }
 
         let current_srcset = attrs.get("srcset").map(str::to_owned);
-        if let Some(src) = current_srcset
-            .as_deref()
-            .filter(|srcset| srcset_width(srcset).is_some())
-            .and_then(best_srcset_url)
-        {
-            attrs.insert("src", src);
-        }
         let current_src = attrs.get("src").unwrap_or_default().to_string();
 
         let replacement_src = first_existing_attr(
@@ -15116,7 +15949,7 @@ fn normalize_lazy_images(document: &NodeRef) {
             ],
         )
         .or_else(|| generic_image_src_attr(&attrs, &current_src))
-        .or_else(|| attrs.get("srcset").and_then(best_srcset_url))
+        .or_else(|| attrs.get("srcset").and_then(first_srcset_url))
         .filter(|src| is_valid_image_src(src));
 
         if let Some(src) = replacement_src {
@@ -15127,7 +15960,7 @@ fn normalize_lazy_images(document: &NodeRef) {
                 attrs.insert("src", src);
             }
         } else if current_src.is_empty() || is_placeholder_image_src(&current_src) {
-            if let Some(src) = current_srcset.as_deref().and_then(best_srcset_url) {
+            if let Some(src) = current_srcset.as_deref().and_then(first_srcset_url) {
                 attrs.insert("src", src);
             }
         }
@@ -15714,7 +16547,17 @@ fn normalized_cover_image_key(url: &str) -> String {
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
-    url.split('?').next().unwrap_or(url).to_string()
+    normalize_cdn_image_transform_url(url.split('?').next().unwrap_or(url))
+}
+
+fn normalize_cdn_image_transform_url(url: &str) -> String {
+    static CDN_WIDTH_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r",w_\d+").unwrap());
+    static CDN_HEIGHT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r",h_\d+").unwrap());
+    static CDN_CROP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r",c_\w+").unwrap());
+
+    let url = CDN_WIDTH_RE.replace_all(url, "");
+    let url = CDN_HEIGHT_RE.replace_all(&url, "");
+    CDN_CROP_RE.replace_all(&url, "").into_owned()
 }
 
 fn largest_image_src(image: &NodeRef) -> Option<String> {
@@ -15729,9 +16572,6 @@ fn largest_image_src(image: &NodeRef) -> Option<String> {
         return fallback;
     };
 
-    static CDN_WIDTH_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r",w_\d+").unwrap());
-    static CDN_CROP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r",c_\w+").unwrap());
-
     let mut best_url = None;
     let mut best_width = 0.0f64;
     for (url, width) in srcset_width_candidates(srcset) {
@@ -15741,10 +16581,9 @@ fn largest_image_src(image: &NodeRef) -> Option<String> {
         }
     }
 
-    best_url.or(fallback).map(|url| {
-        let url = CDN_WIDTH_RE.replace_all(&url, "");
-        CDN_CROP_RE.replace_all(&url, "").into_owned()
-    })
+    best_url
+        .or(fallback)
+        .map(|url| normalize_cdn_image_transform_url(&url))
 }
 
 fn resolve_relative_urls(document: &NodeRef, base_url: &str) {
@@ -15787,6 +16626,9 @@ fn remove_orphan_headings(document: &NodeRef) {
     let nodes: Vec<NodeRef> = matches
         .filter_map(|heading| {
             let node = heading.as_node();
+            if has_ancestor_matching(node, is_content_media_heading_header_node) {
+                return None;
+            }
             (!heading_has_following_content(node)).then(|| node.clone())
         })
         .collect();
@@ -16096,7 +16938,7 @@ fn media_has_playable_source(media: &NodeRef) -> bool {
 }
 
 fn remove_timezone_widgets(main: &NodeRef, debug_removals: &mut Option<&mut Vec<DebugRemoval>>) {
-    let Ok(matches) = main.select("p, span, div, time") else {
+    let Ok(matches) = main.select("p, span, div, time, h1, h2, h3, h4, h5, h6") else {
         return;
     };
     let nodes = matches
@@ -16300,6 +17142,9 @@ fn remove_see_also_sections(main: &NodeRef, debug_removals: &mut Option<&mut Vec
         }
         let level = heading_level(&heading).unwrap_or(6);
         let target = heading_only_wrapper(&heading).unwrap_or_else(|| heading.clone());
+        if target == heading {
+            continue;
+        }
         let mut to_remove = vec![target.clone()];
         for sibling in target.following_siblings() {
             if heading_level_in_subtree(&sibling).is_some_and(|next| next <= level) {
@@ -16312,6 +17157,7 @@ fn remove_see_also_sections(main: &NodeRef, debug_removals: &mut Option<&mut Vec
                 to_remove.push(sibling);
             }
         }
+        remove_duplicate_citation_paragraph_before(&target, main, debug_removals);
         for node in to_remove {
             detach_content_pattern(debug_removals, "see also section", &node);
         }
@@ -16340,10 +17186,61 @@ fn remove_trailing_heading_sections(
         let Some(nodes) = trailing_heading_section_nodes(&heading) else {
             continue;
         };
+        if is_see_also_heading(&heading) && section_link_count(&nodes) >= 3 {
+            continue;
+        }
         for node in nodes {
             detach_content_pattern(debug_removals, "trailing heading section", &node);
         }
     }
+}
+
+fn section_link_count(nodes: &[NodeRef]) -> usize {
+    nodes
+        .iter()
+        .map(|node| count_selector(node, "a[href]"))
+        .sum()
+}
+
+fn remove_duplicate_citation_paragraph_before(
+    target: &NodeRef,
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let Some(prev) = previous_element_sibling(target) else {
+        return;
+    };
+    if !matches!(tag_name(&prev).as_deref(), Some("p")) {
+        return;
+    }
+    if count_words(&prev.text_contents()) > 80 {
+        return;
+    }
+    let refs = citation_fragments(&prev);
+    if refs.is_empty() {
+        return;
+    }
+
+    let mut earlier_refs = HashSet::new();
+    for descendant in main.descendants() {
+        if descendant == prev {
+            break;
+        }
+        earlier_refs.extend(citation_fragments(&descendant));
+    }
+
+    if refs.iter().all(|fragment| earlier_refs.contains(fragment)) {
+        detach_content_pattern(debug_removals, "duplicate citation paragraph", &prev);
+    }
+}
+
+fn citation_fragments(node: &NodeRef) -> Vec<String> {
+    href_fragments(node)
+        .into_iter()
+        .filter(|fragment| {
+            looks_like_footnote_reference_target(fragment) || fragment.starts_with("cite_note-")
+        })
+        .collect()
 }
 
 fn trailing_heading_section_nodes(heading: &NodeRef) -> Option<Vec<NodeRef>> {
@@ -16613,6 +17510,9 @@ fn remove_trailing_thin_sections(
     if trailing.iter().any(has_article_content_element) {
         return;
     }
+    if is_mediawiki_content_node(main) && trailing.iter().any(contains_external_links_heading) {
+        return;
+    }
     let prose_paragraphs = trailing
         .iter()
         .map(|node| {
@@ -16832,7 +17732,7 @@ fn remove_standalone_date_metadata(
     main: &NodeRef,
     debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
 ) {
-    let Ok(matches) = main.select("p, span, div, time") else {
+    let Ok(matches) = main.select("p, span, div, time, h1, h2, h3, h4, h5, h6") else {
         return;
     };
     let candidates = matches
@@ -16843,7 +17743,7 @@ fn remove_standalone_date_metadata(
         if node.parent().is_none()
             || is_inside_pre_or_code(&node)
             || is_email_header_metadata_node(&node)
-            || !is_before_substantive_content_start(main, &node)
+            || !is_heading_node(&node) && !is_before_substantive_content_start(main, &node)
         {
             continue;
         }
@@ -17321,6 +18221,9 @@ fn remove_trailing_external_link_lists(
         if !is_external_link_list(&list, &page, &page_host) {
             continue;
         }
+        if is_wikipedia_domain(&page_host) && is_external_links_heading(&heading) {
+            continue;
+        }
 
         detach_content_pattern(debug_removals, "trailing external link list", &heading);
         if list.parent().is_some() {
@@ -17488,6 +18391,16 @@ fn remove_trailing_non_content(
     main: &NodeRef,
     debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
 ) {
+    if let Ok(matches) = main.select("table") {
+        let separator_tables = matches
+            .map(|matched| matched.as_node().clone())
+            .filter(is_trailing_separator_layout_table)
+            .collect::<Vec<_>>();
+        for table in separator_tables {
+            detach_content_pattern(debug_removals, "trailing non-content", &table);
+        }
+    }
+
     loop {
         if !trim_trailing_non_content_deep(main, debug_removals) {
             return;
@@ -17513,7 +18426,15 @@ fn trim_trailing_non_content_deep(
         let Some(last) = children.last().cloned() else {
             break;
         };
-        if is_ignorable_tail_node(&last) || is_trailing_non_content_node(&last) {
+        if is_mediawiki_external_links_list(&last) {
+            break;
+        }
+        if is_trailing_separator_node(&last)
+            || is_trailing_separator_wrapper_node(&last)
+            || is_trailing_separator_layout_table(&last)
+            || is_ignorable_tail_node(&last)
+            || is_trailing_non_content_node(&last)
+        {
             detach_content_pattern(debug_removals, "trailing non-content", &last);
             changed = true;
         } else {
@@ -17522,6 +18443,56 @@ fn trim_trailing_non_content_deep(
     }
 
     changed
+}
+
+fn is_trailing_separator_node(node: &NodeRef) -> bool {
+    if tag_name(node).as_deref() != Some("hr") {
+        return false;
+    }
+    node.parent()
+        .map(|parent| element_children(&parent).len() > 1)
+        .unwrap_or(true)
+}
+
+fn is_trailing_separator_wrapper_node(node: &NodeRef) -> bool {
+    if !normalize_ws(&node.text_contents()).is_empty() {
+        return false;
+    }
+    let children = element_children(node);
+    !children.is_empty()
+        && children
+            .iter()
+            .all(|child| matches!(tag_name(child).as_deref(), Some("br" | "hr")))
+        && children
+            .iter()
+            .any(|child| tag_name(child).as_deref() == Some("hr"))
+}
+
+fn is_trailing_separator_layout_table(node: &NodeRef) -> bool {
+    if tag_name(node).as_deref() != Some("table")
+        || !normalize_ws(&node.text_contents()).is_empty()
+        || count_selector(node, "hr") == 0
+    {
+        return false;
+    }
+    node.descendants().all(|descendant| {
+        descendant.as_element().is_none()
+            || matches!(
+                tag_name(&descendant).as_deref(),
+                Some(
+                    "table"
+                        | "thead"
+                        | "tbody"
+                        | "tfoot"
+                        | "tr"
+                        | "td"
+                        | "th"
+                        | "font"
+                        | "br"
+                        | "hr"
+                )
+            )
+    })
 }
 
 fn is_tail_trim_container(node: &NodeRef) -> bool {
@@ -17588,6 +18559,12 @@ fn is_live_blog_status_label(node: &NodeRef) -> bool {
 fn is_social_counter_node(node: &NodeRef) -> bool {
     let text = normalize_ws(&node.text_contents());
     if text.is_empty() || count_words(&text) > 3 {
+        return false;
+    }
+    if tag_name(node).as_deref() == Some("a")
+        && text.to_ascii_lowercase().contains("comment")
+        && element_attr(node, "href").is_some_and(|href| href.contains("/comments/"))
+    {
         return false;
     }
     if count_selector(
@@ -17671,6 +18648,9 @@ fn is_pre_content_metadata_node(node: &NodeRef, metadata: &Metadata) -> bool {
     if is_email_header_metadata_node(node) {
         return false;
     }
+    if words > 15 {
+        return false;
+    }
 
     if !metadata.author.is_empty() && normalize_ws(&metadata.author) == text {
         return true;
@@ -17699,10 +18679,6 @@ fn is_pre_content_metadata_node(node: &NodeRef, metadata: &Metadata) -> bool {
     if is_pre_content_subtitle_node(node, words) {
         return true;
     }
-    if words > 15 {
-        return false;
-    }
-
     if is_standalone_date(&text) || is_read_time(&text) {
         return true;
     }
@@ -17910,8 +18886,9 @@ fn is_standalone_date(text: &str) -> bool {
     if !CONTENT_DATE_RE.is_match(text) {
         return false;
     }
-    let residual = CONTENT_DATE_RE
-        .replace_all(text, "")
+    let residual = CONTENT_DATE_RE.replace_all(text, "");
+    let residual = WEEKDAY_RE
+        .replace_all(&residual, " ")
         .replace(['/', '|', '·', '•', '—', '–', '-', ',', ':', '.'], " ");
     residual.split_whitespace().next().is_none()
 }
@@ -17927,8 +18904,8 @@ fn is_read_time(text: &str) -> bool {
 }
 
 fn is_ignorable_tail_node(node: &NodeRef) -> bool {
-    if tag_name(node).as_deref() == Some("hr") {
-        return true;
+    if tag_name(node).as_deref() == Some("hr") || count_selector(node, "hr") > 0 {
+        return false;
     }
     count_words(&node.text_contents()) == 0
         && count_selector(node, "img, picture, video, audio, iframe, table, pre, code") == 0
@@ -17937,6 +18914,9 @@ fn is_ignorable_tail_node(node: &NodeRef) -> bool {
 
 fn is_trailing_non_content_node(node: &NodeRef) -> bool {
     if has_class_token(node, "seealso") {
+        return false;
+    }
+    if tag_name(node).as_deref() == Some("hr") || count_selector(node, "hr") > 0 {
         return false;
     }
     let text = normalize_ws(&node.text_contents());
@@ -18968,6 +19948,9 @@ fn math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
     }
 
     if tag == "math" {
+        if let Some(latex) = data_latex.clone() {
+            return MathInfo::new(latex, is_block);
+        }
         if let Some(latex) =
             select_first_text_raw(node, "annotation[encoding=\"application/x-tex\"]").or(alt)
         {
@@ -18976,7 +19959,6 @@ fn math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
         return has_mathml_element_children(node)
             .then(|| mathml_to_latex(node))
             .flatten()
-            .or(data_latex)
             .or_else(|| Some(node.text_contents()))
             .and_then(|latex| MathInfo::new(latex, is_block));
     }
@@ -19009,6 +19991,51 @@ fn math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
     None
 }
 
+fn markdown_math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
+    let tag = element.name.local.as_ref();
+    if tag != "math" {
+        return math_info(node, element);
+    }
+
+    let attrs = element.attributes.borrow();
+    let type_attr = attrs.get("type").map(str::to_owned);
+    let display_attr = attrs.get("display").map(str::to_owned);
+    let data_display = attrs.get("data-display").map(str::to_owned);
+    let class = attrs.get("class").unwrap_or_default().to_string();
+    let alt = attrs
+        .get("alt")
+        .or_else(|| attrs.get("alttext"))
+        .map(str::to_owned);
+    let data_latex = ["data-latex", "data-math", "data-tex"]
+        .into_iter()
+        .find_map(|name| attrs.get(name).map(str::to_owned));
+    drop(attrs);
+
+    let is_block = is_block_math_display(
+        tag,
+        type_attr.as_deref(),
+        display_attr.as_deref(),
+        data_display.as_deref(),
+        &class,
+        node,
+    );
+
+    if let Some(latex) =
+        select_first_text_raw(node, "annotation[encoding=\"application/x-tex\"]").or(alt)
+    {
+        return MathInfo::new(latex, is_block);
+    }
+    if let Some(latex) = has_mathml_element_children(node)
+        .then(|| mathml_to_latex(node))
+        .flatten()
+    {
+        return MathInfo::new(latex, is_block);
+    }
+    data_latex
+        .or_else(|| Some(node.text_contents()))
+        .and_then(|latex| MathInfo::new(latex, is_block))
+}
+
 fn is_math_script_type(type_attr: &str) -> bool {
     type_attr.trim().to_ascii_lowercase().starts_with("math/")
 }
@@ -19035,6 +20062,7 @@ fn has_mathml_element_children(node: &NodeRef) -> bool {
                     | "mn"
                     | "mo"
                     | "mtext"
+                    | "mspace"
                     | "msub"
                     | "msup"
                     | "msubsup"
@@ -19073,7 +20101,8 @@ fn render_mathml_node(node: &NodeRef) -> Option<String> {
                 "mi" => Some(render_mathml_identifier(node, element)),
                 "mn" => Some(normalize_ws(&node.text_contents())),
                 "mo" => Some(mathml_operator_to_latex(&node.text_contents())),
-                "mtext" => Some(mathml_text_to_latex(&node.text_contents())),
+                "mtext" => Some(render_mathml_text(node, element)),
+                "mspace" => Some(render_mathml_space(element)),
                 "msub" => render_mathml_script(node, "_"),
                 "msup" => render_mathml_script(node, "^"),
                 "msubsup" => render_mathml_subsup(node),
@@ -19094,12 +20123,122 @@ fn render_mathml_node(node: &NodeRef) -> Option<String> {
 }
 
 fn render_mathml_children(node: &NodeRef) -> Option<String> {
-    let parts = node
-        .children()
-        .filter_map(|child| render_mathml_node(&child))
-        .filter(|part| !part.trim().is_empty())
-        .collect::<Vec<_>>();
+    let children = mathml_element_children(node);
+    let parts = render_mathml_sequence(&children);
     (!parts.is_empty()).then(|| join_mathml_parts(&parts))
+}
+
+fn render_mathml_sequence(children: &[NodeRef]) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut index = 0;
+    while index < children.len() {
+        if let Some(open) = mathml_open_fence(&children[index]) {
+            if let Some(close_index) = find_matching_mathml_fence(children, index, &open) {
+                let close = mathml_fence_value(&children[close_index]).unwrap_or_default();
+                if let Some(fenced) =
+                    render_mathml_fenced(&open, &close, &children[index + 1..close_index])
+                {
+                    parts.push(fenced);
+                }
+                index = close_index + 1;
+                continue;
+            }
+        }
+        if let Some(part) = render_mathml_node(&children[index]) {
+            parts.push(part);
+        }
+        index += 1;
+    }
+    parts
+}
+
+fn mathml_fence_value(node: &NodeRef) -> Option<String> {
+    (tag_name(node).as_deref() == Some("mo")).then(|| normalize_ws(&node.text_contents()))
+}
+
+fn mathml_open_fence(node: &NodeRef) -> Option<String> {
+    let value = mathml_fence_value(node)?;
+    matches!(value.as_str(), "(" | "[" | "{" | "|" | "||" | "‖").then_some(value)
+}
+
+fn is_mathml_directional_open(value: &str) -> bool {
+    matches!(value, "(" | "[" | "{")
+}
+
+fn is_mathml_directional_close(value: &str) -> bool {
+    matches!(value, ")" | "]" | "}")
+}
+
+fn is_mathml_bar(value: &str) -> bool {
+    matches!(value, "|" | "||" | "‖")
+}
+
+fn find_matching_mathml_fence(
+    children: &[NodeRef],
+    open_index: usize,
+    open: &str,
+) -> Option<usize> {
+    let mut stack = vec![open.to_string()];
+    for (index, child) in children.iter().enumerate().skip(open_index + 1) {
+        let Some(value) = mathml_fence_value(child) else {
+            continue;
+        };
+        let top = stack.last().map(String::as_str);
+        if is_mathml_bar(&value) {
+            if top.is_some_and(|top| is_mathml_bar(top) && top == value) {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(index);
+                }
+            } else {
+                stack.push(value);
+            }
+        } else if is_mathml_directional_open(&value) {
+            stack.push(value);
+        } else if is_mathml_directional_close(&value) && top.is_some_and(is_mathml_directional_open)
+        {
+            stack.pop();
+            if stack.is_empty() {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn render_mathml_fenced(open: &str, close: &str, children: &[NodeRef]) -> Option<String> {
+    if children.len() == 1 && tag_name(&children[0]).as_deref() == Some("mtable") {
+        let rows = render_mathml_table_rows(&children[0])?;
+        let environment = match (open, close) {
+            ("(", ")") => Some("pmatrix"),
+            ("[", "]") => Some("bmatrix"),
+            ("{", "}") => Some("Bmatrix"),
+            ("|", "|") => Some("vmatrix"),
+            ("||" | "‖", "||" | "‖") => Some("Vmatrix"),
+            _ => None,
+        };
+        if let Some(environment) = environment {
+            return Some(format!(
+                "\\begin{{{environment}}} {rows} \\end{{{environment}}}"
+            ));
+        }
+    }
+
+    let content = join_mathml_parts(&render_mathml_sequence(children));
+    Some(format!(
+        "\\left{}{}\\right{}",
+        mathml_latex_delimiter(open),
+        content,
+        mathml_latex_delimiter(close)
+    ))
+}
+
+fn mathml_latex_delimiter(value: &str) -> String {
+    match value {
+        "{" | "}" => format!("\\{value}"),
+        "||" | "‖" => "\\|".to_string(),
+        _ => value.to_string(),
+    }
 }
 
 fn render_mathml_script(node: &NodeRef, marker: &str) -> Option<String> {
@@ -19121,7 +20260,80 @@ fn render_mathml_fraction(node: &NodeRef) -> Option<String> {
     let children = mathml_element_children(node);
     let numerator = children.first().and_then(render_mathml_node)?;
     let denominator = children.get(1).and_then(render_mathml_node)?;
+    let attrs = node.as_element()?.attributes.borrow();
+    if attrs.get("bevelled").is_some() {
+        return Some(format!(
+            "{}/{}",
+            wrap_long_mathml_fraction_part(&numerator),
+            wrap_long_mathml_fraction_part(&denominator)
+        ));
+    }
+    if let Some(thickness) = attrs
+        .get("linethickness")
+        .and_then(mathml_line_thickness_to_latex)
+    {
+        return Some(format!(
+            "\\genfrac{{}}{{}}{{{thickness}}}{{}}{{{numerator}}}{{{denominator}}}"
+        ));
+    }
     Some(format!("\\frac{{{numerator}}}{{{denominator}}}"))
+}
+
+fn wrap_long_mathml_fraction_part(value: &str) -> String {
+    if value.chars().count() <= 1 {
+        value.to_string()
+    } else {
+        format!("\\left({value}\\right)")
+    }
+}
+
+fn mathml_line_thickness_to_latex(raw: &str) -> Option<String> {
+    static LINE_THICKNESS_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(-?\d*\.?\d+)\s*([a-z%]*)$").unwrap());
+    let value = raw.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "" | "medium" => return None,
+        "thin" => return Some("0.2pt".to_string()),
+        "thick" => return Some("0.8pt".to_string()),
+        _ => {}
+    }
+    let captures = LINE_THICKNESS_RE.captures(&value)?;
+    let amount = captures.get(1)?.as_str().parse::<f64>().ok()?;
+    let unit = captures
+        .get(2)
+        .map(|capture| capture.as_str())
+        .unwrap_or("");
+    if amount == 0.0 {
+        return Some("0pt".to_string());
+    }
+    match unit {
+        "" if amount == 1.0 => None,
+        "" => Some(format_mathml_points(amount * 0.4)),
+        "px" => Some(format_mathml_points(amount * 0.75)),
+        "%" => Some(format_mathml_points((amount / 100.0) * 0.4)),
+        "pt" | "pc" | "in" | "cm" | "mm" | "em" | "ex" | "bp" | "dd" | "cc" => {
+            Some(format!("{}{unit}", format_mathml_number(amount)))
+        }
+        _ => None,
+    }
+}
+
+fn format_mathml_points(value: f64) -> String {
+    format!(
+        "{}pt",
+        format_mathml_number((value * 10_000.0).round() / 10_000.0)
+    )
+}
+
+fn format_mathml_number(value: f64) -> String {
+    let mut value = format!("{value:.4}");
+    while value.ends_with('0') {
+        value.pop();
+    }
+    if value.ends_with('.') {
+        value.pop();
+    }
+    value
 }
 
 fn render_mathml_root(node: &NodeRef, index: Option<String>) -> Option<String> {
@@ -19196,6 +20408,19 @@ fn mathml_accent_to_latex(value: &str) -> String {
 }
 
 fn render_mathml_table(node: &NodeRef) -> Option<String> {
+    let rendered_rows = render_mathml_table_rows(node)?;
+    let row_count = mathml_element_children(node)
+        .into_iter()
+        .filter(|row| matches!(tag_name(row).as_deref(), Some("mtr" | "mlabeledtr")))
+        .count();
+    Some(if row_count > 1 {
+        format!("\\begin{{aligned}}{rendered_rows}\\end{{aligned}}")
+    } else {
+        rendered_rows
+    })
+}
+
+fn render_mathml_table_rows(node: &NodeRef) -> Option<String> {
     let rows = mathml_element_children(node)
         .into_iter()
         .filter(|row| matches!(tag_name(row).as_deref(), Some("mtr" | "mlabeledtr")))
@@ -19216,16 +20441,7 @@ fn render_mathml_table(node: &NodeRef) -> Option<String> {
         .iter()
         .filter_map(|row| render_mathml_row(row).map(|cells| cells.join(" & ")))
         .collect::<Vec<_>>();
-    (!rendered_rows.is_empty()).then(|| {
-        if rendered_rows.len() > 1 {
-            format!(
-                "\\begin{{aligned}}{}\\end{{aligned}}",
-                rendered_rows.join(" \\\\ ")
-            )
-        } else {
-            rendered_rows.join(" ")
-        }
-    })
+    (!rendered_rows.is_empty()).then(|| rendered_rows.join(" \\\\ "))
 }
 
 fn render_mathml_row(node: &NodeRef) -> Option<Vec<String>> {
@@ -19275,16 +20491,110 @@ fn mathml_operator_to_latex(text: &str) -> String {
     mathml_symbol_to_latex(&text).unwrap_or(text)
 }
 
-fn mathml_text_to_latex(text: &str) -> String {
+fn mjx_operator_to_latex(text: &str) -> String {
     let text = normalize_ws(text);
     match text.as_str() {
-        "(" | ")" | "[" | "]" | "{" | "}" => text,
-        _ => format!(
-            "\\text{{{}}}",
-            text.replace('\\', "\\textbackslash{}")
-                .replace('{', "\\{")
-                .replace('}', "\\}")
-        ),
+        "|" | "∣" => "\\lvert".to_string(),
+        "(" => "\\left(".to_string(),
+        ")" => "\\right)".to_string(),
+        "[" => "\\left[".to_string(),
+        "]" => "\\right]".to_string(),
+        "{" => "\\left\\{".to_string(),
+        "}" => "\\right\\}".to_string(),
+        _ => mathml_symbol_to_latex(&text).unwrap_or(text),
+    }
+}
+
+fn render_mathml_text(node: &NodeRef, element: &ElementData) -> String {
+    let mut normalized = String::new();
+    let mut previous_was_whitespace = false;
+    for ch in node.text_contents().replace('\u{feff}', "").chars() {
+        if ch.is_whitespace() {
+            if !previous_was_whitespace {
+                normalized.push(' ');
+            }
+            previous_was_whitespace = true;
+        } else {
+            normalized.push(ch);
+            previous_was_whitespace = false;
+        }
+    }
+    let compact = normalize_ws(&normalized);
+    if matches!(compact.as_str(), "(" | ")" | "[" | "]" | "{" | "}") {
+        return compact;
+    }
+
+    let mathvariant = element
+        .attributes
+        .borrow()
+        .get("mathvariant")
+        .unwrap_or_default()
+        .to_string();
+    let mut output = String::new();
+    let mut text_run = String::new();
+    for ch in normalized.chars() {
+        if ch.is_ascii_alphanumeric() || ch == ' ' {
+            text_run.push(ch);
+            continue;
+        }
+        if !text_run.is_empty() {
+            output.push_str(&wrap_mathml_text_run(&text_run, &mathvariant));
+            text_run.clear();
+        }
+        output.push_str(&mathml_identifier_to_latex(&ch.to_string()));
+    }
+    if !text_run.is_empty() {
+        output.push_str(&wrap_mathml_text_run(&text_run, &mathvariant));
+    }
+    output
+}
+
+fn mathml_text_to_latex(text: &str) -> String {
+    let normalized = normalize_ws(text);
+    if matches!(normalized.as_str(), "(" | ")" | "[" | "]" | "{" | "}") {
+        return normalized;
+    }
+    let mut output = String::new();
+    let mut text_run = String::new();
+    for ch in normalized.chars() {
+        if ch.is_ascii_alphanumeric() || ch == ' ' {
+            text_run.push(ch);
+            continue;
+        }
+        if !text_run.is_empty() {
+            output.push_str(&wrap_mathml_text_run(&text_run, ""));
+            text_run.clear();
+        }
+        output.push_str(&mathml_identifier_to_latex(&ch.to_string()));
+    }
+    if !text_run.is_empty() {
+        output.push_str(&wrap_mathml_text_run(&text_run, ""));
+    }
+    output
+}
+
+fn wrap_mathml_text_run(value: &str, mathvariant: &str) -> String {
+    match mathvariant.to_ascii_lowercase().as_str() {
+        "bold" => format!("\\textbf{{{value}}}"),
+        "italic" => format!("\\textit{{{value}}}"),
+        "bold-italic" => format!("\\textbf{{\\textit{{{value}}}}}"),
+        "double-struck" => format!("\\mathbb{{{value}}}"),
+        "monospace" => format!("\\mathtt{{{value}}}"),
+        "bold-fraktur" | "fraktur" => format!("\\mathfrak{{{value}}}"),
+        _ => format!("\\text{{{value}}}"),
+    }
+}
+
+fn render_mathml_space(element: &ElementData) -> String {
+    if element
+        .attributes
+        .borrow()
+        .get("linebreak")
+        .is_some_and(|value| value.eq_ignore_ascii_case("newline"))
+    {
+        " \\\\ ".to_string()
+    } else {
+        " ".to_string()
     }
 }
 
@@ -19325,9 +20635,14 @@ fn mathml_symbol_to_latex(symbol: &str) -> Option<String> {
         "⋆" | "★" => "\\star",
         "⟨" => "\\langle",
         "⟩" => "\\rangle",
-        "|" | "∣" => "\\lvert",
-        "(" => "\\left(",
-        ")" => "\\right)",
+        "|" => "\\left|\\right.",
+        "∣" => "\\mid",
+        "(" => "\\left(\\right.",
+        ")" => "\\left.\\right)",
+        "[" => "\\left[\\right.",
+        "]" => "\\left]\\right.",
+        "{" => "\\left\\{\\right.",
+        "}" => "\\left.\\right\\}",
         _ => return None,
     };
     Some(latex.to_string())
@@ -19400,7 +20715,7 @@ fn render_mjx_node(node: &NodeRef) -> Vec<String> {
             .into_iter()
             .collect(),
         "mo" => normalized_mjx_text(&node.text_contents())
-            .map(|text| mathml_operator_to_latex(&text))
+            .map(|text| mjx_operator_to_latex(&text))
             .filter(|text| !text.is_empty())
             .into_iter()
             .collect(),
@@ -19731,8 +21046,32 @@ fn is_block_math_display(
             || part == "math-block"
             || part == "mwe-math-fallback-image-display"
             || part == "mwe-math-mathml-display"
+            || part.contains("display")
+            || part.contains("block")
     }) {
         return true;
+    }
+    if previous_element_sibling(node).is_some_and(|prev| tag_name(&prev).as_deref() == Some("p")) {
+        return true;
+    }
+    if node.ancestors().any(|ancestor| {
+        let attrs = ancestor
+            .as_element()
+            .map(element_attr_string)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        attrs.contains("katex-display")
+            || attrs.contains("mathjax_display")
+            || element_attr(&ancestor, "data-display")
+                .is_some_and(|value| value.eq_ignore_ascii_case("block"))
+    }) {
+        return true;
+    }
+    if class
+        .split_whitespace()
+        .any(|part| part.eq_ignore_ascii_case("mwe-math-element"))
+    {
+        return false;
     }
     count_selector(
         node,
@@ -19957,7 +21296,7 @@ fn is_heading_node(node: &NodeRef) -> bool {
 
 fn find_main_content(document: &NodeRef) -> Option<NodeRef> {
     let mut seen = HashSet::new();
-    let mut best: Option<(NodeRef, f64, usize)> = None;
+    let mut candidates = Vec::new();
 
     for (idx, selector) in ENTRY_POINT_SELECTORS.iter().enumerate() {
         let Ok(matches) = document.select(selector) else {
@@ -19974,17 +21313,96 @@ fn find_main_content(document: &NodeRef) -> Option<NodeRef> {
             }
             let base = ((ENTRY_POINT_SELECTORS.len() - idx) * 40) as f64;
             let score = base + score_element(&node);
-            if best
-                .as_ref()
-                .map(|(_, best_score, _)| score > *best_score)
-                .unwrap_or(true)
-            {
-                best = Some((node, score, idx));
-            }
+            candidates.push((node, score, idx));
         }
     }
 
-    best.map(|(node, _, _)| node)
+    candidates.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let top = candidates.first()?.clone();
+    let mut best = top.clone();
+
+    // A broad parent can outscore its actual article because of sibling noise.
+    // Match Defuddle by preferring one substantial, higher-priority child.
+    for child in candidates.iter().skip(1) {
+        let child_words = count_words(&child.0.text_contents());
+        if child.2 >= best.2 || !is_descendant_of(&child.0, &best.0) || child_words <= 50 {
+            continue;
+        }
+
+        let siblings_at_index = candidates
+            .iter()
+            .filter(|candidate| candidate.2 == child.2 && is_descendant_of(&candidate.0, &top.0))
+            .take(2)
+            .count();
+        if siblings_at_index > 1 {
+            continue;
+        }
+        best = child.clone();
+    }
+
+    Some(expand_article_head_body_main(&best.0).unwrap_or(best.0))
+}
+
+fn expand_article_head_body_main(node: &NodeRef) -> Option<NodeRef> {
+    let selected_words = count_words(&node.text_contents());
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if is_html_or_body_node(&ancestor) {
+            break;
+        }
+
+        let children = element_children(&ancestor);
+        let has_body_child = children.iter().any(|child| {
+            is_article_body_region(child) && (node == child || is_descendant_of(node, child))
+        });
+        if has_body_child {
+            let header = children
+                .iter()
+                .find(|child| is_article_header_region(child) && article_header_has_content(child));
+            if header.is_some() {
+                let extra_words =
+                    count_words(&ancestor.text_contents()).saturating_sub(selected_words);
+                if extra_words <= 40 {
+                    return Some(ancestor);
+                }
+            }
+        }
+
+        current = ancestor.parent();
+    }
+    None
+}
+
+fn is_article_header_region(node: &NodeRef) -> bool {
+    let Some(tag) = tag_name(node) else {
+        return false;
+    };
+    if tag == "header" {
+        return true;
+    }
+    element_attr(node, "class").is_some_and(|class| {
+        let class = class.to_ascii_lowercase();
+        class.contains("article-head") || class.contains("article-header")
+    })
+}
+
+fn is_article_body_region(node: &NodeRef) -> bool {
+    element_attr(node, "class").is_some_and(|class| {
+        let class = class.to_ascii_lowercase();
+        class.contains("article-body")
+            || class.contains("article-content")
+            || class.contains("post-body")
+            || class.contains("post-content")
+    })
+}
+
+fn article_header_has_content(node: &NodeRef) -> bool {
+    count_selector(node, "h1, h2, h3") > 0 && count_selector(node, "img, picture, figure") > 0
 }
 
 fn select_configured_main_content(document: &NodeRef, selector: Option<&str>) -> Option<NodeRef> {
@@ -20307,7 +21725,7 @@ impl MarkdownRenderer {
     }
 
     fn render_element(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
-        if let Some(math) = math_info(node, element) {
+        if let Some(math) = markdown_math_info(node, element) {
             self.render_math(node, math);
             return;
         }
@@ -21285,6 +22703,7 @@ struct FootnoteState {
     numbers: HashSet<usize>,
     definition_nodes: HashSet<usize>,
     noise_nodes: HashSet<usize>,
+    preserve_separator_before_definitions: bool,
 }
 
 #[derive(Debug)]
@@ -21327,6 +22746,7 @@ impl Default for RenderOptions {
 struct OrgRenderer<'a> {
     out: String,
     list_depth: usize,
+    suppress_next_space: bool,
     footnotes: &'a FootnoteState,
     options: RenderOptions,
     rendering_footnote_defs: bool,
@@ -21337,6 +22757,7 @@ impl<'a> OrgRenderer<'a> {
         Self {
             out: String::new(),
             list_depth: 0,
+            suppress_next_space: false,
             footnotes,
             options,
             rendering_footnote_defs: false,
@@ -21349,7 +22770,23 @@ impl<'a> OrgRenderer<'a> {
         }
         match node.data() {
             NodeData::Text(text) => self.push_text(&text.borrow()),
-            NodeData::Element(element) => self.render_element(node, element, inline),
+            NodeData::Element(element) => {
+                let before = self.out.len();
+                self.render_element(node, element, inline);
+                if inline
+                    && element.name.local.as_ref() == "span"
+                    && element_children(node).is_empty()
+                    && self.out.len() > before
+                    && !node
+                        .text_contents()
+                        .chars()
+                        .last()
+                        .is_some_and(char::is_whitespace)
+                    && next_sibling_starts_without_whitespace(node)
+                {
+                    self.suppress_next_space = true;
+                }
+            }
             _ => {
                 for child in node.children() {
                     self.render_node(&child, inline);
@@ -21383,9 +22820,13 @@ impl<'a> OrgRenderer<'a> {
 
         let tag = element.name.local.as_ref();
         match tag {
+            "script" | "style" | "noscript" | "template" => {}
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = tag[1..].parse::<usize>().unwrap_or(2).max(1);
                 let text = cleanup_inline(&node.text_contents());
+                if self.options.standardize && is_standalone_date(&text) {
+                    return;
+                }
                 if !text.is_empty() {
                     self.ensure_blank_line();
                     self.out.push_str(&"*".repeat(level));
@@ -21410,7 +22851,7 @@ impl<'a> OrgRenderer<'a> {
             "a" if !inline && self.options.standardize && link_has_block_children(node) => {
                 self.render_block_link_container(node, element)
             }
-            "a" => self.render_link(node, element),
+            "a" => self.render_link(node, element, inline),
             "img" => self.render_image(element),
             "figure" => self.render_figure(node),
             "figcaption" => self.render_block_children(node),
@@ -21434,6 +22875,9 @@ impl<'a> OrgRenderer<'a> {
             }
             "li" => self.render_list_item(node),
             "blockquote" => self.render_quote(node),
+            "cite" if self.options.standardize && has_class(element, "ltx_cite") => {
+                self.render_arxiv_citation(node)
+            }
             _ if !inline
                 && self.options.standardize
                 && is_lean_verso_example_container(node, element) =>
@@ -21459,6 +22903,9 @@ impl<'a> OrgRenderer<'a> {
             "samp" => self.render_inline_code_node(node),
             "table" => self.render_table(node),
             "tr" | "td" | "th" | "thead" | "tbody" => {}
+            "div" if !inline && self.options.standardize && is_article_card_text_block(node) => {
+                self.render_block_children(node)
+            }
             "article" | "main" | "section" | "div" | "body" | "html" => {
                 for child in node.children() {
                     self.render_node(&child, inline);
@@ -21489,6 +22936,27 @@ impl<'a> OrgRenderer<'a> {
     }
 
     fn render_figure(&mut self, node: &NodeRef) {
+        if let Some(image) = select_first_node(node, "img") {
+            if !markdown_figure_has_paragraphs_outside_caption(node) {
+                let subject = image
+                    .ancestors()
+                    .take_while(|ancestor| ancestor != node)
+                    .find(|ancestor| tag_name(ancestor).as_deref() == Some("a"))
+                    .unwrap_or(image);
+                self.ensure_blank_line();
+                self.render_node(&subject, false);
+                self.ensure_blank_line();
+                if let Some(figcaption) = select_first_node(node, "figcaption") {
+                    let caption = self.render_inline_children(&figcaption);
+                    if !caption.is_empty() {
+                        self.out.push_str(&caption);
+                        self.out.push_str("\n\n");
+                    }
+                }
+                return;
+            }
+        }
+
         self.ensure_blank_line();
         for child in node.children() {
             let before = self.out.len();
@@ -21534,6 +23002,23 @@ impl<'a> OrgRenderer<'a> {
         }
     }
 
+    fn render_arxiv_citation(&mut self, node: &NodeRef) {
+        let numbers = arxiv_citation_footnote_numbers(node, self.footnotes);
+        if numbers.is_empty() {
+            for child in node.children() {
+                self.render_node(&child, true);
+            }
+            return;
+        }
+
+        for number in numbers {
+            self.ensure_inline_space("[fn:");
+            self.out.push_str("[fn:");
+            self.out.push_str(&number.to_string());
+            self.out.push(']');
+        }
+    }
+
     fn render_html_export_node(&mut self, node: &NodeRef) {
         let Ok(html) = serialize_node(node) else {
             return;
@@ -21570,7 +23055,7 @@ impl<'a> OrgRenderer<'a> {
         }
     }
 
-    fn render_link(&mut self, node: &NodeRef, element: &ElementData) {
+    fn render_link(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
         if has_class(element, "ltx_ref") {
             let text = arxiv_reference_label(node, element)
                 .unwrap_or_else(|| cleanup_inline(&node.text_contents()));
@@ -21590,12 +23075,19 @@ impl<'a> OrgRenderer<'a> {
             linked_image_src.as_deref(),
         ) {
             (Some(href), true, Some(image_src)) if !is_dangerous_url(href) => {
-                self.ensure_inline_space("[[");
+                if inline {
+                    self.ensure_inline_space("[[");
+                } else {
+                    self.ensure_blank_line();
+                }
                 self.out.push_str("[[");
                 self.out.push_str(&escape_link(href));
                 self.out.push_str("][");
                 self.out.push_str(&escape_link_text(image_src));
                 self.out.push_str("]]");
+                if !inline {
+                    self.out.push_str("\n\n");
+                }
             }
             (Some(href), false, _) if !is_dangerous_url(href) => {
                 self.ensure_inline_space("[[");
@@ -21624,11 +23116,8 @@ impl<'a> OrgRenderer<'a> {
                     self.ensure_blank_line();
                     self.out.push_str(&"*".repeat(level));
                     self.out.push(' ');
-                    self.out.push_str("[[");
-                    self.out.push_str(&escape_link(href));
-                    self.out.push_str("][");
-                    self.out.push_str(&escape_link_text(&text));
-                    self.out.push_str("]]\n\n");
+                    self.out.push_str(&escape_org_headline(&text));
+                    self.out.push_str("\n\n");
                     continue;
                 }
             }
@@ -21841,13 +23330,26 @@ impl<'a> OrgRenderer<'a> {
         if rows.is_empty() {
             return;
         }
+        let mut rendered_rows: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| {
+                direct_row_cells(row)
+                    .into_iter()
+                    .map(|cell| self.render_table_cell(&cell))
+                    .collect()
+            })
+            .collect();
+        let max_columns = rendered_rows.iter().map(Vec::len).max().unwrap_or(0);
+        if max_columns == 0 {
+            return;
+        }
+        for cells in &mut rendered_rows {
+            cells.resize(max_columns, String::new());
+        }
+
         self.ensure_blank_line();
-        for row in rows {
-            let cells: Vec<String> = direct_row_cells(&row)
-                .into_iter()
-                .map(|cell| self.render_table_cell(&cell))
-                .collect();
-            if !cells.is_empty() && cells.iter().any(|cell| !cell.trim().is_empty()) {
+        for cells in rendered_rows {
+            if cells.iter().any(|cell| !cell.trim().is_empty()) {
                 self.out.push('|');
                 for cell in cells {
                     self.out.push(' ');
@@ -21862,11 +23364,13 @@ impl<'a> OrgRenderer<'a> {
     }
 
     fn render_table_cell(&self, node: &NodeRef) -> String {
-        self.render_inline_children(node)
+        let cell = self
+            .render_inline_children(node)
             .replace('\n', " ")
             .split_whitespace()
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" ");
+        normalize_table_cell_text(&cell)
     }
 
     fn render_layout_table(&mut self, node: &NodeRef) {
@@ -21969,7 +23473,9 @@ impl<'a> OrgRenderer<'a> {
         if text.is_empty() {
             return;
         }
-        if needs_space_before(&self.out, &text) {
+        if self.suppress_next_space {
+            self.suppress_next_space = false;
+        } else if needs_space_before(&self.out, &text) {
             self.out.push(' ');
         }
         self.out.push_str(&text);
@@ -21998,6 +23504,11 @@ impl<'a> OrgRenderer<'a> {
             return;
         }
         self.ensure_blank_line();
+        if self.footnotes.preserve_separator_before_definitions
+            && !self.out.trim_end().ends_with("-----")
+        {
+            self.out.push_str("-----\n\n");
+        }
         self.rendering_footnote_defs = true;
         for entry in &self.footnotes.entries {
             let mut nested = OrgRenderer::new(self.footnotes, self.options);
@@ -22095,6 +23606,7 @@ fn clean_footnote_definition_content(content: &str, number: usize) -> String {
 
 fn collect_footnotes(root: &NodeRef) -> FootnoteState {
     let mut state = FootnoteState::default();
+    collect_arxiv_bibliography_footnotes(root, &mut state);
     collect_structured_footnotes(root, &mut state);
     collect_named_anchor_footnotes(root, &mut state);
     collect_footnote_definition_divs(root, &mut state);
@@ -22113,6 +23625,31 @@ fn collect_footnotes(root: &NodeRef) -> FootnoteState {
     state
 }
 
+fn collect_arxiv_bibliography_footnotes(root: &NodeRef, state: &mut FootnoteState) {
+    let Ok(matches) = root.select(".ltx_bibliography") else {
+        return;
+    };
+    for matched in matches {
+        let bibliography = matched.as_node().clone();
+        let Ok(items) = bibliography.select("li.ltx_bibitem[id]") else {
+            continue;
+        };
+        let mut added = false;
+        for (index, item) in items.enumerate() {
+            let item = item.as_node().clone();
+            let Some(id) = node_id(&item) else {
+                continue;
+            };
+            let content = select_first_node(&item, ".ltx_bibblock").unwrap_or_else(|| item.clone());
+            add_footnote_entry(state, id, content, Some(index + 1));
+            added = true;
+        }
+        if added {
+            state.definition_nodes.insert(node_key(&bibliography));
+        }
+    }
+}
+
 fn render_footnote_content_node(renderer: &mut OrgRenderer<'_>, node: &NodeRef) {
     match tag_name(node).as_deref() {
         Some("p" | "li" | "div" | "span" | "aside") => {
@@ -22129,6 +23666,21 @@ fn render_footnote_content_node(renderer: &mut OrgRenderer<'_>, node: &NodeRef) 
         }
         _ => renderer.render_node(node, false),
     }
+}
+
+fn arxiv_citation_footnote_numbers(node: &NodeRef, footnotes: &FootnoteState) -> Vec<usize> {
+    let Ok(matches) = node.select("a[href]") else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    matches
+        .filter_map(|matched| {
+            let href = matched.attributes.borrow().get("href")?.to_string();
+            let fragment = href_fragment(&href)?.to_ascii_lowercase();
+            let number = footnotes.by_id.get(&fragment).copied()?;
+            seen.insert(number).then_some(number)
+        })
+        .collect()
 }
 
 fn collect_structured_footnotes(root: &NodeRef, state: &mut FootnoteState) {
@@ -22219,7 +23771,7 @@ fn collect_texinfo_footnotes(root: &NodeRef, state: &mut FootnoteState) {
         }
         add_footnote_entry_nodes(state, id, content_nodes, Some(number));
         state.definition_nodes.insert(node_key(&heading));
-        mark_nearest_ancestor_class(state, &heading, "footnotes-segment");
+        mark_previous_footnote_heading(state, &heading);
     }
 }
 
@@ -22393,7 +23945,10 @@ fn collect_loose_paragraph_footnotes(root: &NodeRef, state: &mut FootnoteState) 
     };
     for matched in matches {
         let node = matched.as_node().clone();
-        if has_class_token(&node, "footnote") {
+        if has_class_token(&node, "footnote")
+            || state.definition_nodes.contains(&node_key(&node))
+            || definition_id(&node).is_some()
+        {
             continue;
         }
         let Some(number) = leading_footnote_definition_number(&node) else {
@@ -22701,20 +24256,28 @@ fn mark_definition_container(state: &mut FootnoteState, node: &NodeRef) {
     let mut current = node.clone();
     while let Some(parent) = current.parent() {
         if is_footnote_container_node(&parent) {
-            state.definition_nodes.insert(node_key(&parent));
+            let preserves_separator = parent.children().any(|child| {
+                tag_name(&child).as_deref() == Some("hr")
+                    && element_attr(&child, "class").is_none()
+                    && element_attr(&child, "id").is_none()
+            });
+            if !preserves_separator {
+                state.definition_nodes.insert(node_key(&parent));
+            } else {
+                state.preserve_separator_before_definitions = true;
+            }
             if let Some(prev) = previous_element_sibling(&parent) {
                 if is_footnote_heading(&prev) {
-                    state.definition_nodes.insert(node_key(&prev));
+                    mark_footnote_heading_if_removable(state, &prev, &parent);
                 }
             }
             if let Some(grandparent) = parent.parent() {
                 if let Some(prev) = previous_element_sibling(&grandparent) {
                     if is_footnote_heading(&prev) {
-                        state.definition_nodes.insert(node_key(&prev));
+                        mark_footnote_heading_if_removable(state, &prev, &grandparent);
                     }
                 }
             }
-            break;
         }
         current = parent;
     }
@@ -22788,9 +24351,26 @@ fn collect_sidenote_noise_nodes(root: &NodeRef, state: &mut FootnoteState) {
 }
 
 fn collect_footnote_noise_nodes(state: &mut FootnoteState, node: &NodeRef) {
-    for descendant in node.descendants() {
+    for descendant in std::iter::once(node.clone()).chain(node.descendants()) {
         if is_footnote_noise_node(&descendant) {
             state.noise_nodes.insert(node_key(&descendant));
+        }
+        let Some(last) = descendant.last_child() else {
+            continue;
+        };
+        let NodeData::Text(text) = last.data() else {
+            continue;
+        };
+        let value = text.borrow();
+        if !value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch.is_whitespace() || ",.;".contains(ch))
+        {
+            if value.trim() == "." && has_ancestor_class(&last, "reference-text") {
+                continue;
+            }
+            state.noise_nodes.insert(node_key(&last));
         }
     }
 }
@@ -23054,6 +24634,48 @@ fn is_footnote_heading(node: &NodeRef) -> bool {
     is_heading_node(node) || count_selector(node, "h1, h2, h3, h4, h5, h6") > 0
 }
 
+fn mark_footnote_heading_if_removable(
+    state: &mut FootnoteState,
+    heading: &NodeRef,
+    container: &NodeRef,
+) {
+    if !should_preserve_footnote_heading(heading, container) {
+        state.definition_nodes.insert(node_key(heading));
+    }
+}
+
+fn should_preserve_footnote_heading(heading: &NodeRef, container: &NodeRef) -> bool {
+    normalize_ws(&heading.text_contents()).eq_ignore_ascii_case("references")
+        && next_element_sibling(container).is_some_and(|next| is_external_links_heading(&next))
+}
+
+fn is_external_links_heading(node: &NodeRef) -> bool {
+    is_heading_node(node)
+        && normalize_ws(&node.text_contents()).eq_ignore_ascii_case("external links")
+}
+
+fn contains_external_links_heading(node: &NodeRef) -> bool {
+    is_external_links_heading(node)
+        || node
+            .descendants()
+            .any(|descendant| is_external_links_heading(&descendant))
+}
+
+fn is_mediawiki_content_node(node: &NodeRef) -> bool {
+    node_id(node).as_deref() == Some("mw-content-text")
+        || find_node_by_id(node, "mw-content-text").is_some()
+}
+
+fn is_mediawiki_external_links_list(node: &NodeRef) -> bool {
+    matches!(tag_name(node).as_deref(), Some("ul" | "ol"))
+        && previous_element_sibling(node).is_some_and(|prev| is_external_links_heading(&prev))
+        && node.ancestors().any(|ancestor| {
+            node_id(&ancestor)
+                .as_deref()
+                .is_some_and(|id| id == "mw-content-text")
+        })
+}
+
 fn is_reference_notes_heading(node: &NodeRef) -> bool {
     if !is_heading_node(node) {
         return false;
@@ -23162,8 +24784,7 @@ fn is_data_definition_footnote_content_node(node: &NodeRef) -> bool {
 }
 
 fn is_arxiv_footnote_mark_node(node: &NodeRef) -> bool {
-    has_class_token(node, "ltx_role_footnotemark")
-        || has_class_token(node, "ltx_note_outer")
+    has_class_token(node, "ltx_note_outer")
         || has_class_token(node, "ltx_note_content")
         || has_class_token(node, "ltx_note_type")
 }
@@ -23180,6 +24801,11 @@ fn has_class_token(node: &NodeRef, token: &str) -> bool {
         .unwrap_or_default()
         .split_whitespace()
         .any(|part| part.eq_ignore_ascii_case(&token_lc))
+}
+
+fn has_ancestor_class(node: &NodeRef, token: &str) -> bool {
+    node.ancestors()
+        .any(|ancestor| has_class_token(&ancestor, token))
 }
 
 fn build_org_document(metadata: &Metadata, body: &str, word_count: usize) -> String {
@@ -23781,6 +25407,65 @@ fn is_span_paragraph(element: &ElementData) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("p"))
 }
 
+fn is_article_card_text_block(node: &NodeRef) -> bool {
+    if !is_paragraph_like_div(node) {
+        return false;
+    }
+
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if tag_name(&parent).as_deref() != Some("div")
+        || parent
+            .parent()
+            .and_then(|grandparent| tag_name(&grandparent))
+            .as_deref()
+            != Some("article")
+    {
+        return false;
+    }
+
+    parent.children().any(|child| {
+        tag_name(&child).as_deref() == Some("a")
+            && element_attr(&child, "href").is_some()
+            && !cleanup_inline(&child.text_contents()).is_empty()
+    })
+}
+
+fn is_paragraph_like_div(node: &NodeRef) -> bool {
+    tag_name(node).as_deref() == Some("div")
+        && !cleanup_inline(&node.text_contents()).is_empty()
+        && !node.descendants().any(|descendant| {
+            descendant != *node
+                && matches!(
+                    tag_name(&descendant).as_deref(),
+                    Some(
+                        "article"
+                            | "section"
+                            | "div"
+                            | "p"
+                            | "h1"
+                            | "h2"
+                            | "h3"
+                            | "h4"
+                            | "h5"
+                            | "h6"
+                            | "ul"
+                            | "ol"
+                            | "table"
+                            | "pre"
+                            | "blockquote"
+                            | "figure"
+                            | "img"
+                            | "picture"
+                            | "video"
+                            | "audio"
+                            | "iframe"
+                    )
+                )
+        })
+}
+
 fn is_bold_style_span(element: &ElementData) -> bool {
     element
         .attributes
@@ -24234,6 +25919,19 @@ fn best_srcset_url(srcset: &str) -> Option<String> {
     None
 }
 
+fn first_srcset_url(srcset: &str) -> Option<String> {
+    srcset_descriptor_candidates(srcset)
+        .into_iter()
+        .map(|(url, _)| url)
+        .find(|url| is_valid_image_src(url))
+        .or_else(|| {
+            srcset.split(',').find_map(|candidate| {
+                let url = candidate.split_whitespace().next()?;
+                is_valid_image_src(url).then(|| url.to_string())
+            })
+        })
+}
+
 fn srcset_width_candidates(srcset: &str) -> Vec<(String, f64)> {
     srcset_width_candidates_from(&srcset_descriptor_candidates(srcset))
 }
@@ -24506,6 +26204,23 @@ fn is_content_heading_wrapper_node(node: &NodeRef) -> bool {
     headings.len() == 1 && heading_has_following_content(&headings[0])
 }
 
+fn is_content_media_heading_header_node(node: &NodeRef) -> bool {
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    let attrs = element_attr_string(element).to_ascii_lowercase();
+    if !attrs.contains("article-header") && !attrs.contains("article-head") {
+        return false;
+    }
+    if has_non_header_noise_attr(&attrs) {
+        return false;
+    }
+    count_words(&node.text_contents()) > 0
+        && count_selector(node, "h1, h2, h3, h4, h5, h6") > 0
+        && count_selector(node, "figure, picture, img, video") > 0
+        && count_selector(node, "nav, footer, aside, form") == 0
+}
+
 fn has_non_header_noise_attr(attrs: &str) -> bool {
     [
         "advert",
@@ -24741,6 +26456,18 @@ fn code_language(node: &NodeRef) -> Option<String> {
             candidates.push(element_attr_fingerprint(&matched));
         }
     }
+    let mut current = node.parent();
+    let mut depth = 0usize;
+    while let Some(ancestor) = current {
+        if let Some(element) = ancestor.as_element() {
+            candidates.push(element_attr_string(element));
+        }
+        depth += 1;
+        if depth > 16 {
+            break;
+        }
+        current = ancestor.parent();
+    }
 
     candidates
         .iter()
@@ -24764,6 +26491,16 @@ fn is_code_block_container(node: &NodeRef, element: &ElementData) -> bool {
     }
     count_words(&node.text_contents()) > 0
         && count_selector(node, "p, table, blockquote, img, picture, figure") == 0
+}
+
+fn is_inside_preserved_code_block(node: &NodeRef) -> bool {
+    node.ancestors().any(|ancestor| {
+        matches!(tag_name(&ancestor).as_deref(), Some("pre" | "code"))
+            || ancestor.as_element().is_some_and(|element| {
+                is_code_block_container(&ancestor, element)
+                    || is_lean_verso_example_container(&ancestor, element)
+            })
+    })
 }
 
 fn is_lean_verso_example_container(node: &NodeRef, element: &ElementData) -> bool {
@@ -25132,6 +26869,7 @@ fn should_skip_code_node(node: &NodeRef, element: &ElementData) -> bool {
 fn cleanup_code_text(text: &str) -> String {
     static MANY_BLANK_CODE_LINES_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let text = text.replace('\t', "    ").replace('\u{00a0}', " ");
     let text = MANY_BLANK_CODE_LINES_RE.replace_all(text.trim_matches('\n'), "\n\n");
     let text = trim_first_line_markup_indent(&text);
     dedent_code_text(&text)
@@ -25147,7 +26885,7 @@ fn trim_first_line_markup_indent(text: &str) -> String {
         return text.to_string();
     };
     let first_indent = leading_code_indent(lines[first_nonempty_index]);
-    if first_indent < 4 {
+    if first_indent == 0 {
         return text.to_string();
     }
 
@@ -25210,6 +26948,12 @@ fn normalize_language_name(language: &str) -> String {
     }
 }
 
+fn normalize_table_cell_text(text: &str) -> String {
+    text.replace(" • ", "•")
+        .replace(" •", "•")
+        .replace("• ", "•")
+}
+
 fn infer_code_language_from_text(text: &str) -> Option<String> {
     let trimmed = text.trim_start();
     if trimmed.starts_with("#!/bin/bash") || trimmed.starts_with("#!/usr/bin/env bash") {
@@ -25229,6 +26973,10 @@ fn infer_code_language_from_text(text: &str) -> Option<String> {
 }
 
 fn is_code_block_chrome_node(node: &NodeRef) -> bool {
+    if is_math_node(node) || is_inside_math_tree(node) {
+        return false;
+    }
+
     let Some(element) = node.as_element() else {
         return false;
     };
@@ -25386,7 +27134,25 @@ fn is_valid_raw_latex(latex: &str, is_block_delimiter: bool, is_backslash_delimi
 fn cleanup_org(text: &str) -> String {
     static BLANK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
     let text = BLANK_RE.replace_all(text.trim(), "\n\n");
+    let text = collapse_repeated_org_dividers(&text);
     format!("{text}\n")
+}
+
+fn collapse_repeated_org_dividers(text: &str) -> String {
+    let mut lines = Vec::new();
+    let mut previous_was_divider = false;
+    for line in text.lines() {
+        if line.trim() == "-----" {
+            if previous_was_divider {
+                continue;
+            }
+            previous_was_divider = true;
+        } else if !line.trim().is_empty() {
+            previous_was_divider = false;
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
 }
 
 fn cleanup_markdown(text: &str) -> String {
@@ -25827,6 +27593,60 @@ mod tests {
             .org
             .contains("[[https://example.com/post][this note]]"));
         assert!(output.org.contains("Second paragraph."));
+    }
+
+    #[test]
+    fn x_article_status_url_author_preserves_draft_paragraph_break() {
+        let html = r##"
+        <!doctype html>
+        <html lang="ja">
+          <head>
+            <title>Jane Doe さんの記事</title>
+            <meta property="og:title" content="Jane DoeさんはXを使っています：「記事のタイトル」">
+          </head>
+          <body>
+            <div data-testid="twitterArticleRichTextView">
+              <div data-testid="twitter-article-title">Lorem Ipsum Dolor Sit Amet</div>
+              <div class="longform-unstyled">
+                <div class="public-DraftStyleDefault-block" data-offset-key="abc123">
+                  Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://x.com/janedoe/status/1234567890123456789".to_string()),
+                include_images: true,
+                remove_small_images: true,
+                content_selector: None,
+                include_replies: IncludeReplies::Extractors,
+                remove_hidden_elements: true,
+                remove_exact_selectors: true,
+                remove_partial_selectors: true,
+                remove_content_patterns: true,
+                remove_low_scoring: true,
+                standardize: true,
+                debug: false,
+                profile: false,
+                frontmatter: false,
+                markdown: false,
+                separate_markdown: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.extractor_type.as_deref(), Some("xarticle"));
+        assert_eq!(output.author, "@janedoe");
+        assert_eq!(variable(&output, "author"), Some("@janedoe"));
+        assert!(output.org.contains(
+            "Lorem Ipsum Dolor Sit Amet\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit."
+        ));
+        assert!(!output.org.contains("Jane DoeさんはXを使っています"));
     }
 
     #[test]
@@ -26654,6 +28474,158 @@ mod tests {
     }
 
     #[test]
+    fn removes_cdn_transformed_metadata_cover_duplicate() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Substack Cover</title>
+            <meta property="og:image" content="https://substackcdn.com/image/fetch/$s_!abcd!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_1644x2431.png">
+          </head>
+          <body>
+            <article class="post-content">
+              <h1>Substack Cover</h1>
+              <p>The article body explains the note before the attached preview image is removed as a metadata cover duplicate.</p>
+              <p>A second substantive paragraph keeps the selected article stable while cover deduplication runs.</p>
+              <img
+                src="https://substackcdn.com/image/fetch/$s_!abcd!,w_284,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_1644x2431.png"
+                srcset="https://substackcdn.com/image/fetch/$s_!abcd!,w_284,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_1644x2431.png 284w, https://substackcdn.com/image/fetch/$s_!abcd!,w_852,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_1644x2431.png 852w"
+                alt="">
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/cover-deduplication".to_string()),
+                include_images: true,
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        let body = output
+            .org
+            .split_once("\n:END:\n\n")
+            .map(|(_, body)| body)
+            .unwrap_or(&output.org);
+        assert!(
+            !body.contains("substackcdn.com/image/fetch"),
+            "{}",
+            output.org
+        );
+        assert!(!output.html.contains("<img"), "{}", output.html);
+        assert!(
+            output.org.contains("The article body explains"),
+            "{}",
+            output.org
+        );
+        assert_eq!(
+            output.image,
+            "https://substackcdn.com/image/fetch/$s_!abcd!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_1644x2431.png"
+        );
+    }
+
+    #[test]
+    fn substack_feed_note_does_not_append_metadata_cover_image() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Rich Holmes (@richholmes) | Substack</title>
+            <meta property="og:site_name" content="Substack">
+            <meta property="og:image" content="https://substackcdn.com/image/fetch/$s_!abcd!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_1644x2431.png">
+          </head>
+          <body>
+            <div class="FeedProseMirror">
+              <p>Google's former CEO says traditional user interfaces are going away.</p>
+              <p>The note body remains focused on prose and links without appending the metadata preview image.</p>
+            </div>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://substack-app".to_string()),
+                include_images: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        let body = output
+            .org
+            .split_once("\n:END:\n\n")
+            .map(|(_, body)| body)
+            .unwrap_or(&output.org);
+        assert!(
+            !body.contains("substackcdn.com/image/fetch"),
+            "{}",
+            output.org
+        );
+        assert!(
+            body.contains("The note body remains focused"),
+            "{}",
+            output.org
+        );
+        assert_eq!(
+            output.image,
+            "https://substackcdn.com/image/fetch/$s_!abcd!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcover_1644x2431.png"
+        );
+    }
+
+    #[test]
+    fn substack_note_permalink_appends_metadata_image() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <title>Test User (@testuser) | Substack</title>
+            <meta property="og:site_name" content="Substack">
+            <meta property="og:image" content="https://example.com/image/full-res.jpg">
+          </head>
+          <body>
+            <div class="FeedProseMirror">
+              <p>Sample note text for testing the Substack extractor.</p>
+              <p>It has multiple paragraphs to verify the content is captured correctly.</p>
+            </div>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://substack.com/@testuser/note/c-1".to_string()),
+                include_images: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        let body = output
+            .org
+            .split_once("\n:END:\n\n")
+            .map(|(_, body)| body)
+            .unwrap_or(&output.org);
+        assert!(
+            body.contains("[[https://example.com/image/full-res.jpg]]"),
+            "{}",
+            output.org
+        );
+    }
+
+    #[test]
     fn preserves_captioned_metadata_cover_figure() {
         let html = r##"
         <!doctype html>
@@ -26704,7 +28676,7 @@ mod tests {
 
         assert_eq!(output.image, "https://cdn.example.com/cover.jpg?width=1600");
         assert!(output.org.contains(
-            "[[https://cdn.example.com/cover.jpg?width=1600][Historic launch photograph]]"
+            "[[https://cdn.example.com/cover.jpg?width=640][Historic launch photograph]]"
         ));
         assert!(output
             .org
@@ -26765,7 +28737,7 @@ mod tests {
                 .org
                 .matches("[[https://example.com/images/repeated-panel.jpg][Repeated panel]]")
                 .count(),
-            2,
+            1,
             "{}",
             output.org
         );
@@ -26964,7 +28936,7 @@ mod tests {
         assert!(
             output
                 .org
-                .contains("]]\n\n/Gallery detail from the completed installation./"),
+                .contains("]]\n\nGallery detail from the completed installation."),
             "{}",
             output.org
         );
@@ -27145,6 +29117,55 @@ mod tests {
         assert!(output
             .org
             .contains("continues after the alt-caption fallback example"));
+    }
+
+    #[test]
+    fn does_not_promote_linked_paragraph_image_alt_to_caption() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Linked Paragraph Image</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Linked Paragraph Image</h1>
+              <p>The article introduces a linked screenshot whose alt text remains image metadata.</p>
+              <p><a href="/images/screenshot.png"><img src="/images/screenshot.png" alt="Screenshot showing three phones side-by-side."></a></p>
+              <p>The article continues after the linked screenshot with substantive prose.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/linked-paragraph-image".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!output.html.contains("<figcaption>"), "{}", output.html);
+        assert!(
+            output.org.contains(
+                "[[https://example.com/images/screenshot.png][https://example.com/images/screenshot.png]]"
+            ),
+            "{}",
+            output.org
+        );
+        assert!(
+            !output
+                .org
+                .contains("\n\nScreenshot showing three phones side-by-side.\n\n"),
+            "{}",
+            output.org
+        );
     }
 
     #[test]
@@ -27500,15 +29521,15 @@ mod tests {
         assert!(output.html.contains("<figcaption>"), "{}", output.html);
         assert!(
             output.org.contains(
-                "[[https://example.com/images/archive-full.jpg][https://example.com/images/archive-thumb.jpg]]"
+                "[[https://example.com/images/archive-full.jpg][https://example.com/images/archive-large.webp]]"
             ),
             "{}",
             output.org
         );
         assert!(
-            output.org.contains(
-                "Archive room after cataloging. [[https://example.com/credits][Museum archive]]."
-            ),
+            output
+                .org
+                .contains("Archive room after cataloging. Museum archive."),
             "{}",
             output.org
         );
@@ -27626,7 +29647,7 @@ mod tests {
 
         assert!(
             output.org.contains(
-                "[[https://example.com/images/source-only-large.webp]]\n\nSource-only picture rendered from its best source candidate."
+                "[[https://example.com/images/source-only-small.webp]]\n\nSource-only picture rendered from its best source candidate."
             ),
             "{}",
             output.org
@@ -27636,7 +29657,7 @@ mod tests {
             .contains("continues after the source-only picture"));
         assert!(output.html.contains("<img"));
         assert!(!output.html.contains("<source"), "{}", output.html);
-        assert!(!output.org.contains("source-only-small.webp"));
+        assert!(!output.org.contains("source-only-large.webp"));
     }
 
     #[test]
@@ -27676,16 +29697,47 @@ mod tests {
 
         assert!(
             output.org.contains(
-                "[[https://example.com/images/wrapper-large.webp][Wrapper source diagram]]\n\nWrapper source diagram rendered from a standalone source element."
+                "[[https://example.com/images/wrapper-small.webp][Wrapper source diagram]]\n\nWrapper source diagram rendered from a standalone source element."
             ),
             "{}",
             output.org
         );
-        assert!(!output.org.contains("wrapper-small.webp"), "{}", output.org);
+        assert!(!output.org.contains("wrapper-large.webp"), "{}", output.org);
         assert!(!output.html.contains("<source"), "{}", output.html);
         assert!(output
             .org
             .contains("continues after the standalone source image example"));
+    }
+
+    #[test]
+    fn small_image_removal_keeps_non_placeholder_data_images() {
+        let data_url = format!("data:image/png;base64,{}", "A".repeat(256));
+        let html = format!(
+            r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Embedded image</h1>
+          <p>The article introduces a substantive embedded image.</p>
+          <img src="{data_url}" alt="Embedded diagram">
+          <p>The article continues after the embedded image.</p>
+        </article></body></html>
+        "#
+        );
+
+        let output = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_small_images: true,
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains(&data_url), "{}", output.org);
+        assert!(output.html.contains(&data_url), "{}", output.html);
     }
 
     #[test]
@@ -27748,7 +29800,7 @@ mod tests {
             .contains("[[https://example.com/images/custom-lazy.jpg][Custom lazy image]]"));
         assert!(output
             .org
-            .contains("[[https://example.com/images/custom-large.jpg][Custom srcset image]]"));
+            .contains("[[https://example.com/images/custom-small.jpg][Custom srcset image]]"));
         assert!(!output.html.contains("lazyload"));
         assert!(!output.html.contains("class=\"hero lazy"));
         assert!(!output.html.contains("class=\"gallery lazy"));
@@ -27816,9 +29868,9 @@ mod tests {
             output.org
         );
         assert!(
-            output.org.contains(
-                "Custom full-width image caption with [[https://example.com/credits][credit link]]."
-            ),
+            output
+                .org
+                .contains("Custom full-width image caption with credit link."),
             "{}",
             output.org
         );
@@ -29063,6 +31115,65 @@ mod tests {
         let default = youtube_caption_info(player_json, None).unwrap().unwrap();
         assert_eq!(default.language, "zh-hant");
         assert!(!default.caption_url.contains("example.com"));
+    }
+
+    #[test]
+    fn youtube_inline_caption_info_uses_current_video_player_data() {
+        let html = r#"
+          <html><body><script>
+            var ytInitialPlayerResponse = {
+              "videoDetails": {"videoId": "current123"},
+              "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [
+                {
+                  "baseUrl": "https://www.youtube.com/api/timedtext?v=current123&lang=en",
+                  "languageCode": "en",
+                  "kind": "asr"
+                },
+                {
+                  "baseUrl": "https://www.youtube.com/api/timedtext?v=current123&lang=zh",
+                  "languageCode": "zh"
+                }
+              ]}}
+            };
+          </script></body></html>
+        "#;
+        let info = youtube_inline_caption_info(
+            html,
+            Some("https://www.youtube.com/watch?v=current123"),
+            Some("zh-CN"),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.language, "zh");
+        assert!(info.caption_url.contains("lang=zh"));
+        let player: Value = serde_json::from_str(&info.player_json).unwrap();
+        assert_eq!(player["videoDetails"]["videoId"], "current123");
+    }
+
+    #[test]
+    fn youtube_inline_caption_info_rejects_stale_spa_player_data() {
+        let html = r#"
+          <html><body><script>
+            var ytInitialPlayerResponse = {
+              "videoDetails": {"videoId": "previous123"},
+              "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [{
+                "baseUrl": "https://www.youtube.com/api/timedtext?v=previous123&lang=en",
+                "languageCode": "en"
+              }]}}
+            };
+          </script></body></html>
+        "#;
+
+        assert_eq!(
+            youtube_inline_caption_info(
+                html,
+                Some("https://www.youtube.com/watch?v=current123"),
+                Some("en"),
+            )
+            .unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -30390,8 +32501,8 @@ Output: [0,1]</code></pre>
             variable(&output, "wordCount"),
             Some(chatgpt_word_count.as_str())
         );
-        assert!(output.org.contains("** You said"));
-        assert!(output.org.contains("** ChatGPT said"));
+        assert!(output.org.contains("*You said*"));
+        assert!(output.org.contains("*ChatGPT said*"));
         assert!(output.org.contains("How should I size an air purifier?"));
         assert!(output
             .org
@@ -30399,7 +32510,7 @@ Output: [0,1]</code></pre>
         assert!(output
             .org
             .contains("Then choose a quiet model for overnight use."));
-        assert!(output.org.contains("[fn:1] [[https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home?utm_source=chatgpt.com][epa.gov]]"));
+        assert!(output.org.contains("[fn:1] [[https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home?utm_source=chatgpt.com]] [[https://www.epa.gov/indoor-air-quality-iaq/guide-air-cleaners-home?utm_source=chatgpt.com][epa.gov]]"));
         assert!(!output.org.contains("Thought for 12s"));
         assert!(!output.org.contains("US EPA"));
         assert!(output.debug.is_none());
@@ -30605,7 +32716,7 @@ Output: [0,1]</code></pre>
         assert!(output.org.contains("| stable | preserves ties |"));
         assert!(output
             .org
-            .contains("[fn:1] [[https://example.com/sorting][example.com: Sorting guide]]"));
+            .contains("[fn:1] [[https://example.com/sorting]] [[https://example.com/sorting][example.com: Sorting guide]]"));
         assert!(!output
             .org
             .contains("This regular response should be ignored"));
@@ -30684,7 +32795,7 @@ Output: [0,1]</code></pre>
             .contains("Use a compact source marker like the guide [fn:1]."));
         assert!(output
             .org
-            .contains("[fn:1] [[https://example.com/citation-guide][example.com]]"));
+            .contains("[fn:1] [[https://example.com/citation-guide]] [[https://example.com/citation-guide][example.com]]"));
         assert!(!output.org.contains("DeepSearch trace"));
     }
 
@@ -33799,7 +35910,7 @@ Output: [0,1]</code></pre>
         assert!(with_debug.html.contains("headerlink"));
         assert!(!with_debug.org.contains("Trailing diagnostic heading"));
         for marker in ["legacy-object", "legacy-embed", "legacy-applet"] {
-            assert!(with_debug.html.contains(marker), "{}", with_debug.html);
+            assert!(!with_debug.html.contains(marker), "{}", with_debug.html);
         }
     }
 
@@ -33880,6 +35991,126 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
+    fn standardizes_article_card_text_divs_into_paragraphs() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="markdown">
+          <h1>Blog Posts</h1>
+          <p>Introductory list text.</p>
+          <article>
+            <a href="/first"><img src="/first.png" alt="cover"></a>
+            <div>
+              <a href="/first">First Post</a>
+              <div>A short description for the first post.</div>
+              <div>by author</div>
+            </div>
+          </article>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.markdown".to_string()),
+                include_images: true,
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .html
+            .contains("<p>A short description for the first post.</p>"));
+        assert!(output.html.contains("<p>by author</p>"));
+        assert!(
+            output
+                .org
+                .contains("[[/first][First Post]]\n\nA short description"),
+            "{}",
+            output.org
+        );
+    }
+
+    #[test]
+    fn standardizes_letter_footer_divs_into_paragraphs() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Letter</h1>
+          <p>Body paragraph with enough real content for extraction.</p>
+          <div class="letter-footer">
+            <div class="signature-delimiter">--</div>
+            <div class="signature-detail"><a href="https://example.com">example.com</a></div>
+          </div>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.html.contains("<p>--</p>"), "{}", output.html);
+        assert!(output
+            .html
+            .contains("<p><a href=\"https://example.com\">example.com</a></p>"));
+        assert!(
+            output
+                .org
+                .contains("Body paragraph with enough real content for extraction.\n\n--\n\n[[https://example.com][example.com]]"),
+            "{}",
+            output.org
+        );
+    }
+
+    #[test]
+    fn removes_katex_mathml_without_latex_source() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>KaTeX fallback</h1>
+          <p>
+            Value
+            <span class="katex"><math display="inline"><mi>n</mi></math></span>
+            now, but keep
+            <span class="katex"><math display="inline"><semantics><mrow><mi>m</mi></mrow><annotation encoding="application/x-tex">m</annotation></semantics></math></span>.
+          </p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!output.org.contains("$n$"), "{}", output.org);
+        assert!(output.org.contains("$m$"), "{}", output.org);
+    }
+
+    #[test]
     fn standardizes_drop_caps_spans_custom_elements_and_comments() {
         let html = r#"
         <!doctype html>
@@ -33929,6 +36160,79 @@ Output: [0,1]</code></pre>
         assert!(!output.html.contains("comment marker"));
         assert!(!output.html.contains("data-as="));
         assert!(!output.html.contains("data-caps="));
+    }
+
+    #[test]
+    fn standardization_preserves_widont_inline_spacing() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Widont spacing</h1>
+          <p>Introductory prose gives the extractor enough real article content to keep this focused node.</p>
+          <h3>How Obsidian Sync<span class="widont">&nbsp;</span>works</h3>
+          <p>Use <a href="/gcm">Galois/Counter<span class="widont">&nbsp;</span>Mode</a> for encryption<span class="widont">&nbsp;</span>checks.</p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/article".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            output.org.contains("*** How Obsidian Sync works"),
+            "{}",
+            output.org
+        );
+        assert!(
+            output
+                .org
+                .contains("[[https://example.com/gcm][Galois/Counter Mode]]"),
+            "{}",
+            output.org
+        );
+        assert!(output.org.contains("encryption checks."), "{}", output.org);
+        assert!(!output.org.contains("Syncworks"), "{}", output.org);
+        assert!(!output.org.contains("CounterMode"), "{}", output.org);
+        assert!(!output.org.contains("encryptionchecks"), "{}", output.org);
+    }
+
+    #[test]
+    fn org_rendering_preserves_inline_element_text_adjacency() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Inline adjacency</h1>
+          <p>The quoted phrase is <span>nostalgebra</span>ist's wording.</p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            output.org.contains("nostalgebraist's wording"),
+            "{}",
+            output.org
+        );
     }
 
     #[test]
@@ -34121,7 +36425,7 @@ Output: [0,1]</code></pre>
         .unwrap()
         .profile
         .unwrap();
-        assert_eq!(normal.len(), 53);
+        assert_eq!(normal.len(), 54);
         assert!(normal.contains_key("replaceCustomElements"));
         assert!(normal.contains_key("removeEmptyLines"));
         assert!(normal.contains_key("se:convertLatexImages"));
@@ -34553,6 +36857,57 @@ line break text.">
     }
 
     #[test]
+    fn org_footnote_container_preserves_direct_separator() {
+        let org = render_html_fragment_to_org(
+            r##"<article>
+              <p>Body text with a note.<sup id="fnref1"><a href="#fn1">1</a></sup></p>
+              <div class="footnotes">
+                <hr>
+                <ol>
+                  <li id="fn1"><p>Footnote content. <a href="#fnref1" class="footnote-backref">↩</a></p></li>
+                </ol>
+              </div>
+            </article>"##,
+        );
+
+        assert!(org.contains("Body text with a note. [fn:1]"), "{org}");
+        assert!(org.contains("\n-----\n\n[fn:1] Footnote content."), "{org}");
+        assert!(!org.contains("footnote-backref"), "{org}");
+        assert!(!org.contains('↩'), "{org}");
+
+        let styled_separator = render_html_fragment_to_org(
+            r##"<article>
+              <p>Body text with a note.<sup id="fnref1"><a href="#fn1">1</a></sup></p>
+              <div class="footnotes">
+                <hr class="footnotes-separator">
+                <ol><li id="fn1"><p>Footnote content.</p></li></ol>
+              </div>
+            </article>"##,
+        );
+        assert!(!styled_separator.contains("-----"), "{styled_separator}");
+        assert!(
+            styled_separator.contains("[fn:1] Footnote content."),
+            "{styled_separator}"
+        );
+    }
+
+    #[test]
+    fn org_table_preserves_trailing_dash_cells_and_width() {
+        let org = render_html_fragment_to_org(
+            r#"<article>
+              <table>
+                <tr><th>Name</th><th>First</th><th>Second</th></tr>
+                <tr><td>Value</td><td>—</td><td>—</td></tr>
+                <tr><td>Short</td><td>Only</td></tr>
+              </table>
+            </article>"#,
+        );
+
+        assert!(org.contains("| Value | — | — |"), "{org}");
+        assert!(org.contains("| Short | Only |  |"), "{org}");
+    }
+
+    #[test]
     fn markdown_conversion_preserves_upstream_raw_and_embed_rules() {
         let inline_raw = html_fragment_to_markdown(
             r#"<article><p>E = mc<sup>2</sup> and H<sub>2</sub>O with <mark>highlight</mark>.</p></article>"#,
@@ -34722,9 +37077,13 @@ let value = \`tick\`;
             },
         )
         .unwrap();
-        assert!(with_base
-            .content_markdown
-            .contains("https://arxiv.org/html/2312.00752v2/x1.png"));
+        assert!(
+            with_base
+                .content_markdown
+                .contains("https://arxiv.org/html/2312.00752v2/x1.png"),
+            "{}",
+            with_base.content_markdown
+        );
 
         let without_base = parse_html_to_org(
             r#"
@@ -34836,6 +37195,110 @@ let value = \`tick\`;
         assert!(existing_environment.contains("\\begin{align*}"));
         assert!(existing_environment.contains("\\end{align*}"));
         assert!(!existing_environment.contains("\\begin{aligned}"));
+    }
+
+    #[test]
+    fn mathml_conversion_matches_upstream_spacing_fences_and_fractions() {
+        let convert = |mathml: &str| {
+            let document = kuchiki::parse_html().one(mathml);
+            let math = document
+                .select_first("math")
+                .expect("math element")
+                .as_node()
+                .clone();
+            mathml_to_latex(&math).expect("MathML conversion")
+        };
+
+        assert_eq!(
+            convert("<math><mtext>\n  .\n</mtext></math>"),
+            "\\text{ }.\\text{ }"
+        );
+        assert_eq!(
+            convert(
+                "<math><msup><mi>x</mi><mrow><mspace></mspace><mspace></mspace><mn>2</mn></mrow></msup></math>"
+            ),
+            "x^{ 2}"
+        );
+        assert_eq!(
+            convert(
+                "<math><mrow><mrow><mo>(</mo></mrow><mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac><mrow><mo>)</mo></mrow></mrow></math>"
+            ),
+            "\\left(\\right. \\genfrac{}{}{0pt}{}{n}{k} \\left.\\right)"
+        );
+        assert_eq!(
+            convert(
+                "<math><mrow><mo>|</mo><mtable><mtr><mtd><mi>i</mi></mtd><mtd><mi>j</mi></mtd></mtr></mtable><mo>|</mo></mrow></math>"
+            ),
+            "\\begin{vmatrix} i & j \\end{vmatrix}"
+        );
+        assert_eq!(
+            convert("<math><mrow><mo>(</mo><mi>x</mi><mo>)</mo></mrow></math>"),
+            "\\left(x\\right)"
+        );
+        assert_eq!(
+            convert("<math><mtext>(</mtext><mo>⋆</mo><mtext>)</mtext></math>"),
+            "( \\star )"
+        );
+        assert_eq!(mjx_operator_to_latex("("), "\\left(");
+        assert_eq!(mjx_operator_to_latex(")"), "\\right)");
+    }
+
+    #[test]
+    fn org_fragment_renders_upstream_math_data_latex() {
+        let html = r#"<main>
+              <p>A tagged single equation produced by <code>\tag{}</code>.</p>
+              <math data-latex="a = b + c ( \star )" display="block" xmlns="http://www.w3.org/1998/Math/MathML">
+                <mrow><mi>a</mi> <mo>=</mo> <mi>b</mi> <mo>+</mo> <mi>c</mi> <mtext>(</mtext><mrow data-mjx-texclass="ORD"><mo>⋆</mo></mrow><mtext>)</mtext></mrow>
+              </math>
+              <p>A genuine multi-row aligned system follows.</p>
+              <math data-latex="\begin{aligned}x &amp; = &amp; y \\ u &amp; = &amp; v\end{aligned}" display="block" xmlns="http://www.w3.org/1998/Math/MathML">
+                <mtable><mtr><mtd><mi>x</mi></mtd></mtr></mtable>
+              </math>
+            </main>"#;
+        let document = kuchiki::parse_html().one(html);
+        let first_math = document
+            .select("math")
+            .expect("math selector")
+            .next()
+            .expect("first math")
+            .as_node()
+            .clone();
+        let first_math_element = first_math.as_element().expect("math element");
+        let first_math_info = math_info(&first_math, first_math_element).expect("math info");
+        assert_eq!(first_math_info.latex, "a = b + c ( \\star )");
+        let footnotes = FootnoteState::default();
+        let renderer = OrgRenderer::new(&footnotes, RenderOptions::default());
+        assert!(!renderer.should_skip_node(&first_math));
+
+        let org_without_footnotes = html_fragment_to_org(html);
+        let org = render_html_fragment_to_org(html);
+
+        assert!(org.contains("~\\tag{}~"), "{org}");
+        assert!(
+            org_without_footnotes.contains("a = b + c ( \\star )"),
+            "without footnotes:\n{org_without_footnotes}\nwith footnotes:\n{org}"
+        );
+        assert!(org.contains("a = b + c ( \\star )"), "{org}");
+        assert!(
+            org.contains("\\begin{aligned}x & = & y \\\\ u & = & v\\end{aligned}"),
+            "{org}"
+        );
+    }
+
+    #[test]
+    fn org_src_block_normalizes_tabs_and_nbsp() {
+        let org = render_html_fragment_to_org(
+            r#"<article><pre><code class="language-js">if (ready) {
+	return value&nbsp;+ 1;
+}</code></pre></article>"#,
+        );
+
+        assert!(
+            org.contains("#+begin_src js\nif (ready) {\n    return value + 1;\n}\n#+end_src"),
+            "{org}"
+        );
+        assert!(!org.contains('\t'), "{org}");
+        assert!(!org.contains('\u{00a0}'), "{org}");
     }
 
     #[test]
@@ -35205,6 +37668,63 @@ let value = \`tick\`;
     }
 
     #[test]
+    fn narrows_body_main_content_using_schema_text_phrase() {
+        let schema_text = "Systems come in many forms. Some are rigid, with fixed boundaries and strict coupling between components. Others are elastic, stretching under pressure but returning to their original shape. The key insight is that constraints are not inherently limiting.";
+        let html = format!(
+            r#"
+        <!doctype html>
+        <html>
+          <head>
+            <title>Post About Systems</title>
+            <script type="application/ld+json">
+            {{
+              "@type": "BlogPosting",
+              "articleBody": "{schema_text}"
+            }}
+            </script>
+          </head>
+          <body>
+            <section id="hero"><img src="/hero.jpg" alt=""></section>
+            <section id="section-content">
+              <div id="article-block">
+                <span class="content-styles">
+                  <p>{schema_text}</p>
+                  <p>Final article paragraph.</p>
+                </span>
+              </div>
+            </section>
+            <section id="section-sidebar">
+              <h3>Recent Posts</h3>
+              <p>Sidebar text should not survive schema narrowing.</p>
+            </section>
+          </body>
+        </html>
+        "#
+        );
+
+        let output = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                url: Some("https://example.com/schema-body".to_string()),
+                include_images: true,
+                remove_small_images: true,
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("Systems come in many forms."));
+        assert!(output.org.contains("Final article paragraph."));
+        assert!(!output.org.contains("hero.jpg"), "{}", output.org);
+        assert!(!output.org.contains("Sidebar text"), "{}", output.org);
+    }
+
+    #[test]
     fn sanitizes_schema_fallback_when_optional_cleanup_is_disabled() {
         let schema_text = "This is the full schema-backed post body with enough words to exceed the short summary selected by the content scorer. Additional sentences make the fallback deterministic while preserving the intended article text for extraction.";
         let html = format!(
@@ -35490,6 +38010,36 @@ let value = \`tick\`;
         assert!(output.org.contains("[[https://example.com/][example.com]]"));
         assert!(!output.org.contains("logo.svg"));
         assert!(!output.org.contains("Dismiss"));
+    }
+
+    #[test]
+    fn preserves_long_description_paragraph_before_content() {
+        let description = "This longer introductory paragraph explains how the product connects two workflows and lets people continue editing without leaving their current application.";
+        let html = format!(
+            r#"
+        <!doctype html>
+        <html><head>
+          <title>Long Introduction</title>
+          <meta name="description" content="{description}">
+        </head><body><article class="post-content">
+          <h1>Long Introduction</h1>
+          <p>{description}</p>
+          <p>The main article continues with substantial implementation details for readers.</p>
+        </article></body></html>
+        "#
+        );
+
+        let output = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains(description), "{}", output.org);
     }
 
     #[test]
@@ -36079,6 +38629,45 @@ let value = \`tick\`;
         assert!(output
             .org
             .contains("content.\n\n-----\n\nThe second article paragraph"));
+    }
+
+    #[test]
+    fn collapses_consecutive_separator_wrappers() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head><title>Separator Wrappers</title></head>
+          <body>
+            <article>
+              <h1>Separator Wrappers</h1>
+              <p>The first article paragraph has enough words to keep the selected article body stable.</p>
+              <div><hr></div>
+              <div><hr></div>
+              <p>The second article paragraph follows one retained separator after consecutive wrappers collapse.</p>
+            </article>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/separator-wrappers".to_string()),
+                content_selector: Some("article".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.org.matches("-----").count(), 1, "{}", output.org);
+        assert!(output
+            .org
+            .contains("stable.\n\n-----\n\nThe second article paragraph"));
     }
 
     #[test]
