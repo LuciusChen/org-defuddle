@@ -1274,15 +1274,17 @@ fn parse_html_to_org_once(
     resolve_relative_urls(&document, &relative_base_url);
     record_profile(&mut profile, "resolveRelativeUrls", step_start);
     remove_lightbox_duplicate_images(&document);
-    let mut no_content_pattern_debug = None;
-    let step_start = Instant::now();
-    remove_eyebrow_label(&document, &mut no_content_pattern_debug);
-    record_profile(&mut profile, "removeEyebrowLabel", step_start);
-    let step_start = Instant::now();
-    remove_orphan_headings(&document);
-    let elapsed = step_start.elapsed();
-    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+    if options.remove_content_patterns {
+        let mut no_content_pattern_debug = None;
+        let step_start = Instant::now();
+        remove_eyebrow_label(&document, &mut no_content_pattern_debug);
+        record_profile(&mut profile, "removeEyebrowLabel", step_start);
+    }
     if options.standardize {
+        let step_start = Instant::now();
+        remove_orphan_headings(&document);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
         record_profile_elapsed(&mut profile, "removeTrailingHeadings", elapsed);
     }
 
@@ -1320,11 +1322,11 @@ fn parse_html_to_org_once(
         );
         record_profile(&mut profile, "removeByContentPattern", step_start);
     }
-    let step_start = Instant::now();
-    remove_orphan_headings(&main);
-    let elapsed = step_start.elapsed();
-    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
     if options.standardize {
+        let step_start = Instant::now();
+        remove_orphan_headings(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
         record_profile_elapsed(&mut profile, "removeTrailingHeadings", elapsed);
     }
     let step_start = Instant::now();
@@ -31427,6 +31429,7 @@ Output: [0,1]</code></pre>
           </head>
           <body>
             <article class="post-content">
+              <div>Engineering Notes</div>
               <h1>Content Pattern Options</h1>
               <p>The primary article paragraph should always remain in the extracted output.</p>
               <h2>Related Posts</h2>
@@ -31459,6 +31462,7 @@ Output: [0,1]</code></pre>
         )
         .unwrap();
         assert!(with_removal.org.contains("primary article paragraph"));
+        assert!(!with_removal.org.contains("Engineering Notes"));
         assert!(!with_removal.org.contains("Related Posts"));
         assert!(!with_removal.org.contains("related recommendation"));
 
@@ -31485,6 +31489,7 @@ Output: [0,1]</code></pre>
         )
         .unwrap();
         assert!(without_removal.org.contains("primary article paragraph"));
+        assert!(without_removal.org.contains("Engineering Notes"));
         assert!(without_removal.org.contains("Related Posts"));
         assert!(without_removal.org.contains("related recommendation"));
     }
@@ -33636,6 +33641,7 @@ Output: [0,1]</code></pre>
               <object id="legacy-object" data="/media/player.swf">Object fallback text.</object>
               <embed id="legacy-embed" src="/media/plugin.mov" type="video/quicktime">
               <applet id="legacy-applet" code="Legacy.class">Applet fallback text.</applet>
+              <h2 id="trailing-diagnostic-heading">Trailing diagnostic heading</h2>
             </article>
           </body>
         </html>
@@ -33677,6 +33683,7 @@ Output: [0,1]</code></pre>
             .org
             .contains("[[https://www.youtube.com/watch?v=abc123]]"));
         assert!(!with_standardize.html.contains("headerlink"));
+        assert!(!with_standardize.org.contains("Trailing diagnostic heading"));
         for marker in [
             "lite-youtube",
             "legacy-object",
@@ -33719,6 +33726,9 @@ Output: [0,1]</code></pre>
             .org
             .contains("The original footnote text should still be present somewhere."));
         assert!(without_standardize.html.contains("headerlink"));
+        assert!(without_standardize
+            .org
+            .contains("Trailing diagnostic heading"));
         let raw_video = without_standardize
             .html
             .split("id=\"standardize-video\"")
@@ -33764,6 +33774,7 @@ Output: [0,1]</code></pre>
         assert!(with_debug.html.contains("controls=\"\""));
         assert!(!with_debug.html.contains("lite-youtube"));
         assert!(with_debug.html.contains("headerlink"));
+        assert!(!with_debug.org.contains("Trailing diagnostic heading"));
         for marker in ["legacy-object", "legacy-embed", "legacy-applet"] {
             assert!(with_debug.html.contains(marker), "{}", with_debug.html);
         }

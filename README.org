@@ -362,10 +362,11 @@ Implemented:
   boilerplate/comment-policy tails, and investment/legal disclaimer footers,
   including related article-card grids without explicit grid class names.
 - Configurable content-pattern cleanup through a ~removeContentPatterns~-style
-  option exposed as ~:remove-content-patterns~ in Elisp. Debug/profile records
-  from this pass use the upstream ~removeByContentPattern~ step name and
-  upstream reason names for breadcrumb lists, metadata headers, pinned labels,
-  author contacts, social engagement counters, and trailing tag links.
+  option exposed as ~:remove-content-patterns~ in Elisp, including the
+  pre-selector eyebrow-label pass. Debug/profile records from this pass use the
+  upstream ~removeByContentPattern~ step name and upstream reason names for
+  breadcrumb lists, metadata headers, pinned labels, author contacts, social
+  engagement counters, and trailing tag links.
 - Configurable low-score block cleanup through a ~removeLowScoring~-style
   option exposed as ~:remove-low-scoring~ in Elisp. Debug removals from this
   pass use the upstream ~scoreAndRemove~ step name. The scorer follows the
@@ -379,7 +380,8 @@ Implemented:
 - Configurable Org-oriented standardization through a ~standardize~-style
   option across the Rust core, dynamic module, and Elisp wrappers. Disabling it
   preserves raw media/custom elements instead of converting lite YouTube
-  embeds, adding video controls, or removing obsolete plugin elements.
+  embeds, adding video controls, removing obsolete plugin elements, or deleting
+  trailing headings.
 - Debug and profiling diagnostics through ~debug~- and ~profile~-style options
   across the Rust core, dynamic module, and Elisp JSON wrapper, including
   selected removal records from hidden-element, selector, upstream-style
