@@ -20181,6 +20181,12 @@ impl MarkdownRenderer {
             self.out.push(']');
             return;
         }
+        if !inline {
+            if let Some(callout) = callout_info(node, element) {
+                self.render_callout(node, callout);
+                return;
+            }
+        }
 
         let tag = element.name.local.as_ref();
         match tag {
@@ -20212,7 +20218,7 @@ impl MarkdownRenderer {
             "img" => self.render_image(element),
             "figure" => self.render_figure(node),
             "figcaption" => self.render_block_children(node),
-            "iframe" => self.render_iframe(element),
+            "iframe" => self.render_iframe(node, element, inline),
             "video" | "audio" => self.render_raw_html(node, inline),
             "ol" if markdown_is_footnotes_list(node) => self.render_footnotes_list(node),
             "ol" if markdown_is_arxiv_enumerate(element) => self.render_arxiv_enumerate(node),
@@ -20366,15 +20372,63 @@ impl MarkdownRenderer {
         self.ensure_newline();
     }
 
-    fn render_iframe(&mut self, element: &ElementData) {
+    fn render_iframe(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
         let Some(src) = element.attributes.borrow().get("src").map(str::to_owned) else {
+            self.render_raw_html(node, inline);
             return;
         };
         if let Some(link) = normalize_embed_link(&src) {
             self.render_block_image_link(&link);
             return;
         }
-        self.render_block_link(&src);
+        self.render_raw_html(node, inline);
+    }
+
+    fn render_callout(&mut self, node: &NodeRef, callout: CalloutInfo) {
+        let mut nested = MarkdownRenderer {
+            out: String::new(),
+            list_depth: self.list_depth,
+            suppress_next_space: false,
+        };
+        match callout.content_node {
+            Some(content) => {
+                for child in content.children() {
+                    nested.render_node(&child, false);
+                }
+            }
+            None => {
+                let title_key = callout.title_node.as_ref().map(node_key);
+                for child in node.children() {
+                    if title_key.is_some_and(|key| node_key(&child) == key) {
+                        continue;
+                    }
+                    nested.render_node(&child, false);
+                }
+            }
+        }
+
+        self.ensure_blank_line();
+        self.out.push_str("> [!");
+        self.out.push_str(&callout.kind);
+        self.out.push(']');
+        self.out.push_str(&callout.fold);
+        if !callout.title.is_empty() {
+            self.out.push(' ');
+            self.out.push_str(&callout.title);
+        }
+        self.out.push('\n');
+
+        let content = cleanup_markdown(&nested.out);
+        for line in content.trim().lines() {
+            if line.is_empty() {
+                self.out.push('>');
+            } else {
+                self.out.push_str("> ");
+                self.out.push_str(line);
+            }
+            self.out.push('\n');
+        }
+        self.out.push('\n');
     }
 
     fn render_raw_html(&mut self, node: &NodeRef, inline: bool) {
@@ -20418,17 +20472,6 @@ impl MarkdownRenderer {
         }
     }
 
-    fn render_block_link(&mut self, url: &str) {
-        let url = url.trim();
-        if url.is_empty() || is_dangerous_url(url) {
-            return;
-        }
-        self.ensure_blank_line();
-        self.out.push('<');
-        self.out.push_str(&escape_markdown_url(url));
-        self.out.push_str(">\n\n");
-    }
-
     fn render_block_image_link(&mut self, url: &str) {
         let url = url.trim();
         if url.is_empty() || is_dangerous_url(url) {
@@ -20467,7 +20510,10 @@ impl MarkdownRenderer {
         let text = self.render_inline_children(node);
         let fallback = text.is_empty().then(|| first_image_src(node)).flatten();
         let label = if text.is_empty() {
-            fallback.unwrap_or_else(|| href.clone())
+            let Some(fallback) = fallback else {
+                return;
+            };
+            fallback
         } else {
             text
         };
@@ -20477,13 +20523,8 @@ impl MarkdownRenderer {
 
         self.ensure_inline_space("[");
         let label = label.trim();
-        let label = if label.starts_with("![") {
-            label.to_string()
-        } else {
-            escape_markdown_link_text(label)
-        };
         self.out.push('[');
-        self.out.push_str(&label);
+        self.out.push_str(label);
         self.out.push_str("](");
         self.out
             .push_str(&markdown_link_destination(href.trim(), title.as_deref()));
@@ -20633,6 +20674,33 @@ impl MarkdownRenderer {
     }
 
     fn render_table(&mut self, node: &NodeRef) {
+        if let Some(equations) = markdown_equation_table_math(node) {
+            for equation in equations {
+                self.ensure_blank_line();
+                if equation.is_block {
+                    self.out.push_str("$$\n");
+                    self.out.push_str(&equation.latex);
+                    self.out.push_str("\n$$\n\n");
+                } else {
+                    self.out.push('$');
+                    self.out.push_str(&equation.latex);
+                    self.out.push_str("$\n\n");
+                }
+            }
+            return;
+        }
+
+        if let Some(cells) = markdown_layout_table_cells(node) {
+            self.ensure_blank_line();
+            for cell in cells {
+                for child in cell.children() {
+                    self.render_node(&child, false);
+                }
+                self.ensure_blank_line();
+            }
+            return;
+        }
+
         if markdown_table_has_spans(node) {
             let html = markdown_clean_table_html(node);
             if !html.trim().is_empty() {
@@ -20673,7 +20741,7 @@ impl MarkdownRenderer {
         self.ensure_blank_line();
         for (index, cells) in rendered_rows.iter().enumerate() {
             self.render_table_row(cells);
-            if index == 0 && (rendered_rows.len() > 1 || row_has_header_cells(&rows[0])) {
+            if index == 0 {
                 let separator = vec!["---".to_string(); max_columns];
                 self.render_table_row(&separator);
             }
@@ -20812,6 +20880,53 @@ fn markdown_is_ltx_tag_item(node: &NodeRef) -> bool {
     tag_name(node).as_deref() == Some("span")
         && has_class_token(node, "ltx_tag")
         && has_class_token(node, "ltx_tag_item")
+}
+
+fn markdown_equation_table_math(node: &NodeRef) -> Option<Vec<MathInfo>> {
+    if !["ltx_equation", "ltx_eqn_table", "numblk"]
+        .into_iter()
+        .any(|class| has_class_token(node, class))
+    {
+        return None;
+    }
+
+    let equations = node
+        .descendants()
+        .filter(|descendant| tag_name(descendant).as_deref() == Some("math"))
+        .filter_map(|math_node| {
+            let element = math_node.as_element()?;
+            let mut math = math_info(&math_node, element)?;
+            math.is_block = !math_node
+                .ancestors()
+                .take_while(|ancestor| ancestor != node)
+                .any(|ancestor| {
+                    has_class_token(&ancestor, "ltx_eqn_inline")
+                        || has_class_token(&ancestor, "mwe-math-element-inline")
+                });
+            Some(math)
+        })
+        .collect::<Vec<_>>();
+
+    Some(equations)
+}
+
+fn markdown_layout_table_cells(node: &NodeRef) -> Option<Vec<NodeRef>> {
+    let rows = direct_table_rows(node);
+    let cells = rows.iter().flat_map(direct_row_cells).collect::<Vec<_>>();
+    let has_nested_tables = node
+        .descendants()
+        .any(|descendant| descendant != *node && tag_name(&descendant).as_deref() == Some("table"));
+    if !has_nested_tables && cells.len() > 1 {
+        return None;
+    }
+
+    let cell_counts = rows.iter().map(direct_row_cells).map(|cells| cells.len());
+    let cell_counts = cell_counts.collect::<Vec<_>>();
+    let is_single_column = cell_counts
+        .first()
+        .is_some_and(|first| *first <= 1 && cell_counts.iter().all(|count| count == first));
+
+    (is_single_column || has_nested_tables).then_some(cells)
 }
 
 fn markdown_table_has_spans(node: &NodeRef) -> bool {
@@ -25151,9 +25266,14 @@ fn escape_table_cell(text: &str) -> String {
 }
 
 fn escape_markdown_text(text: &str) -> String {
-    text.replace('\\', "\\\\")
+    static TAG_LIKE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"<(/?[A-Za-z][A-Za-z0-9-]*(?:\s|/?>))").unwrap());
+
+    let escaped = text
+        .replace('\\', "\\\\")
         .replace('[', "\\[")
-        .replace(']', "\\]")
+        .replace(']', "\\]");
+    TAG_LIKE_RE.replace_all(&escaped, r"\<$1").into_owned()
 }
 
 fn escape_markdown_link_text(text: &str) -> String {
@@ -25221,12 +25341,6 @@ fn markdown_table_cell(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn row_has_header_cells(row: &NodeRef) -> bool {
-    direct_row_cells(row)
-        .iter()
-        .any(|cell| tag_name(cell).as_deref() == Some("th"))
 }
 
 fn escape_html_attr(text: &str) -> String {
@@ -32684,6 +32798,7 @@ Output: [0,1]</code></pre>
                 content_selector: Some("article.post-content".to_string()),
                 remove_low_scoring: false,
                 remove_content_patterns: false,
+                separate_markdown: true,
                 ..DefuddleOptions::default()
             },
         )
@@ -32709,6 +32824,18 @@ Output: [0,1]</code></pre>
             output.html
         );
         assert!(!output.html.contains("display: none"), "{}", output.html);
+        assert!(
+            output.content_markdown.contains("> [!tip]- Collapsed Tip"),
+            "{}",
+            output.content_markdown
+        );
+        assert!(
+            output
+                .content_markdown
+                .contains("> Hidden tip content survives early callout standardization."),
+            "{}",
+            output.content_markdown
+        );
     }
 
     #[test]
@@ -33647,7 +33774,79 @@ line break text.">
         );
         assert!(embeds.contains("![](https://www.youtube.com/watch?v=dQw4w9WgXcQ)"));
         assert!(embeds.contains("![](https://x.com/i/status/12345)"));
-        assert!(embeds.contains("<https://open.spotify.com/embed/track/abc123>"));
+        assert!(embeds.contains("<iframe src=\"https://open.spotify.com/embed/track/abc123\">"));
+        assert!(!embeds.contains("<https://open.spotify.com/embed/track/abc123>"));
+    }
+
+    #[test]
+    fn markdown_conversion_matches_upstream_structural_rules() {
+        let layout_table = html_fragment_to_markdown(
+            r#"<article>
+              <table class="layout">
+                <tr><td>
+                  <p>Introductory layout text.</p>
+                  <table><tr><th>Name</th><th>Value</th></tr><tr><td>Answer</td><td>42</td></tr></table>
+                </td></tr>
+              </table>
+            </article>"#,
+        );
+        assert!(layout_table.contains("Introductory layout text."));
+        assert!(layout_table.contains("| Name | Value |"));
+        assert_eq!(layout_table.matches("| --- | --- |").count(), 1);
+        assert!(!layout_table.contains("\\| Name \\| Value \\|"));
+
+        let equation_table = html_fragment_to_markdown(
+            r#"<article>
+              <table class="ltx_equation ltx_eqn_table">
+                <tr><td><math><annotation encoding="application/x-tex">E=mc^2</annotation></math></td><td>(1)</td></tr>
+              </table>
+              <table class="numblk">
+                <tr><td class="mwe-math-element-inline"><math alttext="x+y"></math></td></tr>
+              </table>
+            </article>"#,
+        );
+        assert!(equation_table.contains("$$\nE=mc^2\n$$"));
+        assert!(equation_table.contains("$x+y$"));
+        assert!(!equation_table.contains("| E=mc"));
+        assert!(!equation_table.contains("(1)"));
+
+        let callout = html_fragment_to_markdown(
+            r#"<article>
+              <div class="callout" data-callout="warning" data-callout-fold="-">
+                <div class="callout-title"><div class="callout-title-inner">Careful</div></div>
+                <div class="callout-content"><p>Keep this detail.</p><ul><li>First check</li></ul></div>
+              </div>
+            </article>"#,
+        );
+        assert!(callout.contains("> [!warning]- Careful"));
+        assert!(callout.contains("> Keep this detail."));
+        assert!(callout.contains("> - First check"));
+        assert_eq!(callout.matches("Careful").count(), 1);
+
+        let empty_link = html_fragment_to_markdown(
+            r#"<article><p>Before <a href="https://example.com/empty"></a> after.</p></article>"#,
+        );
+        assert!(empty_link.contains("Before after."));
+        assert!(!empty_link.contains("example.com/empty"));
+
+        let tag_like_text = html_fragment_to_markdown(
+            r#"<article><p>Monte&lt;video&gt; remains beside &lt;https://example.com&gt;, &lt;a@b.com&gt;, and a &lt; b.</p></article>"#,
+        );
+        assert!(tag_like_text.contains(r"Monte\<video>"));
+        assert!(tag_like_text.contains("<https://example.com>"));
+        assert!(tag_like_text.contains("<a@b.com>"));
+        assert!(tag_like_text.contains("a < b."));
+
+        let tag_like_link = html_fragment_to_markdown(
+            r#"<article><p><a href="https://example.com">Monte&lt;video&gt;</a> remains.</p></article>"#,
+        );
+        assert!(tag_like_link.contains(r"[Monte\<video>](https://example.com)"));
+        assert!(!tag_like_link.contains(r"Monte\\<video>"));
+
+        let one_row_table = html_fragment_to_markdown(
+            r#"<article><table><tr><td>A</td><td>B</td></tr></table></article>"#,
+        );
+        assert!(one_row_table.contains("| A | B |\n| --- | --- |"));
     }
 
     #[test]
