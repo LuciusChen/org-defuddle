@@ -20172,6 +20172,15 @@ impl MarkdownRenderer {
             self.render_math(node, math);
             return;
         }
+        if markdown_footnote_backref(element) {
+            return;
+        }
+        if let Some(reference) = markdown_footnote_reference(element) {
+            self.out.push_str("[^");
+            self.out.push_str(&reference);
+            self.out.push(']');
+            return;
+        }
 
         let tag = element.name.local.as_ref();
         match tag {
@@ -20202,6 +20211,7 @@ impl MarkdownRenderer {
             "figcaption" => self.render_block_children(node),
             "iframe" => self.render_iframe(element),
             "video" | "audio" => self.render_raw_html(node, inline),
+            "ol" if markdown_is_footnotes_list(node) => self.render_footnotes_list(node),
             "ul" | "ol" => {
                 self.ensure_newline();
                 self.list_depth += 1;
@@ -20417,6 +20427,44 @@ impl MarkdownRenderer {
         self.ensure_newline();
     }
 
+    fn render_footnotes_list(&mut self, node: &NodeRef) {
+        self.ensure_blank_line();
+        for child in node.children() {
+            if tag_name(&child).as_deref() != Some("li") {
+                continue;
+            }
+            let Some(id) = markdown_footnote_definition_id(&child) else {
+                continue;
+            };
+            let content = self.render_footnote_definition_content(&child, &id);
+            self.out.push_str("[^");
+            self.out.push_str(&id.to_ascii_lowercase());
+            self.out.push_str("]: ");
+            self.out.push_str(content.trim());
+            self.out.push_str("\n\n");
+        }
+    }
+
+    fn render_footnote_definition_content(&self, node: &NodeRef, id: &str) -> String {
+        let mut nested = MarkdownRenderer {
+            out: String::new(),
+            list_depth: 0,
+            suppress_next_space: false,
+        };
+        for child in node.children() {
+            if markdown_is_redundant_footnote_label(&child, id) {
+                continue;
+            }
+            nested.render_node(&child, true);
+        }
+        cleanup_markdown(&nested.out)
+            .trim()
+            .trim_end_matches("↩︎")
+            .trim_end_matches('↩')
+            .trim()
+            .to_string()
+    }
+
     fn render_quote(&mut self, node: &NodeRef) {
         let content = self.render_block_children_to_string(node);
         if content.is_empty() {
@@ -20624,6 +20672,55 @@ fn markdown_task_list_marker(node: &NodeRef) -> Option<bool> {
     }
     let checkbox = select_first_node(node, r#"input[type="checkbox"]"#)?;
     Some(element_attr(&checkbox, "checked").is_some())
+}
+
+fn markdown_footnote_backref(element: &ElementData) -> bool {
+    let attrs = element.attributes.borrow();
+    attrs
+        .get("href")
+        .is_some_and(|href| href.contains("#fnref"))
+        || attrs
+            .get("class")
+            .unwrap_or_default()
+            .split_whitespace()
+            .any(|part| part == "footnote-backref")
+}
+
+fn markdown_footnote_reference(element: &ElementData) -> Option<String> {
+    if element.name.local.as_ref() != "sup" {
+        return None;
+    }
+    let attrs = element.attributes.borrow();
+    let id = attrs.get("id")?;
+    let rest = id.strip_prefix("fnref:")?;
+    rest.split('-')
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn markdown_is_footnotes_list(node: &NodeRef) -> bool {
+    node.parent()
+        .and_then(|parent| element_attr(&parent, "id"))
+        .as_deref()
+        == Some("footnotes")
+}
+
+fn markdown_footnote_definition_id(node: &NodeRef) -> Option<String> {
+    let li_id = element_attr(node, "id")?;
+    if let Some(rest) = li_id.strip_prefix("fn:") {
+        return Some(rest.to_string());
+    }
+    let last_segment = li_id.rsplit('/').next().unwrap_or(li_id.as_str());
+    if let Some(rest) = last_segment.strip_prefix("cite_note-") {
+        Some(rest.to_string())
+    } else {
+        Some(li_id)
+    }
+}
+
+fn markdown_is_redundant_footnote_label(node: &NodeRef, id: &str) -> bool {
+    tag_name(node).as_deref() == Some("sup") && node.text_contents().trim() == id
 }
 
 #[derive(Debug, Default)]
@@ -33197,6 +33294,28 @@ line break text.">
         );
         assert!(task_list.contains("- [x] Done"));
         assert!(task_list.contains("- [ ] Todo"));
+    }
+
+    #[test]
+    fn markdown_conversion_matches_upstream_footnote_rules() {
+        let markdown = html_fragment_to_markdown(
+            r##"<article>
+              <p>Alpha<sup id="fnref:calibration-1"><a href="#fn:calibration">1</a></sup> beta.</p>
+              <div id="footnotes">
+                <ol>
+                  <li id="fn:calibration"><sup>calibration</sup>Footnote <em>content</em>. <a href="#fnref:calibration-1" class="footnote-backref">↩︎</a></li>
+                  <li id="cite_note-2"><span>MediaWiki reference.</span> <a href="#fnref:2">↩</a></li>
+                </ol>
+              </div>
+            </article>"##,
+        );
+
+        assert!(markdown.contains("Alpha[^calibration] beta."));
+        assert!(markdown.contains("[^calibration]: Footnote *content*."));
+        assert!(markdown.contains("[^2]: MediaWiki reference."));
+        assert!(!markdown.contains("fnref:calibration"));
+        assert!(!markdown.contains("footnote-backref"));
+        assert!(!markdown.contains("↩"));
     }
 
     #[test]

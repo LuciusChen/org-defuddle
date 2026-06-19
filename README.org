@@ -396,8 +396,9 @@ Implemented:
   Markdown renderer handles selected upstream Turndown edge cases including
   link destinations with spaces, titles, and escaped parentheses, image syntax
   after literal exclamation marks, linked images, ordered-list ~start~
-  numbering, GitHub-style task-list checkboxes, ragged table column padding,
-  ~wbr~ joins, and document ~base href~ URL resolution, plus
+  numbering, GitHub-style task-list checkboxes, footnote references and
+  definitions, ragged table column padding, ~wbr~ joins, and document
+  ~base href~ URL resolution, plus
   MathML/data-latex conversion with MathML preferred over degraded attributes
   and standalone inline math promoted to block math. It also preserves selected
   Turndown-kept raw HTML elements such as ~sup~, ~sub~, ~svg~, ~video~, and
