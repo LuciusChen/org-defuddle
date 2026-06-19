@@ -20205,6 +20205,9 @@ impl MarkdownRenderer {
             "p" => self.render_block_children(node),
             "br" => self.out.push('\n'),
             "hr" => self.render_horizontal_rule(),
+            "a" if markdown_is_complex_link_structure(node) => {
+                self.render_complex_link_structure(node, element)
+            }
             "a" => self.render_link(node, element),
             "img" => self.render_image(element),
             "figure" => self.render_figure(node),
@@ -20248,6 +20251,64 @@ impl MarkdownRenderer {
                 }
             }
         }
+    }
+
+    fn render_complex_link_structure(&mut self, node: &NodeRef, element: &ElementData) {
+        let Some(heading) = markdown_complex_link_heading(node) else {
+            self.render_link(node, element);
+            return;
+        };
+
+        let attrs = element.attributes.borrow();
+        let href = attrs.get("href").map(str::to_owned);
+        let title = attrs.get("title").map(str::to_owned);
+        drop(attrs);
+
+        self.ensure_blank_line();
+        self.render_node(&heading, false);
+
+        let remaining = self.render_complex_link_remaining(node, &heading);
+        if !remaining.is_empty() {
+            self.ensure_blank_line();
+            if let Some(href) = href.as_deref().filter(|href| !is_dangerous_url(href)) {
+                self.out.push('[');
+                if remaining.starts_with("![") {
+                    self.out.push_str(&remaining);
+                } else {
+                    self.out.push_str(&escape_markdown_link_text(&remaining));
+                }
+                self.out.push_str("](");
+                self.out
+                    .push_str(&markdown_link_destination(href.trim(), title.as_deref()));
+                self.out.push_str(")\n\n");
+            } else {
+                self.out.push_str(&remaining);
+                self.out.push_str("\n\n");
+            }
+        }
+
+        if let Some(href) = href.as_deref().filter(|href| !is_dangerous_url(href)) {
+            self.ensure_blank_line();
+            self.out.push_str("[View original](");
+            self.out
+                .push_str(&markdown_link_destination(href.trim(), title.as_deref()));
+            self.out.push_str(")\n\n");
+        }
+    }
+
+    fn render_complex_link_remaining(&self, node: &NodeRef, heading: &NodeRef) -> String {
+        let mut nested = MarkdownRenderer {
+            out: String::new(),
+            list_depth: self.list_depth,
+            suppress_next_space: false,
+        };
+        for child in node.children() {
+            if child == *heading {
+                continue;
+            }
+            nested.render_node(&child, false);
+        }
+        cleanup_markdown(&nested.out).trim().to_string()
     }
 
     fn render_horizontal_rule(&mut self) {
@@ -20672,6 +20733,19 @@ fn markdown_task_list_marker(node: &NodeRef) -> Option<bool> {
     }
     let checkbox = select_first_node(node, r#"input[type="checkbox"]"#)?;
     Some(element_attr(&checkbox, "checked").is_some())
+}
+
+fn markdown_is_complex_link_structure(node: &NodeRef) -> bool {
+    node.children().count() > 1 && markdown_complex_link_heading(node).is_some()
+}
+
+fn markdown_complex_link_heading(node: &NodeRef) -> Option<NodeRef> {
+    node.children().find(|child| {
+        matches!(
+            tag_name(child).as_deref(),
+            Some("h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+        )
+    })
 }
 
 fn markdown_footnote_backref(element: &ElementData) -> bool {
@@ -33255,6 +33329,22 @@ line break text.">
         assert!(escaped_pipe_header.contains("A \\| B"));
         assert!(escaped_pipe_header.contains("| --- | --- |"));
         assert!(!escaped_pipe_header.contains("| --- | --- | --- |"));
+
+        let complex_link = html_fragment_to_markdown(
+            r#"<article>
+              <a href="https://example.com/original" title="Original page">
+                <h2>Linked Card Title</h2>
+                <p>Summary with <strong>detail</strong>.</p>
+              </a>
+            </article>"#,
+        );
+        assert!(complex_link.contains("## Linked Card Title"));
+        assert!(complex_link.contains(
+            "[Summary with **detail**.](https://example.com/original \"Original page\")"
+        ));
+        assert!(complex_link
+            .contains("[View original](https://example.com/original \"Original page\")"));
+        assert!(!complex_link.contains("[## Linked Card Title"));
     }
 
     #[test]
