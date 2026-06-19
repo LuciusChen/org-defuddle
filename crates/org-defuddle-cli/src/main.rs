@@ -216,6 +216,12 @@ where
                         .ok_or_else(|| format!("{arg} requires a user agent"))?,
                 );
             }
+            "-" => {
+                if options.source.is_some() {
+                    return Err(format!("unexpected extra source: {arg}"));
+                }
+                options.source = Some(arg);
+            }
             _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
             _ => {
                 if options.source.is_some() {
@@ -1101,6 +1107,14 @@ mod tests {
         assert_eq!(options.source.as_deref(), Some("page.html"));
         assert!(options.separate_markdown);
         assert!(wants_markdown_output(&options));
+    }
+
+    #[test]
+    fn parses_dash_as_stdin_source() {
+        let options = parse_args(["parse", "-", "--json"]).unwrap();
+
+        assert_eq!(options.source.as_deref(), Some("-"));
+        assert!(options.json);
     }
 
     #[test]

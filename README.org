@@ -616,8 +616,12 @@ Implemented:
   captions, lists, horizontal rules, quotes, code blocks with language hints,
   inline ~code~/~samp~ elements, substantive SVG as HTML export blocks, and
   simple tables, with selected heading permalink anchors stripped before rendering.
-- Selected custom element standardization, including ~span[data-as="p"]~
-  rendered as paragraph blocks and swiper carousel content preserved through
+- Selected upstream-style standardization stages, including drop-cap merging,
+  non-breaking-space normalization, HTML comment removal, duplicate-title H1
+  cleanup with remaining H1 headings demoted to H2, hyphenated custom elements
+  converted to normal blocks, ~span[data-as]~ block conversions, block-span
+  paragraph conversion, and semantic ~role="paragraph"~/~role="list"~/
+  ~role="listitem"~ cleanup. Swiper carousel content is preserved through
   child image extraction.
 - Conservative table handling: simple data tables are preserved as Org tables,
   inline links/emphasis/code and short ~pre~ snippets inside cells are preserved,
@@ -745,10 +749,10 @@ Implemented:
 
 Remaining parity work:
 
-- Finish the remaining exact-selector parity gaps that need conditional Rust
-  equivalents for browser-only CSS selectors and high-risk broad selectors
-  beyond the implemented UI-label subset, plus the remaining content-pattern
-  removals.
+- Continue auditing content-pattern, debug, profile, and browser-state parity
+  against upstream pages outside the fixture set. Exact/partial selector cleanup
+  now tracks the inspected upstream selector tables and guards, but serialized
+  HTML still cannot recover browser-only state that was absent from the input.
 - Expand image/media support to the full upstream fixture set, including
   richer platform video/embed handling and remaining site-specific
   image/figure elements.

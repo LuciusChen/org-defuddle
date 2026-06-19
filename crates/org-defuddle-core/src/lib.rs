@@ -1287,18 +1287,6 @@ fn parse_html_to_org_once(
     }
 
     let step_start = Instant::now();
-    if options.standardize {
-        standardize_simple_span_media_wrappers(&main);
-        standardize_container_media_captions(&main);
-        standardize_adjacent_media_captions(&main);
-    }
-    let elapsed = step_start.elapsed();
-    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
-    if options.standardize {
-        record_profile_elapsed(&mut profile, "standardizeElements", elapsed);
-    }
-
-    let step_start = Instant::now();
     let footnotes = if options.standardize {
         collect_footnotes(&document)
     } else {
@@ -1338,6 +1326,61 @@ fn parse_html_to_org_once(
     record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
     if options.standardize {
         record_profile_elapsed(&mut profile, "removeTrailingHeadings", elapsed);
+    }
+    let step_start = Instant::now();
+    if options.standardize {
+        let substep_start = Instant::now();
+        standardize_drop_caps(&main);
+        let elapsed = substep_start.elapsed();
+        record_profile_elapsed(&mut profile, "standardizeDropCaps", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let substep_start = Instant::now();
+        standardize_spaces(&main);
+        let elapsed = substep_start.elapsed();
+        record_profile_elapsed(&mut profile, "standardizeSpaces", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let substep_start = Instant::now();
+        remove_html_comments(&main);
+        let elapsed = substep_start.elapsed();
+        record_profile_elapsed(&mut profile, "removeHtmlComments", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let substep_start = Instant::now();
+        standardize_headings(&main, &metadata.title);
+        let elapsed = substep_start.elapsed();
+        record_profile_elapsed(&mut profile, "standardizeHeadings", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        standardize_semantic_role_elements(&main);
+        standardize_simple_span_media_wrappers(&main);
+        standardize_container_media_captions(&main);
+        standardize_adjacent_media_captions(&main);
+    }
+    let elapsed = step_start.elapsed();
+    record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+    if options.standardize {
+        record_profile_elapsed(&mut profile, "standardizeElements", elapsed);
+    }
+    if options.standardize && !options.debug {
+        let step_start = Instant::now();
+        standardize_custom_elements(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "replaceCustomElements", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let step_start = Instant::now();
+        standardize_data_as_spans(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "convertDataAsSpans", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
+
+        let step_start = Instant::now();
+        standardize_block_spans(&main);
+        let elapsed = step_start.elapsed();
+        record_profile_elapsed(&mut profile, "convertBlockSpans", elapsed);
+        record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
     }
 
     if let Some(best_cover_url) = remove_cover_image_duplicate(&main, &metadata.image) {
@@ -12762,16 +12805,10 @@ fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
             "input[type=\"checkbox\"][class/id*=\"sidebar|drawer|hamburger|toggle|trigger\" i]",
         );
     }
-    if tag == "label"
-        && is_removable_ui_label_node(
-            node,
-            class,
-            id,
-            attrs.get("for").unwrap_or_default(),
-            attrs.get("role").unwrap_or_default(),
-            attrs.get("aria-label").unwrap_or_default(),
-        )
-    {
+    if tag == "label" {
+        if is_preserved_footnote_label_node(node, class, id, attrs.get("for").unwrap_or_default()) {
+            return None;
+        }
         return Some("label");
     }
     if attr_eq_ci(attrs.get("data-print-layout").unwrap_or_default(), "hide") {
@@ -12860,83 +12897,14 @@ fn checkbox_ui_toggle_attr(class: &str, id: &str) -> bool {
         .any(|needle| attr_contains_ci(class, needle) || attr_contains_ci(id, needle))
 }
 
-fn is_removable_ui_label_node(
-    node: &NodeRef,
-    class: &str,
-    id: &str,
-    for_attr: &str,
-    role: &str,
-    aria_label: &str,
-) -> bool {
-    if is_preserved_label_node(node, class, id, for_attr) {
-        return false;
-    }
-    if count_selector(
-        node,
-        "p, pre, code, table, blockquote, figure, img, picture, video, audio, math",
-    ) > 0
-    {
-        return false;
-    }
-    if count_selector(node, "input, select, textarea, button") > 0 {
-        return true;
-    }
-
-    let attrs = [class, id, for_attr, role, aria_label].join(" ");
-    if [
-        "sidebar",
-        "drawer",
-        "hamburger",
-        "toggle",
-        "trigger",
-        "menu",
-        "nav",
-        "modal",
-        "dialog",
-        "search",
-        "filter",
-        "sort",
-        "share",
-        "subscribe",
-        "newsletter",
-        "theme",
-        "close",
-        "dismiss",
-    ]
-    .into_iter()
-    .any(|needle| attr_contains_ci(&attrs, needle))
-    {
-        return true;
-    }
-
-    let text = cleanup_inline(&node.text_contents());
-    if !for_attr.trim().is_empty() {
-        return count_words(&text) <= 6;
-    }
-
-    static UI_LABEL_TEXT_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r"(?i)^(menu|open menu|close|dismiss|search|filter|sort|share|subscribe|newsletter|toggle|theme|dark mode|light mode|sidebar|navigation|contents?)$",
-        )
-        .unwrap()
-    });
-    count_words(&text) <= 3 && UI_LABEL_TEXT_RE.is_match(text.trim())
-}
-
-fn is_preserved_label_node(node: &NodeRef, class: &str, id: &str, for_attr: &str) -> bool {
+fn is_preserved_footnote_label_node(node: &NodeRef, class: &str, id: &str, for_attr: &str) -> bool {
     let attrs = [class, id, for_attr].join(" ").to_ascii_lowercase();
-    if attrs.contains("footnote")
+    attrs.contains("footnote")
         || attrs.contains("footref")
         || attrs.contains("sidenote")
         || attrs.contains("margin-toggle")
-        || attrs.contains("margin-toggle-footnote")
-    {
-        return true;
-    }
-    if looks_like_label_footnote_target(for_attr) {
-        return true;
-    }
-    has_ancestor_matching(node, is_footnote_container_node)
+        || looks_like_label_footnote_target(for_attr)
+        || has_ancestor_matching(node, is_footnote_container_node)
 }
 
 fn looks_like_label_footnote_target(value: &str) -> bool {
@@ -13780,6 +13748,358 @@ fn remove_obsolete_embed_elements(document: &NodeRef) {
     for node in nodes {
         node.detach();
     }
+}
+
+fn standardize_drop_caps(root: &NodeRef) {
+    let Ok(matches) = root.select("span[data-caps=\"initial\"]") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for span in nodes {
+        if span.parent().is_none() {
+            continue;
+        }
+        let next = next_element_sibling(&span);
+        if next
+            .as_ref()
+            .is_some_and(|node| tag_name(node).as_deref() == Some("small"))
+        {
+            let next = next.unwrap();
+            span.insert_before(NodeRef::new_text(format!(
+                "{}{}",
+                span.text_contents(),
+                next.text_contents()
+            )));
+            next.detach();
+            span.detach();
+        } else {
+            unwrap_node_children_before(&span);
+        }
+    }
+}
+
+fn standardize_spaces(root: &NodeRef) {
+    let text_nodes = root
+        .descendants()
+        .filter(|node| node.as_text().is_some())
+        .collect::<Vec<_>>();
+    for node in text_nodes {
+        if node
+            .ancestors()
+            .any(|ancestor| matches!(tag_name(&ancestor).as_deref(), Some("pre" | "code" | "svg")))
+        {
+            continue;
+        }
+        let Some(text) = node.as_text() else {
+            continue;
+        };
+        if text.borrow().contains('\u{a0}') {
+            let replaced = text.borrow().replace('\u{a0}', " ");
+            *text.borrow_mut() = replaced;
+        }
+    }
+}
+
+fn remove_html_comments(root: &NodeRef) {
+    let comments = root
+        .descendants()
+        .filter(|node| matches!(node.data(), NodeData::Comment(_)))
+        .collect::<Vec<_>>();
+    for comment in comments {
+        comment.detach();
+    }
+}
+
+fn standardize_headings(root: &NodeRef, title: &str) {
+    let Ok(matches) = root.select("h1") else {
+        return;
+    };
+    let headings = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for heading in headings {
+        if heading.parent().is_none() {
+            continue;
+        }
+        let Some(replacement) = new_html_element("h2") else {
+            continue;
+        };
+        copy_standardized_paragraph_attributes(&heading, &replacement);
+        replace_node_transferring_children(&heading, replacement);
+    }
+
+    let normalized_title = normalize_human_text(title);
+    if normalized_title.is_empty() {
+        return;
+    }
+    let Some(first_h2) = select_first_node(root, "h2") else {
+        return;
+    };
+    if normalize_human_text(&first_h2.text_contents()) == normalized_title {
+        first_h2.detach();
+    }
+}
+
+fn normalize_human_text(text: &str) -> String {
+    normalize_ws(
+        &text
+            .replace('\u{a0}', " ")
+            .replace(['\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'], "'")
+            .replace(['\u{2012}', '\u{2013}', '\u{2014}', '\u{2015}'], "-")
+            .replace(['\u{201c}', '\u{201d}', '\u{201e}', '\u{201f}'], "\"")
+            .replace('\u{2026}', "..."),
+    )
+    .to_lowercase()
+}
+
+fn standardize_custom_elements(root: &NodeRef) {
+    let Ok(matches) = root.select("*") else {
+        return;
+    };
+    let mut nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            let tag = tag_name(node)?;
+            (tag.contains('-')
+                && !is_standard_inline_element(&tag)
+                && !has_ancestor_tag(node, &["svg"])
+                && !is_inside_math_tree(node))
+            .then(|| node.clone())
+        })
+        .collect::<Vec<_>>();
+    nodes.reverse();
+    for node in nodes {
+        if node.parent().is_some() {
+            if let Some(replacement) = new_html_element("div") {
+                replace_node_transferring_children(&node, replacement);
+            }
+        }
+    }
+}
+
+fn is_inside_math_tree(node: &NodeRef) -> bool {
+    is_math_node(node) || node.ancestors().any(|ancestor| is_math_node(&ancestor))
+}
+
+fn is_standard_inline_element(tag: &str) -> bool {
+    matches!(
+        tag,
+        "a" | "span"
+            | "strong"
+            | "em"
+            | "i"
+            | "b"
+            | "u"
+            | "code"
+            | "br"
+            | "small"
+            | "sub"
+            | "sup"
+            | "mark"
+            | "date"
+            | "del"
+            | "ins"
+            | "q"
+            | "abbr"
+            | "cite"
+            | "relative-time"
+            | "time"
+            | "font"
+    )
+}
+
+fn standardize_data_as_spans(root: &NodeRef) {
+    let Ok(matches) = root.select("span[data-as]") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        let Some(target) = element_attr(&node, "data-as").map(|value| value.to_ascii_lowercase())
+        else {
+            continue;
+        };
+        if !matches!(
+            target.as_str(),
+            "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "blockquote"
+        ) {
+            continue;
+        }
+        if let Some(replacement) = new_html_element(&target) {
+            replace_node_transferring_children(&node, replacement);
+        }
+    }
+}
+
+fn standardize_block_spans(root: &NodeRef) {
+    let Ok(matches) = root.select("span[class], span[style]") else {
+        return;
+    };
+    let nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            let class_is_block = element_attr(node, "class").is_some_and(|class| {
+                class
+                    .split_ascii_whitespace()
+                    .any(|token| token.eq_ignore_ascii_case("block"))
+            });
+            let style_is_block = element_attr(node, "style")
+                .is_some_and(|style| style_declares_display_block(&style));
+            ((class_is_block || style_is_block) && !normalize_ws(&node.text_contents()).is_empty())
+                .then(|| node.clone())
+        })
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if let Some(replacement) = new_html_element("p") {
+            replace_node_transferring_children(&node, replacement);
+        }
+    }
+}
+
+fn style_declares_display_block(style: &str) -> bool {
+    style.split(';').any(|declaration| {
+        declaration.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("display")
+                && value.trim().eq_ignore_ascii_case("block")
+        })
+    })
+}
+
+fn standardize_semantic_role_elements(root: &NodeRef) {
+    standardize_role_paragraphs(root);
+    standardize_role_lists(root);
+    unwrap_remaining_role_list_items(root);
+}
+
+fn standardize_role_paragraphs(root: &NodeRef) {
+    let Ok(matches) = root.select("div[data-testid^=\"paragraph\"], div[role=\"paragraph\"]")
+    else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if node.parent().is_none() {
+            continue;
+        }
+        let Some(paragraph) = new_html_element("p") else {
+            continue;
+        };
+        copy_standardized_paragraph_attributes(&node, &paragraph);
+        replace_node_transferring_children(&node, paragraph);
+    }
+}
+
+fn standardize_role_lists(root: &NodeRef) {
+    let Ok(matches) = root.select("div[role=\"list\"]") else {
+        return;
+    };
+    let mut lists = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    lists.reverse();
+
+    for list in lists {
+        if list.parent().is_none() {
+            continue;
+        }
+        let items = direct_role_list_items(&list);
+        let ordered = items
+            .first()
+            .and_then(|item| select_first_node(item, ".label"))
+            .map(|label| normalize_ws(&label.text_contents()))
+            .is_some_and(|label| is_ordered_role_list_label(&label));
+        let Some(standardized) = new_html_element(if ordered { "ol" } else { "ul" }) else {
+            continue;
+        };
+
+        for item in items {
+            let Some(list_item) = new_html_element("li") else {
+                continue;
+            };
+            if let Some(content) = select_first_node(&item, ".content") {
+                for child in content.children().collect::<Vec<_>>() {
+                    list_item.append(child);
+                }
+            }
+            standardized.append(list_item);
+        }
+        list.insert_before(standardized);
+        list.detach();
+    }
+}
+
+fn direct_role_list_items(list: &NodeRef) -> Vec<NodeRef> {
+    let Ok(matches) = list.select("div[role=\"listitem\"]") else {
+        return Vec::new();
+    };
+    matches
+        .filter_map(|matched| {
+            let item = matched.as_node();
+            nearest_role_list_ancestor(item)
+                .is_some_and(|ancestor| ancestor == *list)
+                .then(|| item.clone())
+        })
+        .collect()
+}
+
+fn nearest_role_list_ancestor(node: &NodeRef) -> Option<NodeRef> {
+    node.ancestors().find(|ancestor| {
+        tag_name(ancestor).as_deref() == Some("div")
+            && element_attr(ancestor, "role").as_deref() == Some("list")
+    })
+}
+
+fn is_ordered_role_list_label(label: &str) -> bool {
+    let digits = label.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    digits > 0 && label[digits..].starts_with(')')
+}
+
+fn unwrap_remaining_role_list_items(root: &NodeRef) {
+    let Ok(matches) = root.select("div[role=\"listitem\"]") else {
+        return;
+    };
+    let nodes = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if node.parent().is_none() {
+            continue;
+        }
+        if let Some(content) = select_first_node(&node, ".content") {
+            node.insert_before(content);
+        }
+        node.detach();
+    }
+}
+
+fn new_html_element(tag: &str) -> Option<NodeRef> {
+    let document = kuchiki::parse_html().one(format!("<html><body><{tag}></{tag}></body></html>"));
+    select_first_node(&document, tag)
+}
+
+fn copy_standardized_paragraph_attributes(source: &NodeRef, target: &NodeRef) {
+    let Some(target) = target.as_element() else {
+        return;
+    };
+    let mut target_attrs = target.attributes.borrow_mut();
+    for name in ["aria-label", "dir", "lang", "role", "title"] {
+        if let Some(value) = element_attr(source, name) {
+            target_attrs.insert(name, value);
+        }
+    }
+}
+
+fn replace_node_transferring_children(source: &NodeRef, target: NodeRef) {
+    source.insert_before(target.clone());
+    for child in source.children().collect::<Vec<_>>() {
+        target.append(child);
+    }
+    source.detach();
 }
 
 fn standardize_container_media_captions(body: &NodeRef) {
@@ -20388,6 +20708,11 @@ impl<'a> OrgRenderer<'a> {
                     self.out.push_str("\n\n");
                 }
             }
+            "p" if inline => {
+                for child in node.children() {
+                    self.render_node(&child, true);
+                }
+            }
             "p" => self.render_block_children(node),
             "br" => self.out.push('\n'),
             "hr" => self.render_horizontal_rule(),
@@ -20656,9 +20981,22 @@ impl<'a> OrgRenderer<'a> {
         self.ensure_newline();
         self.out
             .push_str(&"  ".repeat(self.list_depth.saturating_sub(1)));
-        self.out.push_str("- ");
+        if node
+            .parent()
+            .and_then(|parent| tag_name(&parent))
+            .as_deref()
+            == Some("ol")
+        {
+            self.out.push_str("1. ");
+        } else {
+            self.out.push_str("- ");
+        }
         for child in node.children() {
-            self.render_node(&child, true);
+            if matches!(tag_name(&child).as_deref(), Some("ul" | "ol")) {
+                self.render_node(&child, false);
+            } else {
+                self.render_node(&child, true);
+            }
         }
         self.ensure_newline();
     }
@@ -29443,7 +29781,7 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
-    fn conditional_exact_selector_cleanup_removes_ui_labels_conservatively() {
+    fn conditional_exact_selector_cleanup_matches_upstream_label_removal() {
         let html = r##"
         <!doctype html>
         <html lang="en">
@@ -29456,7 +29794,7 @@ Output: [0,1]</code></pre>
               <label class="menu-toggle">Menu label marker</label>
               <label><input type="checkbox" checked> Preference label marker</label>
               <p>The visible paragraph keeps extraction stable after UI labels are removed.</p>
-              <p>The article preserves <label class="term-label">semantic label marker</label> in flowing prose.</p>
+              <p>The article removes <label class="term-label">semantic label marker</label> in flowing prose.</p>
               <p>The concluding paragraph keeps the article substantial and readable.</p>
             </article>
           </body>
@@ -29476,11 +29814,11 @@ Output: [0,1]</code></pre>
         .unwrap();
 
         assert!(output.org.contains("visible paragraph keeps extraction"));
-        assert!(output.org.contains("semantic label marker"));
         for marker in [
             "Sidebar label marker",
             "Menu label marker",
             "Preference label marker",
+            "semantic label marker",
         ] {
             assert!(!output.org.contains(marker), "{marker}\n{}", output.org);
         }
@@ -32143,6 +32481,213 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
+    fn standardizes_semantic_role_paragraphs_and_nested_lists() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Semantic role elements</h1>
+          <div role="paragraph">Introductory paragraph from a role div.</div>
+          <div role="list">
+            <div role="listitem">
+              <div class="label">1)</div>
+              <div class="content"><div role="paragraph">First ordered item.</div></div>
+            </div>
+            <div role="listitem">
+              <div class="label">2)</div>
+              <div class="content">
+                <div role="paragraph">Second ordered item.</div>
+                <div role="list">
+                  <div role="listitem">
+                    <div class="label">-</div>
+                    <div class="content"><div role="paragraph">Nested bullet item.</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div role="list">
+            <div role="listitem"><div class="label">-</div><div class="content">Plain bullet item.</div></div>
+          </div>
+          <div role="listitem"><div class="content">Standalone list-item content.</div></div>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output
+            .org
+            .contains("Introductory paragraph from a role div."));
+        assert!(
+            output.org.contains("1. First ordered item."),
+            "{}",
+            output.org
+        );
+        assert!(
+            output.org.contains("1. Second ordered item."),
+            "{}",
+            output.org
+        );
+        assert!(
+            output.org.contains("- Nested bullet item."),
+            "{}",
+            output.org
+        );
+        assert!(
+            output.org.contains("- Plain bullet item."),
+            "{}",
+            output.org
+        );
+        assert!(output.org.contains("Standalone list-item content."));
+        assert!(output.html.contains("<p role=\"paragraph\">"));
+        assert!(output.html.contains("<ol>"));
+        assert!(output.html.contains("<ul>"));
+        assert!(!output.html.contains("role=\"listitem\""));
+    }
+
+    #[test]
+    fn standardizes_drop_caps_spans_custom_elements_and_comments() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>Semantic standardization</h1>
+          <p><span data-caps="initial">T</span><small>HE</small> opening sentence keeps its word intact.</p>
+          <span data-as="h2">Converted heading</span>
+          <span data-as="p">Converted paragraph with&nbsp;ordinary spacing.</span>
+          <span class="block prose">First block span.</span>
+          <span style="color:red; display: block">Second block span.</span>
+          <article-shell><p>Custom element paragraph.</p></article-shell>
+          <article-shell>Custom element plain block.</article-shell>
+          <!-- comment marker must not survive -->
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            output.org.contains("THE opening sentence"),
+            "{}",
+            output.org
+        );
+        assert!(!output.org.contains("T HE opening sentence"));
+        assert!(output.org.contains("** Converted heading"));
+        assert!(output
+            .org
+            .contains("Converted paragraph with ordinary spacing."));
+        assert!(output.org.contains("First block span."));
+        assert!(output.org.contains("Second block span."));
+        assert!(output.org.contains("Custom element paragraph."));
+        assert!(output.org.contains("Custom element plain block."));
+        assert!(output.html.contains("<h2>Converted heading</h2>"));
+        assert!(!output.html.contains("article-shell"));
+        assert!(!output.html.contains("comment marker"));
+        assert!(!output.html.contains("data-as="));
+        assert!(!output.html.contains("data-caps="));
+    }
+
+    #[test]
+    fn standardization_preserves_mathjax_custom_elements_for_latex_rendering() {
+        let html = r#"
+        <!doctype html>
+        <html><body><article class="post-content">
+          <h1>MathJax SVG Output</h1>
+          <p>We define the reward as <mjx-container class="MathJax" jax="SVG" style="position:relative;">
+            <svg aria-hidden="true" role="img" viewBox="0 0 10 10"><path></path></svg>
+            <mjx-assistive-mml display="inline">
+              <math><msub><mi>r</mi><mrow><mtext>perf</mtext></mrow></msub></math>
+            </mjx-assistive-mml>
+          </mjx-container>.</p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .org
+                .contains("We define the reward as $r_{\\text{perf}}$."),
+            "{}",
+            output.org
+        );
+        assert!(
+            !output.org.contains("#+begin_export html"),
+            "{}",
+            output.org
+        );
+        assert!(output.html.contains("<mjx-container"));
+        assert!(output.html.contains("<mjx-assistive-mml"));
+    }
+
+    #[test]
+    fn standardizes_h1_levels_and_removes_title_duplicate() {
+        let html = r#"
+        <!doctype html>
+        <html><head><title>Heading “Normalization”</title></head>
+        <body><article class="post-content">
+          <h1>Heading "Normalization"</h1>
+          <p>The opening paragraph remains after the duplicate title heading.</p>
+          <h1>Section one</h1>
+          <p>The section body remains under a demoted heading.</p>
+        </article></body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article.post-content".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.org.matches("Heading ").count(), 1, "{}", output.org);
+        assert!(output.org.contains("** Section one"), "{}", output.org);
+        assert!(!output.org.lines().any(|line| line == "* Section one"));
+        assert!(!output.html.contains("<h1"));
+        assert!(output.html.contains("<h2>Section one</h2>"));
+    }
+
+    #[test]
     fn debug_and_profile_options_return_diagnostics() {
         let html = r##"
         <!doctype html>
@@ -32377,7 +32922,7 @@ line break text.">
         )
         .unwrap();
 
-        assert!(output.content_markdown.contains("# Markdown Options"));
+        assert!(!output.content_markdown.contains("# Markdown Options"));
         assert!(output
             .content_markdown
             .contains("The **bold** path has *emphasis* and a [link](https://example.com/link)."));
@@ -32424,7 +32969,7 @@ line break text.">
         .unwrap();
 
         assert!(output.org.contains("* Separate Markdown"));
-        assert!(output.content_markdown.contains("# Separate Markdown"));
+        assert!(!output.content_markdown.contains("# Separate Markdown"));
         assert!(output
             .content_markdown
             .contains("Org remains the primary output"));
@@ -34331,7 +34876,7 @@ line break text.">
         )
         .unwrap();
 
-        assert!(output.org.contains("* Parent Section"));
+        assert!(output.org.contains("** Parent Section"));
         assert!(output.org.contains("** Child Section"));
         assert!(output.org.contains("The child section has enough text"));
     }

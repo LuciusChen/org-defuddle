@@ -1134,7 +1134,7 @@ fn selected_upstream_fixtures_smoke() {
                 "*** Cell membrane",
                 "[[https://example.com/cell-cycle.png][Diagram of cell cycle phases]]",
                 "** References",
-                "- Alberts, B. et al. (2014). /Molecular Biology of the Cell/.",
+                "1. Alberts, B. et al. (2014). /Molecular Biology of the Cell/.",
             ],
             not_contains: &[
                 "| This article provides an overview of cellular biology",
@@ -1241,7 +1241,7 @@ fn selected_upstream_fixtures_smoke() {
                 "See the full reference for more details.",
             ],
             not_contains: &[
-                "\n* API Reference\n\n** Methods",
+                "\n** API Reference\n\n** Methods",
                 "GET https://api.example.com/items > {%",
                 "permalink__icon",
             ],
@@ -1676,7 +1676,7 @@ fn selected_upstream_fixtures_smoke() {
             ],
             not_contains: &[
                 "Longest Special Sequence - LeetCode",
-                "\n* Longest Special Sequence\n\nGiven a string",
+                "\n** Longest Special Sequence\n\nGiven a string",
                 "nav-menu-toggle",
                 "aria-haspopup",
             ],
@@ -1812,7 +1812,7 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "general--react-streaming-ssr",
             contains: &[
-                "\n* Understanding Widget Architecture\n\nModern widget systems",
+                "\n** Understanding Widget Architecture\n\nModern widget systems",
                 "Modern widget systems have evolved significantly",
                 "At the core of any widget system is the *render pipeline*.",
                 "One of the most important optimizations is *incremental rendering*.",
@@ -2064,7 +2064,7 @@ fn selected_upstream_fixtures_smoke() {
             ],
             not_contains: &[
                 "\nOff-nominal\n",
-                "\n* Launch Anomaly Disrupts Otherwise Successful Mission\n\nThe launch provider",
+                "\n** Launch Anomaly Disrupts Otherwise Successful Mission\n\nThe launch provider",
             ],
         },
         FixtureCase {
@@ -2269,7 +2269,7 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "footnotes--sidenote-inline-with-list",
             contains: &[
-                "\n* Sample post title",
+                "\n** Sample post title",
                 "roundness [fn:1] and some more text",
                 "influence [fn:2] on the broader industry",
                 "[fn:1] One of the ugliest roundness examples is the YouTube UI",
@@ -2303,7 +2303,7 @@ fn selected_upstream_fixtures_smoke() {
                 "[fn:2] This is the second footnote with more detail about the topic.",
                 "[fn:3] A reader suggested an alternative approach",
             ],
-            not_contains: &["footref-toggle", "\n* Sidenotes", "class=\"sidenote\""],
+            not_contains: &["footref-toggle", "\n** Sidenotes", "class=\"sidenote\""],
         },
         FixtureCase {
             fixture: "footnotes--hidden-section",
@@ -2428,7 +2428,7 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "issues--120-dhammatalks-footnotes",
             contains: &[
-                "\n* The Shorter Craving-Destruction Discourse Cūḷa Taṇhāsaṅkhaya Sutta (MN 37)",
+                "\n** The Shorter Craving-Destruction Discourse Cūḷa Taṇhāsaṅkhaya Sutta (MN 37)",
                 "foremost among devas & human beings?” [fn:1]",
                 "‘All dhammas are unworthy of adherence.’ [fn:2] Having heard",
                 "feeling. [fn:3] As he remains focused",
