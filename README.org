@@ -327,6 +327,7 @@ Implemented:
   suggested-post/sidebar dates are avoided; inline time values remain in prose.
 - Basic unsafe/noise DOM removal, conservative hidden-element removal that
   preserves substantial aria-hidden article content and substantive inline SVG,
+  removes SVG ~style~ elements that could trigger external CSS/image fetches,
   removes selected Tailwind-style hidden machine text, selected dialog/overlay
   shells that wrap real post content, email-style metadata header blocks, and
   short signature footers, plus orphan heading cleanup that preserves selected
@@ -398,7 +399,8 @@ Implemented:
   compatibility Markdown, frontmatter, output-file, debug, and property-style
   options. URL
   fetching validates HTML response types, enforces a 5MB response limit,
-  follows redirects, forwards language/user-agent options, reads
+  follows redirects, forwards language/user-agent options, normalizes quoted
+  and trailing-comma response charsets, reads
   ~HTTP_PROXY~/~HTTPS_PROXY~/~ALL_PROXY~ with ~NO_PROXY~ exclusions, and
   decodes declared or detected charsets. Empty URL extractions retry once with
   defuddle's bot user agent unless the user supplied ~--user-agent~; when the

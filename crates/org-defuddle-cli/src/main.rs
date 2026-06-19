@@ -589,7 +589,13 @@ fn header_charset(content_type: &str) -> Option<String> {
         let lower = part.to_ascii_lowercase();
         lower
             .strip_prefix("charset=")
-            .map(|charset| charset.trim_matches(['"', '\'']).to_ascii_lowercase())
+            .map(|charset| {
+                charset
+                    .trim()
+                    .trim_matches(['"', '\'', ','])
+                    .to_ascii_lowercase()
+            })
+            .filter(|charset| !charset.is_empty())
     })
 }
 
@@ -1597,6 +1603,22 @@ let answer = 42;
         .unwrap();
 
         assert_eq!(stdout, vec![b'C', b'a', b'f', 0xc3, 0xa9, b'\n']);
+    }
+
+    #[test]
+    fn normalizes_quoted_and_trailing_comma_charsets() {
+        assert_eq!(
+            header_charset("text/html; charset=utf-8,").as_deref(),
+            Some("utf-8")
+        );
+        assert_eq!(
+            header_charset("text/html; charset=\"windows-1252\"").as_deref(),
+            Some("windows-1252")
+        );
+        assert_eq!(
+            header_charset("text/html; charset='utf-8',").as_deref(),
+            Some("utf-8")
+        );
     }
 
     fn serve_once(
