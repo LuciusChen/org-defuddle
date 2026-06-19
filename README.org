@@ -339,8 +339,9 @@ Implemented:
   page chrome such as infoboxes/edit links/site subtitles, MediaWiki-style
   See also sections, selected trailing heading sections, hero header wrappers,
   structural related-post tails, trailing thin CTA sections, tag-link blocks,
-  and trailing metadata/share, author-contact/share rails, short author/share
-  widgets, CTA, subscribe/related/link-cluster/card-grid/about-author sections,
+  orphaned related-content intro paragraphs, and trailing metadata/share,
+  author-contact/share rails, short author/share widgets, CTA,
+  subscribe/related/link-cluster/card-grid/about-author sections,
   newsletter panels including "never miss" update prompts,
   boilerplate/comment-policy tails, and investment/legal disclaimer footers,
   including related article-card grids without explicit grid class names.

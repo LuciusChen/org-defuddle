@@ -422,6 +422,9 @@ static TRAILING_HEADING_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static RELATED_INTRO_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^for more (on|about)\b").unwrap());
+
 static NEWSLETTER_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?is)\bsubscribe\b.{0,40}\bnewsletters?\b|\bnewsletters?\b.{0,40}\bsubscribe\b|\bsign[- ]up\b.{0,80}\b(newsletters?|email alerts?)|\b(don(?:'|\x{2019})?t (want to )?miss|never miss)\b.{0,80}\b(latest|best|exclusive|reports?|updates?|source)\b")
         .unwrap()
@@ -14772,6 +14775,7 @@ fn remove_content_patterns(
     remove_trailing_external_link_lists(main, &metadata.url, &mut debug_removals);
     remove_boilerplate_tail(main, &mut debug_removals);
     remove_trailing_heading_sections(main, &mut debug_removals);
+    remove_related_content_intros(main, &mut debug_removals);
     remove_trailing_related_posts_blocks(main, &mut debug_removals);
     remove_trailing_thin_sections(main, &mut debug_removals);
     remove_trailing_non_content(main, &mut debug_removals);
@@ -15311,6 +15315,38 @@ fn is_link_dense_related_paragraph(paragraph: &NodeRef) -> bool {
         }
     }
     !non_link_text.contains(['.', '!', '?'])
+}
+
+fn remove_related_content_intros(
+    main: &NodeRef,
+    debug_removals: &mut Option<&mut Vec<DebugRemoval>>,
+) {
+    let Ok(matches) = main.select("p") else {
+        return;
+    };
+    let nodes = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            (node.parent().is_some() && is_related_content_intro_node(node)).then(|| node.clone())
+        })
+        .collect::<Vec<_>>();
+
+    for node in nodes {
+        if node.parent().is_some() {
+            detach_content_pattern(debug_removals, "related content intro", &node);
+        }
+    }
+}
+
+fn is_related_content_intro_node(node: &NodeRef) -> bool {
+    let text = normalize_ws(&node.text_contents());
+    !text.is_empty()
+        && count_words(&text) <= 20
+        && RELATED_INTRO_RE.is_match(&text)
+        && count_selector(
+            node,
+            "a[href], math, [data-mathml], .katex, .katex-mathml, .katex-display, .MathJax, .MathJax_Display, .MathJax_SVG, mjx-container, pre, code, table, img, picture, video, audio, iframe, blockquote, figure",
+        ) == 0
 }
 
 fn remove_trailing_thin_sections(
@@ -28671,6 +28707,48 @@ Output: [0,1]</code></pre>
         .unwrap();
         assert!(without_removal.org.contains("primary article paragraph"));
         assert!(without_removal.org.contains("Listen to this article"));
+    }
+
+    #[test]
+    fn remove_content_patterns_removes_orphaned_related_intro_paragraphs() {
+        let html = r##"
+        <!doctype html>
+        <html lang="en">
+          <head><title>Related Intro Cleanup</title></head>
+          <body>
+            <article class="post-content">
+              <h1>Related Intro Cleanup</h1>
+              <p>The primary article paragraph has enough detail to establish the real body before a stripped related-content intro appears later in the article.</p>
+              <p>A second paragraph keeps the article substantial and shows that the cleanup should not trim useful content around the orphan intro.</p>
+              <p>For more on the product team and roadmap, visit our coverage hub.</p>
+              <p>For more on implementation details, see our <a href="/guides">developer guide</a> and linked appendix.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/related-intro".to_string()),
+                content_selector: Some("article.post-content".to_string()),
+                remove_low_scoring: false,
+                remove_content_patterns: true,
+                debug: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.org.contains("primary article paragraph"));
+        assert!(!output.org.contains("coverage hub"));
+        assert!(output.org.contains("developer guide"));
+        let debug = output.debug.expect("debug info should be present");
+        assert!(debug.removals.iter().any(|removal| {
+            removal.step == "removeByContentPattern"
+                && removal.reason.as_deref() == Some("related content intro")
+                && removal.text.contains("coverage hub")
+        }));
     }
 
     #[test]
