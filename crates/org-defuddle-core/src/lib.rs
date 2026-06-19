@@ -1683,6 +1683,18 @@ fn metadata_variables(metadata: &Metadata, keys: &[&str]) -> Option<HashMap<Stri
     }))
 }
 
+fn conversation_variables(
+    metadata: &Metadata,
+    word_count: usize,
+) -> Option<HashMap<String, String>> {
+    extractor_variables([
+        ("title", Some(metadata.title.clone())),
+        ("site", Some(metadata.site.clone())),
+        ("description", Some(metadata.description.clone())),
+        ("wordCount", Some(word_count.to_string())),
+    ])
+}
+
 pub fn parse_c2_wiki_json_to_org(
     json: &str,
     provided_url: Option<&str>,
@@ -10574,6 +10586,7 @@ fn chatgpt_output(
 
     let word_count = count_words(&body);
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = conversation_variables(&metadata, word_count);
     let html = select_first_node(document, "main")
         .map(|node| serialize_node(&node))
         .unwrap_or_else(|| serialize_node(document))?;
@@ -10596,7 +10609,7 @@ fn chatgpt_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("chatgpt"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -10831,6 +10844,7 @@ fn claude_output(
 
     let word_count = count_words(&body);
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = conversation_variables(&metadata, word_count);
     let html = select_first_node(document, "main")
         .map(|node| serialize_node(&node))
         .unwrap_or_else(|| serialize_node(document))?;
@@ -10853,7 +10867,7 @@ fn claude_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("claude"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -10987,6 +11001,7 @@ fn gemini_output(
 
     let word_count = count_words(&body);
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = conversation_variables(&metadata, word_count);
     let html = select_first_node(document, "main")
         .map(|node| serialize_node(&node))
         .unwrap_or_else(|| serialize_node(document))?;
@@ -11009,7 +11024,7 @@ fn gemini_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("gemini"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -11139,7 +11154,7 @@ fn grok_output(
         return Ok(None);
     }
 
-    let metadata = grok_metadata(document, provided_url, containers.len(), &messages);
+    let metadata = grok_metadata(document, provided_url, messages.len(), &messages);
     let mut body = String::new();
     let mut rendered_messages = 0usize;
 
@@ -11167,6 +11182,7 @@ fn grok_output(
 
     let word_count = count_words(&body);
     let org = build_org_document(&metadata, &body, word_count);
+    let variables = conversation_variables(&metadata, word_count);
     let html = select_first_node(document, "main")
         .map(|node| serialize_node(&node))
         .unwrap_or_else(|| serialize_node(document))?;
@@ -11189,7 +11205,7 @@ fn grok_output(
         content_markdown: String::new(),
         frontmatter: String::new(),
         extractor_type: extractor_type("grok"),
-        variables: None,
+        variables,
         debug: None,
         profile: None,
     }))
@@ -11324,7 +11340,7 @@ fn grok_replace_citation_links(content: &str, citations: &[ConversationCitation]
 fn grok_metadata(
     document: &NodeRef,
     provided_url: Option<&str>,
-    container_count: usize,
+    message_count: usize,
     messages: &[RenderedConversationMessage],
 ) -> Metadata {
     let url = grok_page_url(document, provided_url);
@@ -11336,7 +11352,7 @@ fn grok_metadata(
 
     Metadata {
         title,
-        description: format!("Grok conversation with {container_count} messages"),
+        description: format!("Grok conversation with {message_count} messages"),
         site: "Grok".to_string(),
         url,
         domain,
@@ -30242,6 +30258,17 @@ Output: [0,1]</code></pre>
 
         assert_eq!(output.title, "ChatGPT citation fixture");
         assert_eq!(output.site, "ChatGPT");
+        assert_eq!(variable(&output, "title"), Some("ChatGPT citation fixture"));
+        assert_eq!(variable(&output, "site"), Some("ChatGPT"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("ChatGPT conversation with 2 messages")
+        );
+        let chatgpt_word_count = output.word_count.to_string();
+        assert_eq!(
+            variable(&output, "wordCount"),
+            Some(chatgpt_word_count.as_str())
+        );
         assert!(output.org.contains("** You said"));
         assert!(output.org.contains("** ChatGPT said"));
         assert!(output.org.contains("How should I size an air purifier?"));
@@ -30344,6 +30371,17 @@ Output: [0,1]</code></pre>
         assert_eq!(output.title, "Planning a small library");
         assert_eq!(output.site, "Claude");
         assert_eq!(output.domain, "claude.ai");
+        assert_eq!(variable(&output, "title"), Some("Planning a small library"));
+        assert_eq!(variable(&output, "site"), Some("Claude"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("Claude conversation with 2 messages")
+        );
+        let claude_word_count = output.word_count.to_string();
+        assert_eq!(
+            variable(&output, "wordCount"),
+            Some(claude_word_count.as_str())
+        );
         assert!(output.org.contains("** You said"));
         assert!(output.org.contains("** Claude said"));
         assert!(output
@@ -30421,6 +30459,20 @@ Output: [0,1]</code></pre>
         assert_eq!(output.title, "Compare sorting strategies");
         assert_eq!(output.site, "Gemini");
         assert_eq!(output.domain, "gemini.google.com");
+        assert_eq!(
+            variable(&output, "title"),
+            Some("Compare sorting strategies")
+        );
+        assert_eq!(variable(&output, "site"), Some("Gemini"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("Gemini conversation with 2 messages")
+        );
+        let gemini_word_count = output.word_count.to_string();
+        assert_eq!(
+            variable(&output, "wordCount"),
+            Some(gemini_word_count.as_str())
+        );
         assert!(output.org.contains("** You said"));
         assert!(output.org.contains("** Gemini said"));
         assert!(output
@@ -30490,6 +30542,17 @@ Output: [0,1]</code></pre>
         assert_eq!(output.title, "Research citation plan");
         assert_eq!(output.site, "Grok");
         assert_eq!(output.domain, "grok.com");
+        assert_eq!(variable(&output, "title"), Some("Research citation plan"));
+        assert_eq!(variable(&output, "site"), Some("Grok"));
+        assert_eq!(
+            variable(&output, "description"),
+            Some("Grok conversation with 2 messages")
+        );
+        let grok_word_count = output.word_count.to_string();
+        assert_eq!(
+            variable(&output, "wordCount"),
+            Some(grok_word_count.as_str())
+        );
         assert!(output.org.contains("** You"));
         assert!(output.org.contains("** Grok"));
         assert!(output
