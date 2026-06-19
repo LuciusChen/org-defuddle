@@ -1225,7 +1225,7 @@ fn parse_html_to_org_once(
         record_profile(&mut profile, "removeHiddenElements", step_start);
     }
     let step_start = Instant::now();
-    normalize_images_with_standardize(&document, options.standardize);
+    normalize_images_with_standardize(&document, options.standardize, options.debug);
     let elapsed = step_start.elapsed();
     record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
     if options.standardize {
@@ -1264,9 +1264,9 @@ fn parse_html_to_org_once(
     remove_elementor_archive_chrome(&document);
     remove_webmention_chrome(&document);
     sanitize_links(&document);
-    let step_start = Instant::now();
-    remove_heading_permalink_anchors(&document);
     if options.standardize && !options.debug {
+        let step_start = Instant::now();
+        remove_heading_permalink_anchors(&document);
         record_profile(&mut profile, "removePermalinkAnchors", step_start);
     }
     let relative_base_url = document_base_url(&document, &metadata.url);
@@ -13730,14 +13730,16 @@ fn remove_heading_permalink_anchors(document: &NodeRef) {
 }
 
 fn normalize_images(document: &NodeRef) {
-    normalize_images_with_standardize(document, true);
+    normalize_images_with_standardize(document, true, false);
 }
 
-fn normalize_images_with_standardize(document: &NodeRef, standardize: bool) {
+fn normalize_images_with_standardize(document: &NodeRef, standardize: bool, debug: bool) {
     normalize_image_attribute_casing(document);
     promote_noscript_images(document);
     if standardize {
-        remove_obsolete_embed_elements(document);
+        if !debug {
+            remove_obsolete_embed_elements(document);
+        }
         normalize_svg_fallback_styles(document);
         normalize_picture_images(document);
         normalize_standalone_source_images(document);
@@ -33615,6 +33617,7 @@ Output: [0,1]</code></pre>
           <body>
             <article class="post-content">
               <h1>Standardize Options</h1>
+              <h2 id="media-section"><a class="headerlink" href="#media-section">#</a>Media section</h2>
               <blockquote data-callout="warning" data-callout-fold="-">
                 <div class="callout-title">
                   <span class="callout-title-inner">Careful</span>
@@ -33673,6 +33676,7 @@ Output: [0,1]</code></pre>
         assert!(with_standardize
             .org
             .contains("[[https://www.youtube.com/watch?v=abc123]]"));
+        assert!(!with_standardize.html.contains("headerlink"));
         for marker in [
             "lite-youtube",
             "legacy-object",
@@ -33714,6 +33718,7 @@ Output: [0,1]</code></pre>
         assert!(without_standardize
             .org
             .contains("The original footnote text should still be present somewhere."));
+        assert!(without_standardize.html.contains("headerlink"));
         let raw_video = without_standardize
             .html
             .split("id=\"standardize-video\"")
@@ -33732,6 +33737,35 @@ Output: [0,1]</code></pre>
                 "{}",
                 without_standardize.html
             );
+        }
+
+        let with_debug = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/standardize".to_string()),
+                include_images: true,
+                remove_small_images: true,
+                content_selector: Some("article.post-content".to_string()),
+                include_replies: IncludeReplies::Extractors,
+                remove_hidden_elements: true,
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: true,
+                debug: true,
+                profile: false,
+                frontmatter: false,
+                markdown: false,
+                separate_markdown: false,
+            },
+        )
+        .unwrap();
+        assert!(with_debug.html.contains("controls=\"\""));
+        assert!(!with_debug.html.contains("lite-youtube"));
+        assert!(with_debug.html.contains("headerlink"));
+        for marker in ["legacy-object", "legacy-embed", "legacy-applet"] {
+            assert!(with_debug.html.contains(marker), "{}", with_debug.html);
         }
     }
 

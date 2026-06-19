@@ -388,7 +388,9 @@ Implemented:
   ~se:~ rule stage names without Rust-only public timing keys. Selector removals
   use upstream ~exact~ and ~partial match: ...~ diagnostics, hidden removals report their concrete
   style/class/attribute reason, and content-preserving button transforms are
-  not reported as removals.
+  not reported as removals. Debug standardization also preserves obsolete media
+  elements and heading permalink anchors for structural inspection while still
+  running the upstream always-on standardization stages.
 - YAML frontmatter generation through a ~frontmatter~-style option across the
   Rust core, dynamic module, and Elisp wrappers.
 - Compatibility Markdown generation through ~markdown~- and
