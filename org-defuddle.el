@@ -963,9 +963,11 @@ HEADERS, METHOD, and DATA configure the request."
     (org-roam-capture-
      :node (org-roam-node-create :title title)
      :info (list :org-defuddle-tags
-                 (mapconcat (lambda (keyword) (format ":%s:" keyword))
-                            org-defuddle-note-keywords
-                            ""))
+                 (if org-defuddle-note-keywords
+                     (format ":%s:"
+                             (mapconcat #'identity
+                                        org-defuddle-note-keywords ":"))
+                   ""))
      :templates template)
     ;; Routing the article through the capture template would hand it to
     ;; `org-roam-format-template', which interprets every ${...} in the

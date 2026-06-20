@@ -219,7 +219,7 @@
           (should (eq (plist-get capture-args :node) 'node))
           (should (equal (plist-get (plist-get capture-args :info)
                                     :org-defuddle-tags)
-                         ":web::reference:"))
+                         ":web:reference:"))
           ;; The capture template carries only the trusted header; the
           ;; body function is empty and the article is inserted verbatim
           ;; afterwards, so % survives unescaped.
