@@ -194,32 +194,105 @@
         (org-defuddle-note-keywords '("web" "reference"))
         (org "* Captured title\n\nProgress is 100%.")
         (real-require (symbol-function 'require))
+        (captured (generate-new-buffer "org-defuddle-test-roam-note"))
         capture-args
         node-args)
-    (cl-letf (((symbol-function 'require)
-               (lambda (feature &rest args)
-                 (if (eq feature 'org-roam-capture)
-                     t
-                   (apply real-require feature args))))
-              ((symbol-function 'org-roam-node-create)
-               (lambda (&rest args)
-                 (setq node-args args)
-                 'node))
-              ((symbol-function 'org-roam-capture-)
-               (lambda (&rest args)
-                 (setq capture-args args))))
-      (org-defuddle--insert-org-buffer org)
-      (should (equal node-args '(:title "Captured title")))
-      (should (eq (plist-get capture-args :node) 'node))
-      (should (equal (plist-get (plist-get capture-args :info)
-                                :org-defuddle-tags)
-                     ":web::reference:"))
-      (let* ((entry (car (plist-get capture-args :templates)))
-             (body (nth 3 entry))
-             (content-function (cadr body)))
-        (should (eq (car body) 'function))
-        (should (equal (funcall content-function)
-                       "* Captured title\n\nProgress is 100%%."))))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'require)
+                   (lambda (feature &rest args)
+                     (if (eq feature 'org-roam-capture)
+                         t
+                       (apply real-require feature args))))
+                  ((symbol-function 'org-roam-node-create)
+                   (lambda (&rest args)
+                     (setq node-args args)
+                     'node))
+                  ((symbol-function 'org-roam-capture-)
+                   (lambda (&rest args)
+                     (setq capture-args args)
+                     ;; Simulate :jump-to-captured by making the new note
+                     ;; buffer current, so the post-capture insert lands
+                     ;; there.
+                     (set-buffer captured))))
+          (org-defuddle--insert-org-buffer org)
+          (should (equal node-args '(:title "Captured title")))
+          (should (eq (plist-get capture-args :node) 'node))
+          (should (equal (plist-get (plist-get capture-args :info)
+                                    :org-defuddle-tags)
+                         ":web::reference:"))
+          ;; The capture template carries only the trusted header; the
+          ;; body function is empty and the article is inserted verbatim
+          ;; afterwards, so % survives unescaped.
+          (let* ((entry (car (plist-get capture-args :templates)))
+                 (body (nth 3 entry))
+                 (content-function (cadr body)))
+            (should (eq (car body) 'function))
+            (should (equal (funcall content-function) "")))
+          (with-current-buffer captured
+            (should (equal (buffer-string)
+                           "* Captured title\n\nProgress is 100%."))))
+      (when (buffer-live-p captured)
+        (kill-buffer captured)))))
+
+(ert-deftest org-defuddle-test-org-roam-backend-keeps-template-syntax-literal-in-body ()
+  "Article bodies containing ${...} must not reach org-roam's template engine.
+
+This regression covers the failure where the extracted body was routed
+through the capture template and `org-roam-format-template' interpreted
+every ${...} as a placeholder: unknown keys triggered
+`read-from-minibuffer', and names bound to functions were called with
+the capture node as their argument."
+  (let ((org-defuddle-output-backend 'org-roam)
+        (org-defuddle-note-keywords nil)
+        (org (concat "* Unable to run EAF on NixOS under Sway\n\n"
+                     "#+begin_src\n"
+                     "QT_QPA_PLATFORM_PLUGIN_PATH = \"${pkgs.qt6.qtwayland.outPath}\";\n"
+                     "#+end_src\n"))
+        (real-require (symbol-function 'require))
+        (captured (generate-new-buffer "org-defuddle-test-roam-template"))
+        prompted
+        capture-args)
+    (unwind-protect
+        (cl-letf (((symbol-function 'require)
+                   (lambda (feature &rest args)
+                     (if (eq feature 'org-roam-capture)
+                         t
+                       (apply real-require feature args))))
+                  ((symbol-function 'org-roam-node-create)
+                   (lambda (&rest args) 'node))
+                  ((symbol-function 'read-from-minibuffer)
+                   (lambda (&rest _args)
+                     (setq prompted t)
+                     ""))
+                  ((symbol-function 'org-roam-capture-)
+                   (lambda (&rest args)
+                     (setq capture-args args)
+                     ;; Faithfully mirror `org-roam-format-template':
+                     ;; it processes the template body returned by the
+                     ;; capture entry's function and treats every ${...}
+                     ;; as a placeholder that would prompt (or call a
+                     ;; fboundp symbol named inside).
+                     (let* ((entry (car (plist-get args :templates)))
+                            (body (nth 3 entry))
+                            (body-content (funcall (cadr body))))
+                       (when (string-match-p (regexp-quote "${") body-content)
+                         (read-from-minibuffer "would-prompt: ")))
+                     (set-buffer captured))))
+          (org-defuddle--insert-org-buffer org)
+          ;; No ${...} reached the template body, so no prompt and no
+          ;; function invocation.
+          (should-not prompted)
+          ;; The body landed in the note buffer verbatim, ${...} intact.
+          (let* ((entry (car (plist-get capture-args :templates)))
+                 (body (nth 3 entry))
+                 (content-function (cadr body)))
+            (should (equal (funcall content-function) "")))
+          (with-current-buffer captured
+            (should (equal (buffer-string) org))
+            (goto-char (point-min))
+            (should (search-forward "${pkgs.qt6.qtwayland.outPath}" nil t))))
+      (when (buffer-live-p captured)
+        (kill-buffer captured)))))
 
 (ert-deftest org-defuddle-test-youtube-empty-caption-tries-next-client ()
   (let (inserted retry-args)

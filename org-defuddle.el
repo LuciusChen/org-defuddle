@@ -946,11 +946,13 @@ HEADERS, METHOD, and DATA configure the request."
   (unless (require 'org-roam-capture nil t)
     (user-error "Org-roam is not installed"))
   (let* ((title (org-defuddle--org-title org))
-         (content (replace-regexp-in-string "%" "%%" org t t))
          (template
           (list
            (list "d" "org-defuddle" 'plain
-                 (list 'function (lambda () content))
+                 ;; An empty body keeps the extracted article out of the
+                 ;; capture template; the body is inserted verbatim below
+                 ;; once the note has been created.
+                 (list 'function (lambda () ""))
                  :target
                  (list 'file+head
                        org-defuddle-org-roam-file-name
@@ -964,7 +966,16 @@ HEADERS, METHOD, and DATA configure the request."
                  (mapconcat (lambda (keyword) (format ":%s:" keyword))
                             org-defuddle-note-keywords
                             ""))
-     :templates template)))
+     :templates template)
+    ;; Routing the article through the capture template would hand it to
+    ;; `org-roam-format-template', which interprets every ${...} in the
+    ;; body as a placeholder: unknown keys trigger
+    ;; `read-from-minibuffer', and names bound to functions are called
+    ;; with the capture node as their argument.  The template above
+    ;; carries only the trusted ${title}/${org-defuddle-tags} header, so
+    ;; inserting the body afterwards keeps ${...} and % literal.
+    (goto-char (point-max))
+    (insert org)))
 
 (defun org-defuddle--insert-org-buffer (org)
   "Deliver ORG according to `org-defuddle-output-backend'."
