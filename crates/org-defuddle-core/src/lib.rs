@@ -2212,7 +2212,7 @@ fn c2_markup_to_org(text: &str, published: &str) -> String {
                 lines.push("#+begin_src".to_string());
                 in_src = true;
             }
-            lines.push(line.trim_end().to_string());
+            lines.push(org_escape_code_line(line.trim_end()));
             continue;
         }
 
@@ -2829,14 +2829,30 @@ static DEBBUGS_MESSAGE_RE: Lazy<Regex> = Lazy::new(|| {
 fn org_example_block(text: &str) -> String {
     let mut out = String::from("#+begin_example\n");
     for line in text.trim().lines() {
-        if line.trim_start().starts_with("#+end_example") {
-            out.push(',');
-        }
-        out.push_str(line);
+        out.push_str(&org_escape_code_line(line));
         out.push('\n');
     }
     out.push_str("#+end_example\n");
     out
+}
+
+fn org_escape_code_line(line: &str) -> String {
+    let trimmed = line.trim_start_matches([' ', '\t']);
+    let prefix_len = line.len() - trimmed.len();
+    let marker = trimmed.trim_start_matches(',');
+    if marker.starts_with('*') || marker.starts_with("#+") {
+        let (prefix, rest) = line.split_at(prefix_len);
+        format!("{prefix},{rest}")
+    } else {
+        line.to_string()
+    }
+}
+
+fn org_escape_code_block(text: &str) -> String {
+    text.lines()
+        .map(org_escape_code_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn hacker_news_output(
@@ -23705,7 +23721,8 @@ impl<'a> OrgRenderer<'a> {
             self.out.push_str(&language);
         }
         self.out.push('\n');
-        self.out.push_str(text.trim_matches('\n'));
+        self.out
+            .push_str(&org_escape_code_block(text.trim_matches('\n')));
         self.out.push_str("\n#+end_src\n\n");
     }
 

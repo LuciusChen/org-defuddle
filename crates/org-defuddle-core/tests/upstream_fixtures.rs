@@ -2933,6 +2933,51 @@ Attached patch is a proof of concept for an occur-edit-mode alike for
     assert!(!output.org.contains("#+begin_src"));
 }
 
+#[test]
+fn org_manual_literal_examples_escape_org_syntax_in_code_blocks() {
+    let html = r##"<!doctype html>
+<html>
+<head><title>Literal Examples (The Org Manual)</title></head>
+<body>
+<main>
+<h1>Literal Examples</h1>
+<p>Org examples can contain Org syntax literally.</p>
+<pre class="example">#+BEGIN_EXAMPLE
+Some example from the Org manual.
+#+END_EXAMPLE</pre>
+<pre class="example">#+BEGIN_SRC emacs-lisp
+(defun org-xor (a b)
+  "Exclusive or.")
+,#+END_SRC</pre>
+<pre class="example">  * This remains example text, not a headline.
+  ,* Already escaped heading syntax.
+  #+begin_quote
+  ,#+already escaped keyword syntax.</pre>
+</main>
+</body>
+</html>"##;
+
+    let output = parse_html_to_org(
+        html,
+        DefuddleOptions {
+            url: Some("https://orgmode.org/manual/Literal-Examples.html".to_string()),
+            ..DefuddleOptions::default()
+        },
+    )
+    .expect("Org Manual literal examples should parse");
+
+    assert!(output.org.contains(",#+BEGIN_EXAMPLE"));
+    assert!(output.org.contains(",#+END_EXAMPLE"));
+    assert!(output.org.contains(",#+BEGIN_SRC emacs-lisp"));
+    assert!(output.org.contains(",,#+END_SRC"));
+    assert!(output
+        .org
+        .contains(",* This remains example text, not a headline."));
+    assert!(output.org.contains(",,* Already escaped heading syntax."));
+    assert!(output.org.contains(",#+begin_quote"));
+    assert!(output.org.contains(",,#+already escaped keyword syntax."));
+}
+
 fn upstream_fixture_names(defuddle_dir: &std::path::Path) -> Vec<String> {
     snapshot_names(&defuddle_dir.join("tests").join("fixtures"), "html")
 }
