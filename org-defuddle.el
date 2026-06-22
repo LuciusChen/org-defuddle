@@ -779,9 +779,11 @@ HEADERS, METHOD, and DATA configure the request."
     (url-retrieve
      url
      (lambda (_status)
-       (unwind-protect
-           (funcall callback (org-defuddle--response-body))
-         (kill-buffer (current-buffer)))))))
+       (let ((response-buffer (current-buffer)))
+         (unwind-protect
+             (funcall callback (org-defuddle--response-body))
+           (when (buffer-live-p response-buffer)
+             (kill-buffer response-buffer))))))))
 
 (defun org-defuddle--cli-fetch-command (url headers method data)
   "Return a CLI fetch command for URL using HEADERS, METHOD, and DATA."

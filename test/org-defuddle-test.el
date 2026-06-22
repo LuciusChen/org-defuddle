@@ -136,6 +136,32 @@
                (lambda () nil)))
       (should-error (org-defuddle-load-module) :type 'user-error))))
 
+(ert-deftest org-defuddle-test-url-retrieve-cleanup-keeps-output-buffer-live ()
+  (let ((response-buffer (generate-new-buffer " *org-defuddle-response*"))
+        (output-buffer (generate-new-buffer "org-defuddle-output"))
+        response-body)
+    (unwind-protect
+        (cl-letf (((symbol-function 'url-retrieve)
+                   (lambda (_url callback &rest _args)
+                     (with-current-buffer response-buffer
+                       (insert "HTTP/1.1 200 OK\r\n\r\nresponse body")
+                       (funcall callback nil)))))
+          (org-defuddle--retrieve-body-with-url
+           "https://example.com"
+           (lambda (body)
+             (setq response-body body)
+             ;; Output backends such as Denote display another buffer while
+             ;; the URL callback is still running.
+             (set-buffer output-buffer))
+           nil "GET" nil)
+          (should (equal response-body "response body"))
+          (should-not (buffer-live-p response-buffer))
+          (should (buffer-live-p output-buffer)))
+      (when (buffer-live-p response-buffer)
+        (kill-buffer response-buffer))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))))
+
 (ert-deftest org-defuddle-test-output-backend-defaults-to-temporary-buffer ()
   (let ((org-defuddle-output-backend 'buffer)
         (org "* Captured title\n\nCaptured body."))
