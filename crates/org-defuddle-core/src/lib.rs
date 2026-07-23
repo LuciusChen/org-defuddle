@@ -1274,6 +1274,7 @@ fn parse_html_to_org_once(
     resolve_relative_urls(&document, &relative_base_url);
     record_profile(&mut profile, "resolveRelativeUrls", step_start);
     remove_lightbox_duplicate_images(&document);
+    remove_duplicate_leading_hero_block(&main);
     if options.remove_content_patterns {
         let mut no_content_pattern_debug = None;
         let step_start = Instant::now();
@@ -1363,6 +1364,7 @@ fn parse_html_to_org_once(
         standardize_semantic_role_elements(&main);
         standardize_article_card_text_blocks(&main);
         standardize_letter_footer_blocks(&main);
+        standardize_mediawiki_multi_image_rows(&main);
         standardize_simple_span_media_wrappers(&main);
         standardize_bare_media_alt_captions(&main);
         standardize_container_media_captions(&main);
@@ -1430,6 +1432,8 @@ fn parse_html_to_org_once(
         metadata.image = best_cover_url;
     }
 
+    sanitize_output_content(&main);
+
     let step_start = Instant::now();
     let fallback = data_attribute_content_fallback(data_attribute_body_html).or_else(|| {
         (!github_document)
@@ -1438,6 +1442,7 @@ fn parse_html_to_org_once(
     });
     let (mut body_html, mut body_org, mut word_count) = match fallback {
         Some(SchemaTextFallback::Node(node)) => {
+            sanitize_output_content(&node);
             let org = html_node_to_org_with_render_options(&node, &footnotes, render_options);
             let html = serialize_output_node(&node, options.standardize, &footnotes)?;
             let words = count_rendered_html_words(&node, &html, &org);
@@ -1520,6 +1525,11 @@ fn parse_html_to_org_once(
         }),
         profile,
     })
+}
+
+fn sanitize_output_content(node: &NodeRef) {
+    strip_unsafe_elements(node);
+    sanitize_links(node);
 }
 
 fn attach_parse_diagnostics(output: &mut DefuddleOutput, parse_start: Instant) {
@@ -1704,6 +1714,7 @@ fn extractor_output(
     extractor_name: &str,
     variables: Option<HashMap<String, String>>,
 ) -> DefuddleOutput {
+    let html = sanitize_extractor_html(&html, &metadata.url);
     DefuddleOutput {
         title: metadata.title,
         description: metadata.description,
@@ -1726,6 +1737,36 @@ fn extractor_output(
         debug: None,
         profile: None,
     }
+}
+
+fn standard_extractor_output(
+    metadata: Metadata,
+    html: String,
+    body_org: &str,
+    word_count: usize,
+    extractor: &str,
+) -> DefuddleOutput {
+    let org = build_org_document(&metadata, body_org, word_count);
+    let variables = metadata_variables(
+        &metadata,
+        &["title", "author", "site", "description", "published"],
+    );
+    extractor_output(metadata, html, org, word_count, extractor, variables)
+}
+
+fn sanitize_extractor_html(html: &str, base_url: &str) -> String {
+    if html.trim().is_empty() {
+        return html.to_string();
+    }
+
+    let document = kuchiki::parse_html().one(html);
+    strip_unsafe_elements(&document);
+    sanitize_links(&document);
+    resolve_relative_urls(&document, base_url);
+
+    select_first_node(&document, "body")
+        .map(|body| serialize_children_html(&body))
+        .unwrap_or_default()
 }
 
 fn extractor_variables<I, K>(entries: I) -> Option<HashMap<String, String>>
@@ -2271,6 +2312,20 @@ fn c2_apply_inline_org(text: &str) -> String {
 fn c2_is_image_url(url: &str) -> bool {
     static IMAGE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\.(gif|jpe?g|png)$").unwrap());
     IMAGE_RE.is_match(url)
+}
+
+fn document_favicon(document: &NodeRef, base_url: Option<&str>) -> String {
+    first_present(&[
+        select_attr(document, "link[rel=\"icon\"]", "href"),
+        select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
+        select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
+    ])
+    .and_then(|value| absolutize_url(base_url, &value))
+    .unwrap_or_default()
+}
+
+fn document_language(document: &NodeRef) -> String {
+    select_attr(document, "html[lang]", "lang").unwrap_or_default()
 }
 
 fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata {
@@ -3405,14 +3460,9 @@ fn github_output(
     let metadata = github_metadata(document, kind, url.as_deref(), repo.as_deref());
     let html = github_body_html(kind, &primary_body, document, include_replies)?;
     let word_count = count_html_words(&html);
-    let org = build_org_document(&metadata, &body_org, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "published", "site", "description"],
-    );
 
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "github", variables,
+    Ok(Some(standard_extractor_output(
+        metadata, html, &body_org, word_count, "github",
     )))
 }
 
@@ -3526,20 +3576,14 @@ fn github_metadata(
         site,
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
         image: first_present(&[
             meta_content(document, "property", "og:image"),
             meta_content(document, "name", "twitter:image"),
         ])
         .and_then(|value| absolutize_url(base_url, &value))
         .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -4814,20 +4858,14 @@ fn linkedin_metadata(document: &NodeRef, url: Option<&str>, article: &NodeRef) -
         site: "LinkedIn".to_string(),
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
         image: first_present(&[
             linkedin_first_media_url(article),
             meta_content(document, "property", "og:image"),
         ])
         .and_then(|value| absolutize_url(base_url, &value))
         .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -5468,13 +5506,7 @@ fn youtube_metadata(
         site: "YouTube".to_string(),
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
         image: first_present(&[
             youtube_schema_string(&schema, video_id, &["thumbnailUrl"]),
             youtube_player_string(
@@ -7227,14 +7259,9 @@ fn substack_output(
 
     let html = serialize_node(&body_node)?;
     let word_count = count_html_words(&html);
-    let org = build_org_document(&metadata, &body_org, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
 
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "substack", variables,
+    Ok(Some(standard_extractor_output(
+        metadata, html, &body_org, word_count, "substack",
     )))
 }
 
@@ -7337,13 +7364,7 @@ fn substack_metadata(document: &NodeRef, kind: SubstackPageKind, url: Option<&st
         site,
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
         image: first_present(&[
             meta_content(document, "property", "og:image"),
             meta_content(document, "name", "twitter:image"),
@@ -7351,7 +7372,7 @@ fn substack_metadata(document: &NodeRef, kind: SubstackPageKind, url: Option<&st
         ])
         .and_then(|value| absolutize_url(base_url, &value))
         .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -7522,13 +7543,7 @@ fn medium_metadata(document: &NodeRef, provided_url: Option<&str>, article: &Nod
         site,
         url,
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(Some(&base_url), &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, Some(&base_url)),
         image: first_present(&[
             meta_content(document, "property", "og:image"),
             meta_content(document, "name", "twitter:image"),
@@ -7536,7 +7551,7 @@ fn medium_metadata(document: &NodeRef, provided_url: Option<&str>, article: &Nod
         ])
         .and_then(|value| absolutize_url(Some(&base_url), &value))
         .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -7769,19 +7784,13 @@ fn discourse_output(
         .as_ref()
         .map(serialize_node)
         .unwrap_or_else(|| serialize_node(&posts[0]))?;
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
 
-    Ok(Some(extractor_output(
+    Ok(Some(standard_extractor_output(
         metadata,
         html,
-        org,
+        &body,
         word_count,
         "discourse",
-        variables,
     )))
 }
 
@@ -7840,14 +7849,8 @@ fn discourse_metadata(document: &NodeRef, url: Option<&str>, op: Option<&NodeRef
         site,
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
+        language: document_language(document),
         ..Metadata::default()
     }
 }
@@ -8347,17 +8350,11 @@ fn nytimes_metadata(
             .unwrap_or_else(|| "The New York Times".to_string()),
         url,
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(Some(&base_url), &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, Some(&base_url)),
         image: select_attr(rendered_article, "img[src]", "src")
             .or_else(|| meta_content(document, "property", "og:image"))
             .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -8433,13 +8430,8 @@ fn lwn_output(
     let metadata = lwn_metadata(document, url.as_deref());
     let word_count = count_words(&body);
     let html = serialize_node(&main)?;
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "published", "description"],
-    );
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "lwn", variables,
+    Ok(Some(standard_extractor_output(
+        metadata, html, &body, word_count, "lwn",
     )))
 }
 
@@ -8472,14 +8464,8 @@ fn lwn_metadata(document: &NodeRef, url: Option<&str>) -> Metadata {
         site: "LWN.net".to_string(),
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
+        language: document_language(document),
         ..Metadata::default()
     }
 }
@@ -8533,9 +8519,7 @@ fn lwn_remove_selectors(node: &NodeRef, selectors: &[&str]) {
 }
 
 fn lwn_last_element_child(node: &NodeRef) -> Option<NodeRef> {
-    node.children()
-        .filter(|child| child.as_element().is_some())
-        .last()
+    node.children().rfind(|child| child.as_element().is_some())
 }
 
 fn lwn_comments(main: &NodeRef, base_url: &str) -> Vec<HackerNewsComment> {
@@ -8763,14 +8747,8 @@ fn leetcode_metadata(
         site: "LeetCode".to_string(),
         url,
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(Some(&base_url), &value))
-        .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        favicon: document_favicon(document, Some(&base_url)),
+        language: document_language(document),
         ..Metadata::default()
     }
 }
@@ -8851,18 +8829,12 @@ fn x_output(
     } else {
         x_timeline_word_count(&tweets, include_replies, &body_org)
     };
-    let org = build_org_document(&metadata, &body_org, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
-    Ok(Some(extractor_output(
+    Ok(Some(standard_extractor_output(
         metadata,
         html,
-        org,
+        &body_org,
         word_count,
         extractor_name,
-        variables,
     )))
 }
 
@@ -8959,13 +8931,7 @@ fn x_metadata(
         site: "X (Twitter)".to_string(),
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
         image: x_first_media_url(document).unwrap_or_else(|| {
             first_present(&[
                 meta_content(document, "property", "og:image"),
@@ -8974,7 +8940,7 @@ fn x_metadata(
             .and_then(|value| absolutize_url(base_url, &value))
             .unwrap_or_default()
         }),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -9184,12 +9150,44 @@ struct XTweet {
 }
 
 fn x_tweets(document: &NodeRef, base_url: &str) -> Vec<XTweet> {
-    let Ok(matches) = document.select("article[data-testid=\"tweet\"]") else {
-        return Vec::new();
-    };
-    matches
-        .filter_map(|matched| x_tweet(matched.as_node(), base_url))
+    x_conversation_tweet_nodes(document)
+        .into_iter()
+        .filter_map(|tweet| x_tweet(&tweet, base_url))
         .collect()
+}
+
+fn x_conversation_tweet_nodes(document: &NodeRef) -> Vec<NodeRef> {
+    let mut tweets = Vec::new();
+    let mut seen_cell = false;
+    let Ok(matches) = document.select("[data-testid=\"cellInnerDiv\"], section, h2") else {
+        return tweets;
+    };
+    for matched in matches {
+        let node = matched.as_node();
+        if element_attr(node, "data-testid").as_deref() == Some("cellInnerDiv") {
+            seen_cell = true;
+            if let Some(tweet) = select_first_node(node, "article[data-testid=\"tweet\"]") {
+                tweets.push(tweet);
+            }
+            continue;
+        }
+        if seen_cell
+            && !node.ancestors().any(|ancestor| {
+                tag_name(&ancestor).as_deref() == Some("article")
+                    && element_attr(&ancestor, "data-testid").as_deref() == Some("tweet")
+            })
+        {
+            break;
+        }
+    }
+
+    if tweets.is_empty() {
+        select_first_node(document, "article[data-testid=\"tweet\"]")
+            .into_iter()
+            .collect()
+    } else {
+        tweets
+    }
 }
 
 fn x_tweet(tweet: &NodeRef, base_url: &str) -> Option<XTweet> {
@@ -9209,22 +9207,73 @@ fn x_tweet(tweet: &NodeRef, base_url: &str) -> Option<XTweet> {
 }
 
 fn x_tweet_user(user: &NodeRef) -> Option<(String, String)> {
-    let Ok(links) = user.select("a") else {
-        return None;
-    };
-    let mut display_name = None;
-    let mut handle = None;
-    for link in links {
-        let text = normalize_ws(&link.as_node().text_contents());
-        if text.starts_with('@') && handle.is_none() {
-            handle = Some(text);
-        } else if !text.is_empty() && display_name.is_none() {
-            display_name = Some(text);
-        }
-    }
-    let handle = handle?;
+    let links = user
+        .select("a")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|link| link.as_node().clone())
+        .collect::<Vec<_>>();
+    let handle = x_tweet_handle(user, &links)?;
+    let display_name = links
+        .iter()
+        .filter(|link| select_first_node(link, "time").is_none())
+        .map(|link| normalize_ws(&link.text_contents()))
+        .find(|text| !text.is_empty() && text != &handle && !text.starts_with('@'))
+        .or_else(|| {
+            element_children(user)
+                .first()
+                .map(|child| normalize_ws(&child.text_contents()))
+                .filter(|text| !text.is_empty() && !text.starts_with('@'))
+        });
     let display_name = display_name.unwrap_or_else(|| handle.clone());
     Some((display_name, handle))
+}
+
+fn x_tweet_handle(user: &NodeRef, links: &[NodeRef]) -> Option<String> {
+    static X_HANDLE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^@[A-Za-z0-9_]{1,15}$").unwrap());
+    static X_HANDLE_PATH_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(?:https?://[^/]+)?/([A-Za-z0-9_]{1,15})(?:/|$)").unwrap());
+    static X_HANDLE_TEXT_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"@([A-Za-z0-9_]{1,15})").unwrap());
+
+    for link in links {
+        let text = normalize_ws(&link.text_contents());
+        if X_HANDLE_RE.is_match(&text) {
+            return Some(text);
+        }
+    }
+
+    for link in links {
+        let href = element_attr(link, "href").unwrap_or_default();
+        let Some(captures) = X_HANDLE_PATH_RE.captures(&href) else {
+            continue;
+        };
+        let handle = captures.get(1)?.as_str();
+        if !x_reserved_profile_path(handle) {
+            return Some(format!("@{handle}"));
+        }
+    }
+
+    X_HANDLE_TEXT_RE
+        .captures(&normalize_ws(&user.text_contents()))
+        .and_then(|captures| captures.get(1))
+        .map(|handle| format!("@{}", handle.as_str()))
+}
+
+fn x_reserved_profile_path(path: &str) -> bool {
+    matches!(
+        path.to_ascii_lowercase().as_str(),
+        "i" | "home"
+            | "explore"
+            | "search"
+            | "notifications"
+            | "messages"
+            | "settings"
+            | "compose"
+            | "hashtag"
+            | "intent"
+    )
 }
 
 fn x_tweet_time_and_url(tweet: &NodeRef, base_url: &str) -> (String, String) {
@@ -9569,18 +9618,12 @@ fn x_async_output(
         return Err(DefuddleError::Json("empty X fallback content".to_string()));
     }
     let word_count = count_html_words(&html);
-    let org = build_org_document(&metadata, &body_org, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
-    Ok(extractor_output(
+    Ok(standard_extractor_output(
         metadata,
         html,
-        org,
+        &body_org,
         word_count,
         extractor_name,
-        variables,
     ))
 }
 
@@ -10543,13 +10586,8 @@ fn bluesky_output(
     let metadata = bluesky_metadata(document, url.as_deref(), first_item);
     let word_count = count_words(&body);
     let html = serialize_node(&screen)?;
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "bluesky", variables,
+    Ok(Some(standard_extractor_output(
+        metadata, html, &body, word_count, "bluesky",
     )))
 }
 
@@ -10655,15 +10693,9 @@ fn bluesky_metadata(document: &NodeRef, url: Option<&str>, first_item: &NodeRef)
         site: "Bluesky".to_string(),
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
         image: bluesky_first_image_url(first_item).unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -11004,13 +11036,8 @@ fn threads_output(
     );
     let word_count = count_words(&body);
     let html = serialize_node(&pagelets[0])?;
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "threads", variables,
+    Ok(Some(standard_extractor_output(
+        metadata, html, &body, word_count, "threads",
     )))
 }
 
@@ -11073,13 +11100,8 @@ fn threads_region_output(
     );
     let word_count = count_words(&body);
     let html = serialize_node(region)?;
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "threads", variables,
+    Ok(Some(standard_extractor_output(
+        metadata, html, &body, word_count, "threads",
     )))
 }
 
@@ -11733,17 +11755,11 @@ fn threads_metadata(
         site: "Threads".to_string(),
         url: url.unwrap_or_default().to_string(),
         domain,
-        favicon: first_present(&[
-            select_attr(document, "link[rel=\"icon\"]", "href"),
-            select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-            select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-        ])
-        .and_then(|value| absolutize_url(base_url, &value))
-        .unwrap_or_default(),
+        favicon: document_favicon(document, base_url),
         image: first_element
             .and_then(threads_first_image_url)
             .unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
     }
 }
 
@@ -11888,13 +11904,8 @@ fn mastodon_output(
     let post_html = post_html_parts.join("\n<hr>\n");
     let html = mastodon_content_html(&post_html, &comment_statuses);
     let word_count = count_html_words(&html);
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = metadata_variables(
-        &metadata,
-        &["title", "author", "site", "description", "published"],
-    );
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "mastodon", variables,
+    Ok(Some(standard_extractor_output(
+        metadata, html, &body, word_count, "mastodon",
     )))
 }
 
@@ -11953,7 +11964,7 @@ fn mastodon_metadata(document: &NodeRef, url: Option<&str>, main: &NodeRef) -> M
         url: url.unwrap_or_default().to_string(),
         domain,
         image: mastodon_main_media_url(main).unwrap_or_default(),
-        language: select_attr(document, "html[lang]", "lang").unwrap_or_default(),
+        language: document_language(document),
         ..Metadata::default()
     }
 }
@@ -12654,16 +12665,7 @@ fn chatgpt_turns(document: &NodeRef) -> Vec<NodeRef> {
 }
 
 fn chatgpt_metadata(document: &NodeRef, provided_url: Option<&str>, turns: &[NodeRef]) -> Metadata {
-    let url = first_present(&[
-        provided_url.map(str::to_owned),
-        meta_content(document, "property", "og:url"),
-        select_attr(document, "link[rel=\"canonical\"]", "href"),
-    ])
-    .unwrap_or_default();
-    let domain = Url::parse(&url)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "chatgpt.com".to_string());
+    let (url, domain) = conversation_page_identity(document, provided_url, "chatgpt.com");
     let mut title = select_text(document, "title").unwrap_or_default();
     if title.trim().is_empty() || title.trim() == "ChatGPT" {
         title = turns
@@ -12833,6 +12835,79 @@ fn citation_label(url: &str) -> String {
         .unwrap_or_else(|| url.to_string())
 }
 
+fn conversation_page_identity(
+    document: &NodeRef,
+    provided_url: Option<&str>,
+    fallback_domain: &str,
+) -> (String, String) {
+    let url = first_present(&[
+        provided_url.map(str::to_owned),
+        meta_content(document, "property", "og:url"),
+        select_attr(document, "link[rel=\"canonical\"]", "href"),
+    ])
+    .unwrap_or_default();
+    let domain = Url::parse(&url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .unwrap_or_else(|| fallback_domain.to_string());
+    (url, domain)
+}
+
+fn render_node_conversation_messages(
+    messages: &[ConversationNodeMessage],
+    strip_zero_width: bool,
+) -> Vec<RenderedConversationMessage> {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let mut content =
+                html_node_to_org_fragment_with_footnotes(&message.node, &FootnoteState::default());
+            if strip_zero_width {
+                content = content.replace('\u{200b}', "");
+            }
+            (!content.trim().is_empty()).then(|| RenderedConversationMessage {
+                author: message.author.clone(),
+                content,
+            })
+        })
+        .collect()
+}
+
+fn rendered_conversation_output(
+    document: &NodeRef,
+    metadata: Metadata,
+    messages: &[RenderedConversationMessage],
+    citations: &[ConversationCitation],
+    extractor: &str,
+) -> Result<Option<DefuddleOutput>, DefuddleError> {
+    let mut body = String::new();
+    for (index, message) in messages.iter().enumerate() {
+        if index > 0 {
+            body.push_str("\n-----\n\n");
+        }
+        body.push_str("** ");
+        body.push_str(&escape_org_headline(&message.author));
+        body.push_str("\n\n");
+        body.push_str(message.content.trim());
+        body.push('\n');
+    }
+    if body.is_empty() {
+        return Ok(None);
+    }
+
+    append_conversation_citation_footnotes(&mut body, citations);
+    let word_count = count_words(&body);
+    let org = build_org_document(&metadata, &body, word_count);
+    let variables = conversation_variables(&metadata, word_count);
+    let html = select_first_node(document, "main")
+        .map(|node| serialize_node(&node))
+        .unwrap_or_else(|| serialize_node(document))?;
+
+    Ok(Some(extractor_output(
+        metadata, html, org, word_count, extractor, variables,
+    )))
+}
+
 fn claude_output(
     document: &NodeRef,
     provided_url: Option<&str>,
@@ -12848,42 +12923,8 @@ fn claude_output(
     }
 
     let metadata = claude_metadata(document, provided_url, &messages);
-    let mut body = String::new();
-    let mut rendered_messages = 0usize;
-
-    for message in &messages {
-        let rendered =
-            html_node_to_org_fragment_with_footnotes(&message.node, &FootnoteState::default())
-                .replace('\u{200b}', "");
-        if rendered.trim().is_empty() {
-            continue;
-        }
-
-        if rendered_messages > 0 {
-            body.push_str("\n-----\n\n");
-        }
-        body.push_str("** ");
-        body.push_str(&escape_org_headline(&message.author));
-        body.push_str("\n\n");
-        body.push_str(rendered.trim());
-        body.push('\n');
-        rendered_messages += 1;
-    }
-
-    if rendered_messages == 0 {
-        return Ok(None);
-    }
-
-    let word_count = count_words(&body);
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = conversation_variables(&metadata, word_count);
-    let html = select_first_node(document, "main")
-        .map(|node| serialize_node(&node))
-        .unwrap_or_else(|| serialize_node(document))?;
-
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "claude", variables,
-    )))
+    let rendered = render_node_conversation_messages(&messages, true);
+    rendered_conversation_output(document, metadata, &rendered, &[], "claude")
 }
 
 fn claude_messages(document: &NodeRef) -> Vec<ConversationNodeMessage> {
@@ -12929,16 +12970,7 @@ fn claude_metadata(
     provided_url: Option<&str>,
     messages: &[ConversationNodeMessage],
 ) -> Metadata {
-    let url = first_present(&[
-        provided_url.map(str::to_owned),
-        meta_content(document, "property", "og:url"),
-        select_attr(document, "link[rel=\"canonical\"]", "href"),
-    ])
-    .unwrap_or_default();
-    let domain = Url::parse(&url)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "claude.ai".to_string());
+    let (url, domain) = conversation_page_identity(document, provided_url, "claude.ai");
     let mut title = select_text(document, "title")
         .map(|title| title.trim().trim_end_matches(" - Claude").to_string())
         .unwrap_or_default();
@@ -12985,43 +13017,8 @@ fn gemini_output(
 
     let metadata = gemini_metadata(document, provided_url, &messages);
     let citations = gemini_sources(document, metadata.url.as_str());
-    let mut body = String::new();
-    let mut rendered_messages = 0usize;
-
-    for message in &messages {
-        let rendered =
-            html_node_to_org_fragment_with_footnotes(&message.node, &FootnoteState::default());
-        if rendered.trim().is_empty() {
-            continue;
-        }
-
-        if rendered_messages > 0 {
-            body.push_str("\n-----\n\n");
-        }
-        body.push_str("** ");
-        body.push_str(&escape_org_headline(&message.author));
-        body.push_str("\n\n");
-        body.push_str(rendered.trim());
-        body.push('\n');
-        rendered_messages += 1;
-    }
-
-    if rendered_messages == 0 {
-        return Ok(None);
-    }
-
-    append_conversation_citation_footnotes(&mut body, &citations);
-
-    let word_count = count_words(&body);
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = conversation_variables(&metadata, word_count);
-    let html = select_first_node(document, "main")
-        .map(|node| serialize_node(&node))
-        .unwrap_or_else(|| serialize_node(document))?;
-
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "gemini", variables,
-    )))
+    let rendered = render_node_conversation_messages(&messages, false);
+    rendered_conversation_output(document, metadata, &rendered, &citations, "gemini")
 }
 
 fn gemini_messages(document: &NodeRef) -> Vec<ConversationNodeMessage> {
@@ -13060,16 +13057,7 @@ fn gemini_metadata(
     provided_url: Option<&str>,
     messages: &[ConversationNodeMessage],
 ) -> Metadata {
-    let url = first_present(&[
-        provided_url.map(str::to_owned),
-        meta_content(document, "property", "og:url"),
-        select_attr(document, "link[rel=\"canonical\"]", "href"),
-    ])
-    .unwrap_or_default();
-    let domain = Url::parse(&url)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "gemini.google.com".to_string());
+    let (url, domain) = conversation_page_identity(document, provided_url, "gemini.google.com");
 
     let title = select_text(document, "title")
         .filter(|title| title != "Gemini" && !title.contains("Gemini"))
@@ -13149,41 +13137,7 @@ fn grok_output(
     }
 
     let metadata = grok_metadata(document, provided_url, messages.len(), &messages);
-    let mut body = String::new();
-    let mut rendered_messages = 0usize;
-
-    for message in &messages {
-        if message.content.trim().is_empty() {
-            continue;
-        }
-
-        if rendered_messages > 0 {
-            body.push_str("\n-----\n\n");
-        }
-        body.push_str("** ");
-        body.push_str(&escape_org_headline(&message.author));
-        body.push_str("\n\n");
-        body.push_str(message.content.trim());
-        body.push('\n');
-        rendered_messages += 1;
-    }
-
-    if rendered_messages == 0 {
-        return Ok(None);
-    }
-
-    append_conversation_citation_footnotes(&mut body, &citations);
-
-    let word_count = count_words(&body);
-    let org = build_org_document(&metadata, &body, word_count);
-    let variables = conversation_variables(&metadata, word_count);
-    let html = select_first_node(document, "main")
-        .map(|node| serialize_node(&node))
-        .unwrap_or_else(|| serialize_node(document))?;
-
-    Ok(Some(extractor_output(
-        metadata, html, org, word_count, "grok", variables,
-    )))
+    rendered_conversation_output(document, metadata, &messages, &citations, "grok")
 }
 
 fn grok_message_containers(document: &NodeRef) -> Vec<NodeRef> {
@@ -15750,16 +15704,21 @@ fn sanitize_element_attributes(node: &NodeRef) {
     let Some(element) = node.as_element() else {
         return;
     };
+    let is_iframe = element.name.local.as_ref() == "iframe";
     let mut attrs = element.attributes.borrow_mut();
     attrs.map.retain(|name, value| {
         let local = name.local.as_ref().to_ascii_lowercase();
         if local.starts_with("on") || local == "srcdoc" {
             return false;
         }
-        !matches!(
+        if !matches!(
             local.as_str(),
             "href" | "src" | "poster" | "action" | "formaction"
-        ) || !is_dangerous_url(&value.value)
+        ) {
+            return true;
+        }
+        let allow_inline_image = !(is_iframe && local == "src");
+        !is_dangerous_url_with_inline_images(&value.value, allow_inline_image)
     });
 }
 
@@ -16325,6 +16284,7 @@ fn upstream_allows_attribute(name: &str) -> bool {
             | "lang"
             | "role"
             | "rowspan"
+            | "sandbox"
             | "src"
             | "srclang"
             | "srcset"
@@ -16465,6 +16425,25 @@ fn standardize_letter_footer_blocks(root: &NodeRef) {
             continue;
         };
         replace_node_transferring_children(&node, paragraph);
+    }
+}
+
+fn standardize_mediawiki_multi_image_rows(root: &NodeRef) {
+    let Ok(matches) = root.select(".tmulti .thumbimage, .tmulti .thumbcaption") else {
+        return;
+    };
+    let parts = matches
+        .map(|matched| matched.as_node().clone())
+        .collect::<Vec<_>>();
+    for part in parts {
+        let tag = if has_class_token(&part, "thumbimage") {
+            "div"
+        } else {
+            "p"
+        };
+        if let Some(replacement) = new_html_element(tag) {
+            replace_node_transferring_children(&part, replacement);
+        }
     }
 }
 
@@ -18121,6 +18100,47 @@ fn remove_lightbox_duplicate_images(document: &NodeRef) {
             image.detach();
         }
     }
+}
+
+fn remove_duplicate_leading_hero_block(body: &NodeRef) {
+    let Ok(matches) = body.select("figure, h1, h2, h3, h4, h5, h6, p") else {
+        return;
+    };
+    let leading = matches
+        .filter_map(|matched| {
+            let node = matched.as_node();
+            let tag = tag_name(node)?;
+            if tag != "figure"
+                && node
+                    .ancestors()
+                    .any(|ancestor| tag_name(&ancestor).as_deref() == Some("figure"))
+            {
+                return None;
+            }
+            Some(node.clone())
+        })
+        .take(3)
+        .collect::<Vec<_>>();
+    if leading.len() != 3
+        || tag_name(&leading[0]).as_deref() != Some("figure")
+        || !is_heading_node(&leading[1])
+        || tag_name(&leading[2]).as_deref() != Some("figure")
+    {
+        return;
+    }
+
+    let first = first_image_src(&leading[0]).zip(select_text(&leading[0], "figcaption"));
+    let second = first_image_src(&leading[2]).zip(select_text(&leading[2], "figcaption"));
+    if !first
+        .as_ref()
+        .is_some_and(|(_, caption)| !caption.is_empty())
+        || first != second
+    {
+        return;
+    }
+
+    leading[1].detach();
+    leading[2].detach();
 }
 
 fn remove_cover_image_duplicate(body: &NodeRef, metadata_image: &str) -> Option<String> {
@@ -27651,6 +27671,7 @@ fn iframe_export_attrs(element: &ElementData) -> Vec<(String, String)> {
         "frameborder",
         "allow",
         "allowfullscreen",
+        "sandbox",
         "title",
         "referrerpolicy",
     ]
@@ -29683,10 +29704,20 @@ fn count_node_words(node: &NodeRef) -> usize {
 }
 
 fn is_dangerous_url(url: &str) -> bool {
-    let trimmed = url.trim_start().to_ascii_lowercase();
-    trimmed.starts_with("javascript:")
-        || trimmed.starts_with("vbscript:")
-        || trimmed.starts_with("data:text/html")
+    is_dangerous_url_with_inline_images(url, true)
+}
+
+fn is_dangerous_url_with_inline_images(url: &str, allow_inline_image: bool) -> bool {
+    let normalized = url
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && (*ch as u32) > 0x1f)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    normalized.starts_with("javascript:")
+        || normalized.starts_with("vbscript:")
+        || normalized.starts_with("blob:")
+        || (normalized.starts_with("data:")
+            && !(allow_inline_image && normalized.starts_with("data:image/")))
 }
 
 fn needs_space_before(out: &str, text: &str) -> bool {
@@ -29857,6 +29888,34 @@ mod tests {
 
     fn variable<'a>(output: &'a DefuddleOutput, key: &str) -> Option<&'a str> {
         output.variables.as_ref()?.get(key).map(String::as_str)
+    }
+
+    fn x_test_user(name: &str, handle: &str) -> String {
+        format!(r#"<a href="/{handle}">{name}</a><a href="/{handle}">@{handle}</a>"#)
+    }
+
+    fn x_test_tweet(user: &str, handle: &str, text: &str, id: &str) -> String {
+        format!(
+            r#"<article data-testid="tweet">
+                <div data-testid="User-Name">{user}<a href="/{handle}/status/{id}"><time datetime="2026-01-02T03:04:05.000Z">Jan 2</time></a></div>
+                <div data-testid="tweetText">{text}</div>
+              </article>"#
+        )
+    }
+
+    fn x_test_cell(tweet: &str) -> String {
+        format!(r#"<div data-testid="cellInnerDiv">{tweet}</div>"#)
+    }
+
+    fn parse_x_test_body(body: &str) -> DefuddleOutput {
+        parse_html_to_org(
+            &format!("<html><body>{body}</body></html>"),
+            DefuddleOptions {
+                url: Some("https://x.com/examplename/status/1001".to_string()),
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap()
     }
 
     #[test]
@@ -30222,6 +30281,119 @@ mod tests {
             "Lorem Ipsum Dolor Sit Amet\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit."
         ));
         assert!(!output.org.contains("Jane DoeさんはXを使っています"));
+    }
+
+    #[test]
+    fn x_timeline_handles_current_markup_and_stops_at_trailing_sections() {
+        let main = x_test_cell(&x_test_tweet(
+            &x_test_user("Example Name", "examplename"),
+            "examplename",
+            "Durable formats outlast the apps that read them.",
+            "1001",
+        ));
+        let reordered_user = r#"
+          <a href="/i/verified-badge">Verified</a>
+          <a href="/examplename">Example Name</a>
+          <span>@examplename</span>"#;
+        let thread = x_test_cell(&x_test_tweet(
+            reordered_user,
+            "examplename",
+            "A follow-up in the same thread.",
+            "1002",
+        ));
+        let reply = x_test_cell(&x_test_tweet(
+            &x_test_user("Other Person", "otherperson"),
+            "otherperson",
+            "A reply from someone else.",
+            "1003",
+        ));
+        let promoted = x_test_cell(&x_test_tweet(
+            &x_test_user("Unrelated", "unrelated"),
+            "unrelated",
+            "Promoted content past the boundary.",
+            "1004",
+        ));
+        let body = format!(
+            r#"
+          <div aria-label="Timeline: Conversation">
+            <div><h2>Post</h2></div>
+            <section><div>{main}{thread}{reply}</div></section>
+            <section><h2>Discover more</h2>{promoted}</section>
+          </div>
+        "#
+        );
+        let output = parse_x_test_body(&body);
+
+        assert_eq!(output.extractor_type.as_deref(), Some("twitter"));
+        assert_eq!(output.author, "@examplename");
+        assert!(output
+            .org
+            .contains("Durable formats outlast the apps that read them."));
+        assert!(output.org.contains("A follow-up in the same thread."));
+        assert!(output.org.contains("** Comments"));
+        assert!(output.org.contains("A reply from someone else."));
+        assert!(!output.org.contains("Promoted content past the boundary."));
+        assert!(output
+            .org
+            .find("A follow-up in the same thread.")
+            .is_some_and(|thread| thread < output.org.find("** Comments").unwrap()));
+    }
+
+    #[test]
+    fn x_timeline_falls_back_to_one_bare_tweet_without_cells() {
+        let body = format!(
+            "{}{}",
+            x_test_tweet(
+                &x_test_user("Example Name", "examplename"),
+                "examplename",
+                "A single tweet with no surrounding timeline.",
+                "1001",
+            ),
+            x_test_tweet(
+                &x_test_user("Unrelated", "unrelated"),
+                "unrelated",
+                "Unrelated page recommendation.",
+                "1002",
+            )
+        );
+        let output = parse_x_test_body(&body);
+
+        assert!(output
+            .org
+            .contains("A single tweet with no surrounding timeline."));
+        assert!(!output.org.contains("Unrelated page recommendation."));
+    }
+
+    #[test]
+    fn x_article_sanitizes_interpolated_header_image_attributes() {
+        let html = r##"
+        <!doctype html>
+        <html><body>
+          <div data-testid="twitterArticleReadView">
+            <div data-testid="tweetPhoto">
+              <img src="javascript:alert(1)" alt='x" onerror="alert(2)'>
+            </div>
+            <div data-testid="twitterArticleRichTextView">
+              <h1 data-testid="twitter-article-title">Test Article</h1>
+              <div class="public-DraftStyleDefault-block">Body text</div>
+            </div>
+          </div>
+        </body></html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://x.com/testuser/article/123456789".to_string()),
+                remove_small_images: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!output.html.contains("javascript:"));
+        assert!(!output.html.contains("onerror="));
+        assert!(!output.html.contains("alert(1)"));
     }
 
     #[test]
@@ -38481,14 +38653,10 @@ Output: [0,1]</code></pre>
             .and_then(|tail| tail.split("</video>").next())
             .unwrap_or_default();
         assert!(!raw_video.contains("controls"));
-        for marker in [
-            "lite-youtube",
-            "legacy-object",
-            "legacy-embed",
-            "legacy-applet",
-        ] {
+        assert!(without_standardize.html.contains("lite-youtube"));
+        for marker in ["legacy-object", "legacy-embed", "legacy-applet"] {
             assert!(
-                without_standardize.html.contains(marker),
+                !without_standardize.html.contains(marker),
                 "{}",
                 without_standardize.html
             );
@@ -40810,6 +40978,100 @@ let value = \`tick\`;
         assert!(output.org.contains("Final article paragraph."));
         assert!(!output.org.contains("hero.jpg"), "{}", output.org);
         assert!(!output.org.contains("Sidebar text"), "{}", output.org);
+    }
+
+    #[test]
+    fn sanitizes_generic_output_when_standardization_is_disabled() {
+        let html = r##"
+        <!doctype html>
+        <html>
+          <head><title>Generic Security</title></head>
+          <body>
+            <article onclick="rootHandler()">
+              <p>This article has enough ordinary prose to remain the selected content while unsafe elements and attributes are removed at the final output boundary.</p>
+              <style>@import url("https://evil.example/leak.css");</style>
+              <script>alert("script")</script>
+              <noscript><img src="https://evil.example/track.png"></noscript>
+              <iframe src="data:image/svg+xml,<svg></svg>"></iframe>
+              <iframe src="blob:https://evil.example/id"></iframe>
+              <iframe src="https://www.youtube.com/embed/abc" sandbox="allow-scripts"></iframe>
+              <img src="data:image/png;base64,iVBORw0KGgo=" alt="inline">
+              <a href="java&#x09;script:alert(3)">Unsafe link</a>
+              <a href="/relative">Safe relative link</a>
+              <p>A second substantive paragraph confirms that legitimate article text, inline images, embeds, and relative links continue to survive sanitization.</p>
+            </article>
+          </body>
+        </html>
+        "##;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/posts/security".to_string()),
+                content_selector: Some("article".to_string()),
+                remove_small_images: false,
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                standardize: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        for unsafe_text in [
+            "<style",
+            "<script",
+            "<noscript",
+            "onclick",
+            "rootHandler",
+            "javascript:",
+            "blob:",
+            "data:image/svg+xml",
+            "evil.example",
+        ] {
+            assert!(
+                !output.html.to_ascii_lowercase().contains(unsafe_text),
+                "unsafe generic output contains {unsafe_text}: {}",
+                output.html
+            );
+        }
+        assert!(output.html.contains("data:image/png"));
+        assert!(output.html.contains("youtube.com/embed/abc"));
+        assert!(output.html.contains(r#"sandbox="allow-scripts""#));
+        assert!(output.html.contains("https://example.com/relative"));
+    }
+
+    #[test]
+    fn preserves_iframe_sandbox_in_standardized_html_and_org() {
+        let html = r#"
+        <!doctype html>
+        <html><head><title>Sandboxed Embed</title></head><body>
+          <article>
+            <p>A substantive paragraph appears before the embedded media so the article is selected reliably for extraction and rendering.</p>
+            <iframe src="https://example.com/embed" sandbox="allow-scripts"></iframe>
+            <p>A substantive paragraph after the embed confirms the media remains within ordinary article content.</p>
+          </article>
+        </body></html>
+        "#;
+
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                url: Some("https://example.com/article".to_string()),
+                content_selector: Some("article".to_string()),
+                remove_exact_selectors: false,
+                remove_partial_selectors: false,
+                remove_content_patterns: false,
+                remove_low_scoring: false,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(output.html.contains(r#"sandbox="allow-scripts""#));
+        assert!(output.org.contains(r#"sandbox="allow-scripts""#));
     }
 
     #[test]

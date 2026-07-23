@@ -2093,6 +2093,17 @@ fn selected_upstream_fixtures_smoke() {
             ],
         },
         FixtureCase {
+            fixture: "content-patterns--multi-image-row-midarticle",
+            contains: &[
+                "Early [[https://encyclopedia.example.com/wiki/Apparatus][apparatus]] used in the first surveys",
+                "Contemporary studies rely on a standard protocol",
+                "** Results",
+                "** Legacy",
+                "Later work has largely extended rather than overturned the original findings.",
+            ],
+            not_contains: &[],
+        },
+        FixtureCase {
             fixture: "footnotes--span-fnref-colon",
             contains: &[
                 "calibration",
@@ -2788,7 +2799,7 @@ fn all_upstream_fixture_content_matches_exact_org_rendering() {
     let selected_fixture = std::env::var("ORG_DEFUDDLE_DIFF_FIXTURE").ok();
     assert_eq!(
         references.len(),
-        if selected_fixture.is_some() { 1 } else { 202 },
+        if selected_fixture.is_some() { 1 } else { 203 },
         "unexpected upstream fixture count"
     );
 
@@ -3001,7 +3012,7 @@ fn all_upstream_fixture_word_counts_match_reference() {
     let selected_fixture = std::env::var("ORG_DEFUDDLE_DIFF_FIXTURE").ok();
     assert_eq!(
         references.len(),
-        if selected_fixture.is_some() { 1 } else { 202 },
+        if selected_fixture.is_some() { 1 } else { 203 },
         "unexpected upstream fixture count"
     );
 

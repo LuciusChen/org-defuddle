@@ -2,14 +2,8 @@
 :PROPERTIES:
 :URL: https://www.example.com/article/test-article
 :DOMAIN: example.com
-:WORD_COUNT: 197
+:WORD_COUNT: 184
 :END:
-
-[[https://www.example.com/images/hero.webp][Hero image caption.]]
-
-Hero image caption. Photo Credit / Agency
-
-** Test article with multiple lazy-loaded images
 
 [[https://www.example.com/images/hero.webp][Hero image caption.]]
 

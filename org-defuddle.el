@@ -990,104 +990,16 @@ HEADERS, METHOD, and DATA configure the request."
     (_ (user-error "Unsupported org-defuddle output backend: %S"
                    org-defuddle-output-backend))))
 
-(defun org-defuddle-parse-html (html &optional url options)
-  "Parse HTML and return a plist containing extracted metadata and Org.
+(defun org-defuddle--json-result (json)
+  "Parse module JSON output into a plist."
+  (json-parse-string json
+                     :object-type 'plist
+                     :array-type 'list
+                     :null-object nil
+                     :false-object nil))
 
-The returned plist includes upstream-compatible keys such as
-`:content', `:title', `:wordCount', `:parseTime', and
-`:contentMarkdown', plus upstream response extras `:schemaOrgData'
-`:metaTags', `:extractorType', and `:variables'.  It also includes
-org-defuddle extensions such as `:html', `:org', `:frontmatter',
-`:word_count', and `:parse_time'.
-
-URL is used for metadata and relative URL resolution.  OPTIONS is a
-plist.  `:include-images' overrides `org-defuddle-include-images',
-`:remove-images' is accepted as its upstream-compatible inverse,
-`:remove-small-images' overrides `org-defuddle-remove-small-images',
-`:content-selector' overrides `org-defuddle-content-selector', and
-`:include-replies' overrides `org-defuddle-include-replies'.
-`:remove-hidden-elements' overrides
-`org-defuddle-remove-hidden-elements'.  `:remove-exact-selectors'
-and `:remove-partial-selectors' override their matching defcustoms.
-`:remove-content-patterns' overrides
-`org-defuddle-remove-content-patterns'.  `:remove-low-scoring'
-overrides `org-defuddle-remove-low-scoring'.  `:standardize'
-overrides `org-defuddle-standardize'.  `:debug' overrides
-`org-defuddle-debug'.  `:profile' overrides `org-defuddle-profile'.
-`:frontmatter' overrides `org-defuddle-frontmatter'.  `:markdown'
-overrides `org-defuddle-markdown'.  `:separate-markdown' and
-`:separateMarkdown' override `org-defuddle-separate-markdown'."
-  (org-defuddle-load-module)
-  (let ((include-images (org-defuddle--include-images-option options))
-        (remove-small-images (org-defuddle--option
-                              options
-                              :remove-small-images
-                              org-defuddle-remove-small-images))
-        (content-selector (org-defuddle--content-selector-option options))
-        (include-replies (org-defuddle--include-replies-option options))
-        (remove-hidden-elements (org-defuddle--option
-                                 options
-                                 :remove-hidden-elements
-                                 org-defuddle-remove-hidden-elements))
-        (remove-exact-selectors (org-defuddle--option
-                                 options
-                                 :remove-exact-selectors
-                                 org-defuddle-remove-exact-selectors))
-        (remove-partial-selectors (org-defuddle--option
-                                   options
-                                   :remove-partial-selectors
-                                   org-defuddle-remove-partial-selectors))
-        (remove-content-patterns (org-defuddle--option
-                                  options
-                                  :remove-content-patterns
-                                  org-defuddle-remove-content-patterns))
-        (remove-low-scoring (org-defuddle--option
-                             options
-                             :remove-low-scoring
-                             org-defuddle-remove-low-scoring))
-        (standardize (org-defuddle--standardize-option options))
-        (debug (org-defuddle--debug-option options))
-        (profile (org-defuddle--profile-option options))
-        (frontmatter (org-defuddle--frontmatter-option options))
-        (markdown (org-defuddle--markdown-option options))
-        (separate-markdown (org-defuddle--separate-markdown-option options)))
-    (json-parse-string
-     (org-defuddle-module-parse-json-with-options html
-                                                  (or url "")
-                                                  (not (null include-images))
-                                                  (not (null remove-small-images))
-                                                  content-selector
-                                                  include-replies
-                                                  (not (null remove-hidden-elements))
-                                                  (not (null remove-exact-selectors))
-                                                  (not (null remove-partial-selectors))
-                                                  (not (null remove-content-patterns))
-                                                  (not (null remove-low-scoring))
-                                                  (not (null standardize))
-                                                  (not (null debug))
-                                                  (not (null profile))
-                                                  (not (null frontmatter))
-                                                  (not (null markdown))
-                                                  (not (null separate-markdown)))
-     :object-type 'plist
-     :array-type 'list
-      :null-object nil
-      :false-object nil)))
-
-(defun org-defuddle-parse-html-property (html property &optional url options)
-  "Parse HTML and return PROPERTY from the extracted response.
-
-PROPERTY follows upstream defuddle's property names such as
-\"title\", \"description\", \"domain\", \"wordCount\", and
-\"parseTime\".  \"contentMarkdown\" returns first-pass Markdown content.
-Snake-case aliases such as \"word_count\" are also accepted for
-org-defuddle JSON fields.
-
-URL is used for metadata and relative URL resolution.  OPTIONS accepts
-the same keys as `org-defuddle-parse-html'."
-  (org-defuddle-load-module)
-  (unless (stringp property)
-    (user-error "PROPERTY must be a string"))
+(defun org-defuddle--module-option-arguments (options &optional property)
+  "Return module ABI arguments parsed from OPTIONS for PROPERTY."
   (let ((include-images (org-defuddle--include-images-option options))
         (remove-small-images (org-defuddle--option
                               options
@@ -1122,39 +1034,85 @@ the same keys as `org-defuddle-parse-html'."
         (markdown (org-defuddle--markdown-option options))
         (separate-markdown
          (org-defuddle--separate-markdown-option options property)))
-    (org-defuddle-module-parse-property-with-options
-     html
-     (or url "")
-     property
-     (not (null include-images))
-     (not (null remove-small-images))
-     content-selector
-     include-replies
-     (not (null remove-hidden-elements))
-     (not (null remove-exact-selectors))
-     (not (null remove-partial-selectors))
-     (not (null remove-content-patterns))
-     (not (null remove-low-scoring))
-     (not (null standardize))
-     (not (null debug))
-     (not (null profile))
-     (not (null frontmatter))
-     (not (null markdown))
-     (not (null separate-markdown)))))
+    (list (not (null include-images))
+          (not (null remove-small-images))
+          content-selector
+          include-replies
+          (not (null remove-hidden-elements))
+          (not (null remove-exact-selectors))
+          (not (null remove-partial-selectors))
+          (not (null remove-content-patterns))
+          (not (null remove-low-scoring))
+          (not (null standardize))
+          (not (null debug))
+          (not (null profile))
+          (not (null frontmatter))
+          (not (null markdown))
+          (not (null separate-markdown)))))
+
+(defun org-defuddle-parse-html (html &optional url options)
+  "Parse HTML and return a plist containing extracted metadata and Org.
+
+The returned plist includes upstream-compatible keys such as
+`:content', `:title', `:wordCount', `:parseTime', and
+`:contentMarkdown', plus upstream response extras `:schemaOrgData'
+`:metaTags', `:extractorType', and `:variables'.  It also includes
+org-defuddle extensions such as `:html', `:org', `:frontmatter',
+`:word_count', and `:parse_time'.
+
+URL is used for metadata and relative URL resolution.  OPTIONS is a
+plist.  `:include-images' overrides `org-defuddle-include-images',
+`:remove-images' is accepted as its upstream-compatible inverse,
+`:remove-small-images' overrides `org-defuddle-remove-small-images',
+`:content-selector' overrides `org-defuddle-content-selector', and
+`:include-replies' overrides `org-defuddle-include-replies'.
+`:remove-hidden-elements' overrides
+`org-defuddle-remove-hidden-elements'.  `:remove-exact-selectors'
+and `:remove-partial-selectors' override their matching defcustoms.
+`:remove-content-patterns' overrides
+`org-defuddle-remove-content-patterns'.  `:remove-low-scoring'
+overrides `org-defuddle-remove-low-scoring'.  `:standardize'
+overrides `org-defuddle-standardize'.  `:debug' overrides
+`org-defuddle-debug'.  `:profile' overrides `org-defuddle-profile'.
+`:frontmatter' overrides `org-defuddle-frontmatter'.  `:markdown'
+overrides `org-defuddle-markdown'.  `:separate-markdown' and
+`:separateMarkdown' override `org-defuddle-separate-markdown'."
+  (org-defuddle-load-module)
+  (org-defuddle--json-result
+   (apply #'org-defuddle-module-parse-json-with-options
+          html
+          (or url "")
+          (org-defuddle--module-option-arguments options))))
+
+(defun org-defuddle-parse-html-property (html property &optional url options)
+  "Parse HTML and return PROPERTY from the extracted response.
+
+PROPERTY follows upstream defuddle's property names such as
+\"title\", \"description\", \"domain\", \"wordCount\", and
+\"parseTime\".  \"contentMarkdown\" returns first-pass Markdown content.
+Snake-case aliases such as \"word_count\" are also accepted for
+org-defuddle JSON fields.
+
+URL is used for metadata and relative URL resolution.  OPTIONS accepts
+the same keys as `org-defuddle-parse-html'."
+  (org-defuddle-load-module)
+  (unless (stringp property)
+    (user-error "PROPERTY must be a string"))
+  (apply #'org-defuddle-module-parse-property-with-options
+         html
+         (or url "")
+         property
+         (org-defuddle--module-option-arguments options property)))
 
 (defun org-defuddle-parse-c2-json (json &optional url)
   "Parse C2 Wiki API JSON and return extracted metadata and Org.
 
 The returned plist has keys matching the Rust `DefuddleOutput'
-fields, including `:title', `:url', `:word_count', `:html', and
+  fields, including `:title', `:url', `:word_count', `:html', and
 `:org'.  URL is the original C2 Wiki page URL."
   (org-defuddle-load-module)
-  (json-parse-string
-   (org-defuddle-module-parse-c2-json json (or url ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+  (org-defuddle--json-result
+   (org-defuddle-module-parse-c2-json json (or url ""))))
 
 (defun org-defuddle-c2-json-to-org (json &optional url)
   "Parse C2 Wiki API JSON and return an Org string.
@@ -1169,12 +1127,8 @@ URL is the original C2 Wiki page URL."
 The returned plist has keys matching the Rust `DefuddleOutput'
 fields.  URL is the original X/Twitter status URL."
   (org-defuddle-load-module)
-  (json-parse-string
-   (org-defuddle-module-parse-x-oembed-json json (or url ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+  (org-defuddle--json-result
+   (org-defuddle-module-parse-x-oembed-json json (or url ""))))
 
 (defun org-defuddle-x-oembed-json-to-org (json &optional url)
   "Parse X/Twitter oEmbed JSON and return an Org string.
@@ -1189,12 +1143,8 @@ URL is the original X/Twitter status URL."
 The returned plist has keys matching the Rust `DefuddleOutput'
 fields.  URL is the original X/Twitter status or article URL."
   (org-defuddle-load-module)
-  (json-parse-string
-   (org-defuddle-module-parse-fxtwitter-json json (or url ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+  (org-defuddle--json-result
+   (org-defuddle-module-parse-fxtwitter-json json (or url ""))))
 
 (defun org-defuddle-fxtwitter-json-to-org (json &optional url)
   "Parse FxTwitter API JSON and return an Org string.
@@ -1208,12 +1158,8 @@ URL is the original X/Twitter status or article URL."
 
 URL is the original Bilibili page URL."
   (org-defuddle-load-module)
-  (json-parse-string
-   (org-defuddle-module-bilibili-video-info view-json (or url ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+  (org-defuddle--json-result
+   (org-defuddle-module-bilibili-video-info view-json (or url ""))))
 
 (defun org-defuddle-bilibili-subtitle-info (player-json &optional language)
   "Parse Bilibili PLAYER-JSON and return selected subtitle info.
@@ -1221,12 +1167,8 @@ URL is the original Bilibili page URL."
 LANGUAGE is an optional preferred language code.  The return value is
 nil when no supported subtitle track is present."
   (org-defuddle-load-module)
-  (json-parse-string
-   (org-defuddle-module-bilibili-subtitle-info player-json (or language ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+  (org-defuddle--json-result
+   (org-defuddle-module-bilibili-subtitle-info player-json (or language ""))))
 
 (defun org-defuddle-parse-bilibili-json (view-json &optional subtitle-json url language-code)
   "Parse Bilibili API JSON and return extracted metadata and Org.
@@ -1236,15 +1178,11 @@ selected subtitle response, or nil for video metadata without transcript.
 URL is the original Bilibili page URL.  LANGUAGE-CODE is the selected
 subtitle language."
   (org-defuddle-load-module)
-  (json-parse-string
+  (org-defuddle--json-result
    (org-defuddle-module-parse-bilibili-json view-json
                                             (or subtitle-json "")
                                             (or url "")
-                                            (or language-code ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+                                            (or language-code ""))))
 
 (defun org-defuddle-bilibili-json-to-org (view-json &optional subtitle-json url language-code)
   "Parse Bilibili API JSON and return an Org string.
@@ -1265,12 +1203,8 @@ subtitle language."
 LANGUAGE is an optional preferred language code.  The return value is nil
 when no supported caption track is present."
   (org-defuddle-load-module)
-  (json-parse-string
-   (org-defuddle-module-youtube-caption-info player-json (or language ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+  (org-defuddle--json-result
+   (org-defuddle-module-youtube-caption-info player-json (or language ""))))
 
 (defun org-defuddle-youtube-inline-caption-info (html url &optional language)
   "Return inline YouTube caption info parsed from HTML for URL.
@@ -1280,12 +1214,8 @@ when the page has no current, supported caption track or the installed module
 predates inline player-data support."
   (org-defuddle-load-module)
   (when (fboundp 'org-defuddle-module-youtube-inline-caption-info)
-    (json-parse-string
-     (org-defuddle-module-youtube-inline-caption-info html url (or language ""))
-     :object-type 'plist
-     :array-type 'list
-     :null-object nil
-     :false-object nil)))
+    (org-defuddle--json-result
+     (org-defuddle-module-youtube-inline-caption-info html url (or language "")))))
 
 (defun org-defuddle-parse-youtube-json
     (player-json &optional caption-xml chapters-json url language-code)
@@ -1296,16 +1226,12 @@ timedtext response, or nil when no transcript is available.  CHAPTERS-JSON
 is an Innertube next response, URL is the original page URL, and
 LANGUAGE-CODE identifies the selected caption track."
   (org-defuddle-load-module)
-  (json-parse-string
+  (org-defuddle--json-result
    (org-defuddle-module-parse-youtube-json player-json
                                            (or caption-xml "")
                                            (or chapters-json "")
                                            (or url "")
-                                           (or language-code ""))
-   :object-type 'plist
-   :array-type 'list
-   :null-object nil
-   :false-object nil))
+                                           (or language-code ""))))
 
 (defun org-defuddle-youtube-json-to-org
     (player-json &optional caption-xml chapters-json url language-code)
@@ -1343,56 +1269,10 @@ overrides `org-defuddle-standardize'.  `:debug' overrides
 overrides `org-defuddle-markdown'.  `:separate-markdown' and
 `:separateMarkdown' override `org-defuddle-separate-markdown'."
   (org-defuddle-load-module)
-  (let ((include-images (org-defuddle--include-images-option options))
-        (remove-small-images (org-defuddle--option
-                              options
-                              :remove-small-images
-                              org-defuddle-remove-small-images))
-        (content-selector (org-defuddle--content-selector-option options))
-        (include-replies (org-defuddle--include-replies-option options))
-        (remove-hidden-elements (org-defuddle--option
-                                 options
-                                 :remove-hidden-elements
-                                 org-defuddle-remove-hidden-elements))
-        (remove-exact-selectors (org-defuddle--option
-                                 options
-                                 :remove-exact-selectors
-                                 org-defuddle-remove-exact-selectors))
-        (remove-partial-selectors (org-defuddle--option
-                                   options
-                                   :remove-partial-selectors
-                                   org-defuddle-remove-partial-selectors))
-        (remove-content-patterns (org-defuddle--option
-                                  options
-                                  :remove-content-patterns
-                                  org-defuddle-remove-content-patterns))
-        (remove-low-scoring (org-defuddle--option
-                             options
-                             :remove-low-scoring
-                             org-defuddle-remove-low-scoring))
-        (standardize (org-defuddle--standardize-option options))
-        (debug (org-defuddle--debug-option options))
-        (profile (org-defuddle--profile-option options))
-        (frontmatter (org-defuddle--frontmatter-option options))
-        (markdown (org-defuddle--markdown-option options))
-        (separate-markdown (org-defuddle--separate-markdown-option options)))
-    (org-defuddle-module-parse-org-with-options html
-                                                (or url "")
-                                                (not (null include-images))
-                                                (not (null remove-small-images))
-                                                content-selector
-                                                include-replies
-                                                (not (null remove-hidden-elements))
-                                                (not (null remove-exact-selectors))
-                                                (not (null remove-partial-selectors))
-                                                (not (null remove-content-patterns))
-                                                (not (null remove-low-scoring))
-                                                (not (null standardize))
-                                                (not (null debug))
-                                                (not (null profile))
-                                                (not (null frontmatter))
-                                                (not (null markdown))
-                                                (not (null separate-markdown)))))
+  (apply #'org-defuddle-module-parse-org-with-options
+         html
+         (or url "")
+         (org-defuddle--module-option-arguments options)))
 
 (defun org-defuddle-html-to-markdown (html &optional url options)
   "Parse HTML and return a Markdown string.

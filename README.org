@@ -3,8 +3,8 @@
 ~org-defuddle~ is intended to be a Rust rewrite of [[https://github.com/kepano/defuddle][kepano/defuddle]] with an
 Emacs dynamic module frontend that inserts extracted readable content into Org.
 
-The current reference snapshot inspected during scaffolding is upstream commit
-~19520ad~. The long-term goal is feature parity with defuddle's extraction
+The current reference snapshot is upstream commit ~6152604~. The long-term goal
+is feature parity with defuddle's extraction
 pipeline: metadata, schema.org fallback, DOM cleanup, scoring, site-specific
 extractors, media handling, footnotes, math/code normalization, and Org content
 conversion.
@@ -356,10 +356,10 @@ For local HTML:
 
 This repository targets Defuddle extraction parity with Org as the canonical
 output. It does not target byte-for-byte Markdown output or the JavaScript
-public API. The fixture harness covers all 202 upstream fixture HTML files in
+public API. The fixture harness covers all 203 upstream fixture HTML files in
 the inspected defuddle snapshot. Every fixture strictly matches the upstream
 expected ~title~, ~author~, ~site~, and ~published~ metadata, alongside
-fixture-specific content and cleanup assertions. All 202 final upstream content
+fixture-specific content and cleanup assertions. All 203 final upstream content
 fragments also match the Rust output exactly after both are rendered through
 the same Org renderer. Every generated Org document is compared byte-for-byte
 with its checked-in snapshot under
@@ -387,7 +387,7 @@ ORG_DEFUDDLE_DEFUDDLE_DIR=/path/to/defuddle cargo test -p org-defuddle-core \
 #+end_src
 
 This differential test is intentionally ignored in the default suite because
-it requires a separately installed and built upstream Node checkout. The 202
+it requires a separately installed and built upstream Node checkout. The 203
 checked-in Org snapshots remain the normal offline regression gate.
 
 Set ~ORG_DEFUDDLE_DIFF_FIXTURE=<fixture-name>~ on the same command to print the
@@ -395,7 +395,7 @@ exact expected and actual Org for one mismatch.
 
 Known remaining gaps:
 
-- The 202-fixture completion gate proves canonical Org content, not identical
+- The 203-fixture completion gate proves canonical Org content, not identical
   intermediate HTML. Several site extractors still retain a wider DOM container
   than upstream's canonical ~contentHtml~, so serialized ~html~ and
   ~wordCount~ are not yet an exact parity contract.
@@ -455,7 +455,11 @@ Implemented:
   shells that wrap real post content, email-style metadata header blocks, and
   short signature footers, plus orphan heading cleanup that preserves selected
   heading-only wrappers before real content, content-marked article heading
-  wrappers, and parent headings that introduce lower-level sections.
+  wrappers, and parent headings that introduce lower-level sections. Final
+  generic and site-extractor HTML is sanitized even when standardization is
+  disabled: executable elements, event handlers, ~srcdoc~, ~javascript:~,
+  ~blob:~, and non-image ~data:~ URLs are removed. Inline ~data:image/~ images
+  remain supported, while iframe data URLs are rejected.
 - Content-pattern cleanup for common defuddle cases: same-page
   table-of-contents lists, leading breadcrumb blocks, section breadcrumb/back-navigation links, pre-content
   standalone date, read-time, date+read-time, relative-time article metadata
@@ -477,6 +481,7 @@ Implemented:
   blocks/lists,
   boilerplate/comment-policy tails, and investment/legal disclaimer footers,
   including related article-card grids without explicit grid class names.
+  Mid-article multi-image rows followed by substantive prose remain intact.
 - Configurable content-pattern cleanup through a ~removeContentPatterns~-style
   option exposed as ~:remove-content-patterns~ in Elisp, including the
   pre-selector eyebrow-label pass. Debug/profile records from this pass use the
@@ -620,14 +625,16 @@ Implemented:
 - Linked-image rendering and selected lightbox/gallery cleanup: linked
   thumbnails are preserved as Org links, Mastodon multi-image media galleries
   render all linked original images, and same-container full-size duplicate
-  images are removed.
+  images are removed. Repeated leading hero figures separated only by a heading
+  are collapsed when their image and caption are identical.
 - Selected media/embed handling: YouTube and YouTube-nocookie embeds are
   normalized to watch-page Org links, ~lite-youtube~ custom elements are
   converted through the same embed path, Twitter/X embeds are normalized to X
   status links, lazy iframe ~data-src~ style sources are promoted before
   rendering, playable ~video~ elements are given controls, direct
   ~video~/~audio~ sources are preserved as Org links, and generic iframes with
-  a ~src~ are preserved as Org HTML export blocks. Obsolete plugin embeds
+  a ~src~ are preserved as Org HTML export blocks. Restrictive iframe
+  ~sandbox~ attributes are retained. Obsolete plugin embeds
   such as ~object~, ~embed~, and ~applet~ are removed during media cleanup.
   Selected noisy media iframes and players, including known paywall, comment,
   TTS/audio-player, and empty iframe shells, are removed by selector cleanup.
@@ -704,7 +711,8 @@ Implemented:
   title fallback metadata.
 - Selected X/Twitter article and conversation extraction, including long-form
   article metadata, status-URL author fallbacks, large media URLs, interaction
-  count/chrome removal, localized conversation replies, and async API fallback
+  count/chrome removal, current and legacy conversation boundaries, reordered
+  handle/name blocks, single-post fallback, localized conversation replies, and async API fallback
   parsing for FxTwitter tweet/article JSON and X/Twitter oEmbed JSON, including
   full-text facets, media, article blocks, code, and emoji-safe URL facet
   offsets.
@@ -826,7 +834,7 @@ Implemented:
   buttons before removing UI controls. Debug/profile records from this pass use
   the upstream ~removeBySelector~ step name.
 - Upstream defuddle fixture smoke tests that validate strict expected metadata
-  for all 202 fixtures and selected Org content across JavaScript links, code
+  for all 203 fixtures and selected Org content across JavaScript links, code
   blocks, syntax highlighter
   cleanup including selected table-based codeblock layouts, hidden nodes with
   substantial aria-hidden content preservation, content-bearing hidden dialog
@@ -880,7 +888,7 @@ Implemented:
   equations, Wikipedia MathML, full MathJax MathML samples, KaTeX Centraliser
   output, and selected MathJax CHTML output without assistive MathML, using
   ~ORG_DEFUDDLE_DEFUDDLE_DIR~ or the local ~/private/tmp/defuddle-elisp-source~
-  checkout. Checked-in exact Org snapshots cover all 202 fixtures and the test
+  checkout. Checked-in exact Org snapshots cover all 203 fixtures and the test
   requires the snapshot filename set to match the upstream fixture set.
 - Project-level agent instructions in ~AGENTS.md~ adapted from
   ~/repos/coding-guidelines~.
