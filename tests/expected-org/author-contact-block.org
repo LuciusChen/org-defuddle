@@ -1,8 +1,10 @@
 * New Method Bridges Gap Between Quantum Systems
 :PROPERTIES:
+:URL: https://author-contact-block/
 :AUTHOR: Jane Smith
 :PUBLISHED: 2025-03-19T00:00:00+00:00
 :SITE: University News
+:DOMAIN: author-contact-block
 :WORD_COUNT: 236
 :END:
 

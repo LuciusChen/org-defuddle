@@ -1,5 +1,8 @@
 * MathJax math/tex Script Elements
 :PROPERTIES:
+:URL: https://mathjax-tex-scripts/
+:SITE: mathjax-tex-scripts
+:DOMAIN: mathjax-tex-scripts
 :LANGUAGE: en
 :WORD_COUNT: 109
 :END:

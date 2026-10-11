@@ -1,0 +1,19 @@
+* Unrelated image metadata
+:PROPERTIES:
+:URL: https://example.com/article
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 39
+:END:
+
+Working image sources should take precedence over unrelated or undocumented attributes. Responsive images should also retain their own source sets.
+
+[[https://example.com/first.jpg][First]]
+
+[[https://example.com/second.jpg][Second]]
+
+[[https://example.com/third.jpg][Third]]
+
+[[https://example.com/large.jpg][Responsive]]
+
+The accompanying text explains why metadata must not replace a working source merely because it contains another image URL.

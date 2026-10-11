@@ -1,5 +1,8 @@
 * Non-breaking space test
 :PROPERTIES:
+:URL: https://nbsp-handling/
+:SITE: nbsp-handling
+:DOMAIN: nbsp-handling
 :LANGUAGE: en
 :WORD_COUNT: 29
 :END:

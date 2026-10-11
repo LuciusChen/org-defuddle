@@ -1,5 +1,8 @@
 * Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt
 :PROPERTIES:
+:URL: https://nodes/
+:SITE: nodes
+:DOMAIN: nodes
 :LANGUAGE: en
 :WORD_COUNT: 150
 :END:

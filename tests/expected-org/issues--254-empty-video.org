@@ -1,5 +1,8 @@
 * Empty Video Placeholder
 :PROPERTIES:
+:URL: https://254-empty-video/
+:SITE: 254-empty-video
+:DOMAIN: 254-empty-video
 :WORD_COUNT: 77
 :END:
 

@@ -1,10 +1,10 @@
 * Buy wisely
 :PROPERTIES:
-:URL: https://stephango.com/buy-wisely
+:URL: https://stephango.com-buy-wisely/
 :AUTHOR: Steph Ango
 :PUBLISHED: 2023-09-30T00:00:00+00:00
 :SITE: Steph Ango
-:DOMAIN: stephango.com
+:DOMAIN: stephango.com-buy-wisely
 :DESCRIPTION: Whenever I buy things I try to prioritize cost per use. Sometimes I consider other priorities such as cost per smile, cost per thrill, cost per externality, ...
 :IMAGE: https://stephango.com/assets/covers/buy-wisely.png
 :LANGUAGE: en
@@ -40,8 +40,8 @@ My aim is to have fewer but better things. These are some of the questions I ask
 
 - Will it be as useful to me in the future as it is now?
 - Is it made of durable and maintainable materials?
-- Does it have a timeless [[https://stephango.com/style][style]] and aesthetic?
-- Does it age well, wear well, build a [[https://stephango.com/scars][wabi-sabi]] patina?
+- Does it have a timeless [[https://stephango.com-buy-wisely/style][style]] and aesthetic?
+- Does it age well, wear well, build a [[https://stephango.com-buy-wisely/scars][wabi-sabi]] patina?
 - Does it retain its resale value? Would someone else want to own it?
 - Can it be disassembled and repaired?
 - Does it have replaceable, non-proprietary parts that are easy to acquire?
@@ -98,7 +98,7 @@ You can choose to incorporate externalities into the cost that you are paying in
 
 *** Cost per lesson
 
-Knowledge has a cost. Sometimes that cost is monetary, sometimes that cost is time, sometimes that cost is [[https://stephango.com/pain][pain]]. Sometimes it’s all three.
+Knowledge has a cost. Sometimes that cost is monetary, sometimes that cost is time, sometimes that cost is [[https://stephango.com-buy-wisely/pain][pain]]. Sometimes it’s all three.
 
 You might learn more about investing by purchasing a handful of shares in public companies than going to graduate school. You might learn more about making movies by trying to film one on your phone than going to film school.
 

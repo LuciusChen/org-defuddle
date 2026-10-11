@@ -1,5 +1,8 @@
 * Sample Technical Post
 :PROPERTIES:
+:URL: https://code-blocks--hexo-br/
+:SITE: code-blocks--hexo-br
+:DOMAIN: code-blocks--hexo-br
 :LANGUAGE: en
 :WORD_COUNT: 49
 :END:

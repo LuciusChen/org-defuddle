@@ -1,5 +1,8 @@
 * The History of Ancient Logistics
 :PROPERTIES:
+:URL: https://easy-footnotes-wrapper/
+:SITE: easy-footnotes-wrapper
+:DOMAIN: easy-footnotes-wrapper
 :LANGUAGE: en
 :WORD_COUNT: 166
 :END:

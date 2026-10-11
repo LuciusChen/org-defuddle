@@ -1,6 +1,7 @@
 * Understanding cellular biology
 :PROPERTIES:
 :URL: https://example.com/articles/guide.htm
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 1422
 :END:

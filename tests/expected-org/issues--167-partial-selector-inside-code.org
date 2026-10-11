@@ -1,6 +1,7 @@
 * Type Theory Reference
 :PROPERTIES:
 :URL: https://example.org/docs/type-theory
+:SITE: example.org
 :DOMAIN: example.org
 :LANGUAGE: en
 :WORD_COUNT: 93

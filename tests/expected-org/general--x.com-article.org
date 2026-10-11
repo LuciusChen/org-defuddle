@@ -1,7 +1,9 @@
 * Lorem Ipsum Dolor Sit Amet
 :PROPERTIES:
+:URL: https://x.com-article/
 :AUTHOR: Jane Doe (@janedoe)
 :SITE: X (Twitter)
+:DOMAIN: x.com-article
 :IMAGE: https://example.com/media/placeholder.jpg?format=jpg&name=large
 :LANGUAGE: en
 :WORD_COUNT: 57

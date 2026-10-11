@@ -6,6 +6,9 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Command;
 
+const UPSTREAM_FIXTURE_COUNT: usize = 226;
+const UPSTREAM_REVISION: &str = include_str!("../../../tests/upstream-revision");
+
 #[derive(Debug)]
 struct FixtureCase {
     fixture: &'static str,
@@ -37,6 +40,25 @@ fn upstream_dir() -> Option<PathBuf> {
 
     let local_tmp = PathBuf::from("/private/tmp/defuddle-elisp-source");
     local_tmp.is_dir().then_some(local_tmp)
+}
+
+#[test]
+fn upstream_checkout_matches_pinned_revision() {
+    let Some(dir) = upstream_dir() else {
+        return;
+    };
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&dir)
+        .output()
+        .expect("read upstream revision");
+    assert!(head.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        UPSTREAM_REVISION.trim(),
+        "check out tests/upstream-revision before running fixture tests"
+    );
+    assert_eq!(upstream_fixture_names(&dir).len(), UPSTREAM_FIXTURE_COUNT);
 }
 
 #[test]
@@ -81,7 +103,7 @@ fn selected_upstream_fixtures_smoke() {
                 "class Model(nn.Module):",
                 "super().__init__()",
             ],
-            not_contains: &["1import", "10class", "lineno"],
+            not_contains: &["1import", "10class", "\nlineno"],
         },
         FixtureCase {
             fixture: "codeblocks--rehype-pretty-copy",
@@ -695,7 +717,7 @@ fn selected_upstream_fixtures_smoke() {
             fixture: "general--x.com-article-2026-02-13",
             contains: &[
                 "* obsidian + claude code 101",
-                ":AUTHOR: Heinrich",
+                ":AUTHOR: @arscontexta",
                 ":SITE: X (Twitter)",
                 ":PUBLISHED: 2026-01-19T00:28:01.000Z",
                 "[[https://pbs.twimg.com/media/G-_GGKzXkAAHz_w?format=jpg&name=large][Image]]",
@@ -803,7 +825,7 @@ fn selected_upstream_fixtures_smoke() {
                 ":PUBLISHED: 2022-09-02T12:45:33.723Z",
                 "/Thanks to Chris Scammell",
                 "/This work was carried out while at/",
-                "mal6l24rfuoinreeemia.png",
+                "ytdyqqynryhcq1ysqbtk.png",
                 "Moebius illustration of a simulacrum living in an AI-generated story",
                 "** Summary",
                 "*TL;DR*: Self-supervised learning may create AGI or its foundation.",
@@ -949,6 +971,14 @@ fn selected_upstream_fixtures_smoke() {
                 "Read More",
                 "About the Company",
             ],
+        },
+        FixtureCase {
+            fixture: "issues--374-lazy-srcset-placeholder",
+            contains: &[
+                "[[https://images.example.com/photo-1200.jpg][Photo]]",
+                "[[https://images.example.com/other-1200.jpg][Other]]",
+            ],
+            not_contains: &["data:image"],
         },
         FixtureCase {
             fixture: "elements--lazy-image",
@@ -1103,7 +1133,7 @@ fn selected_upstream_fixtures_smoke() {
                 "\"...the mere consciousness of an engagement will sometimes worry a whole day.\"",
                 "July 2009",
                 "One reason programmers dislike meetings so much is that they're on a different type of schedule",
-                "[[http://ycombinator.com][Y Combinator]] runs on the maker's schedule",
+                "[[http://ycombinator.com/][Y Combinator]] runs on the maker's schedule",
                 "*Thanks* to Sam Altman",
                 "*Related:*",
             ],
@@ -1425,7 +1455,7 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "general--wikipedia",
             contains: &[
-                "*Obsidian* is a [[https://en.wikipedia.org/wiki/Personal_knowledge_management][personal knowledge management]]",
+                "*Obsidian* is a [[https://wikipedia/wiki/Personal_knowledge_management][personal knowledge management]]",
                 "Obsidian is developed by Dynalist Inc.",
                 "** History",
                 "[fn:2]",
@@ -1830,7 +1860,7 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "general--obsidian.md-blog-verify-obsidian-sync-encryption",
             contains: &[
-                "On our [[https://obsidian.md][About page]]",
+                "On our [[https://obsidian.md/][About page]]",
                 "#+begin_quote\nWe believe that your thoughts and ideas belong to you",
                 "*** How Obsidian Sync works",
                 "#+begin_src js\nlet data = await",
@@ -1842,8 +1872,8 @@ fn selected_upstream_fixtures_smoke() {
             fixture: "general--obsidian-publish-cjk",
             contains: &[
                 "如果你熟悉 TypeScript 或 CSS",
-                "[[https://publish.obsidian.md/help-zh/扩展+Obsidian/第三方插件][第三方插件]]",
-                "[[https://docs.obsidian.md][Obsidian 开发者文档]]",
+                "[[https://publish.obsidian.md/help-zh/%E6%89%A9%E5%B1%95+Obsidian/%E7%AC%AC%E4%B8%89%E6%96%B9%E6%8F%92%E4%BB%B6][第三方插件]]",
+                "[[https://docs.obsidian.md/][Obsidian 开发者文档]]",
                 "[[https://github.com/obsidianmd/obsidian-developer-docs][Obsidian 开发者文档仓库]]",
             ],
             not_contains: &[
@@ -2329,7 +2359,7 @@ fn selected_upstream_fixtures_smoke() {
             contains: &[
                 "We're lucky to have so many good RSS readers that cut through this nonsense. [fn:1]",
                 "More article text here to ensure content is detected.",
-                "[fn:1] [[https://netnewswire.com][NetNewsWire]]",
+                "[fn:1] [[https://netnewswire.com/][NetNewsWire]]",
                 "[[https://reederapp.com/classic/][Reeder]]",
             ],
             not_contains: &["data-footnote-backref", "Back to reference", "↩"],
@@ -2648,6 +2678,7 @@ fn selected_upstream_fixtures_smoke() {
         },
     ];
     let mut metadata_mismatches = Vec::new();
+    let mut content_mismatches = Vec::new();
 
     for case in cases {
         let expected_path = defuddle_dir
@@ -2675,22 +2706,29 @@ fn selected_upstream_fixtures_smoke() {
             }
         }
         for expected_text in case.contains {
-            assert!(
-                output.org.contains(expected_text),
-                "fixture {} missing expected text {:?}\n{}",
-                case.fixture,
-                expected_text,
-                output.org
-            );
+            if !output.org.contains(expected_text) {
+                content_mismatches.push(format!("{} missing {:?}", case.fixture, expected_text));
+            }
         }
+        // Fixture-derived URLs can contain the DOM tokens being checked for cleanup.
+        // Check the title and body; explicit property assertions still see the drawer.
+        let content_org = output
+            .org
+            .split_once("\n:PROPERTIES:\n")
+            .and_then(|(title, rest)| {
+                rest.split_once("\n:END:\n")
+                    .map(|(_, body)| format!("{title}\n{body}"))
+            })
+            .unwrap_or_else(|| output.org.clone());
         for unexpected_text in case.not_contains {
-            assert!(
-                !output.org.contains(unexpected_text),
-                "fixture {} included unexpected text {:?}\n{}",
-                case.fixture,
-                unexpected_text,
-                output.org
-            );
+            let text = if unexpected_text.starts_with(':') {
+                &output.org
+            } else {
+                &content_org
+            };
+            if text.contains(unexpected_text) {
+                content_mismatches.push(format!("{} included {:?}", case.fixture, unexpected_text));
+            }
         }
         assert!(
             output.word_count > 5,
@@ -2699,6 +2737,11 @@ fn selected_upstream_fixtures_smoke() {
         );
     }
 
+    assert!(
+        content_mismatches.is_empty(),
+        "fixture content mismatches:\n{}",
+        content_mismatches.join("\n")
+    );
     assert!(
         metadata_mismatches.is_empty(),
         "fixture metadata mismatches:\n{}",
@@ -2799,7 +2842,11 @@ fn all_upstream_fixture_content_matches_exact_org_rendering() {
     let selected_fixture = std::env::var("ORG_DEFUDDLE_DIFF_FIXTURE").ok();
     assert_eq!(
         references.len(),
-        if selected_fixture.is_some() { 1 } else { 203 },
+        if selected_fixture.is_some() {
+            1
+        } else {
+            UPSTREAM_FIXTURE_COUNT
+        },
         "unexpected upstream fixture count"
     );
 
@@ -3012,7 +3059,11 @@ fn all_upstream_fixture_word_counts_match_reference() {
     let selected_fixture = std::env::var("ORG_DEFUDDLE_DIFF_FIXTURE").ok();
     assert_eq!(
         references.len(),
-        if selected_fixture.is_some() { 1 } else { 203 },
+        if selected_fixture.is_some() {
+            1
+        } else {
+            UPSTREAM_FIXTURE_COUNT
+        },
         "unexpected upstream fixture count"
     );
 
@@ -3312,7 +3363,12 @@ fn parse_upstream_fixture(
         .join(format!("{fixture}.html"));
     let html = std::fs::read_to_string(&html_path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", html_path.display()));
-    let url = fixture_url_override(fixture).or_else(|| fixture_url(&html));
+    let url = fixture_url(&html).or_else(|| {
+        Some(format!(
+            "https://{}",
+            Regex::new(r"^[a-z]+--").unwrap().replace(fixture, "")
+        ))
+    });
     parse_html_to_org(
         &html,
         DefuddleOptions {
@@ -3362,23 +3418,132 @@ fn fixture_url(html: &str) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
-fn fixture_url_override(fixture: &str) -> Option<String> {
-    match fixture {
-        "content-patterns--content-list-with-internal-links" => {
-            Some("https://content-patterns--content-list-with-internal-links/".to_string())
-        }
-        "thin-section-before-see-also" => {
-            Some("https://thin-section-before-see-also/wiki/Example_Concept".to_string())
-        }
-        "issues--131-category-links" => Some("https://131-category-links/".to_string()),
-        "issues--sidebar-toggle-checkbox" => Some("https://sidebar-toggle-checkbox/".to_string()),
-        "general--tailwind-hidden-blog-index" => {
-            Some("https://tailwind-hidden-blog-index/blog".to_string())
-        }
-        "issues--120-dhammatalks-footnotes" => {
-            Some("https://120-dhammatalks-footnotes/".to_string())
-        }
-        "math--katex-centraliser" => Some("https://katex-centraliser/".to_string()),
-        _ => None,
-    }
+#[test]
+fn youtube_uses_default_audio_and_rejects_stale_inline_player_data() {
+    use org_defuddle_core::{youtube_caption_info, youtube_inline_caption_info};
+    let tracks = serde_json::json!([
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=en", "languageCode":"en", "kind":"asr"},
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=ja", "languageCode":"ja", "kind":"asr"},
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=ja-manual", "languageCode":"ja"}
+    ]);
+    let mut player = serde_json::json!({"videoDetails":{"videoId":"correct"},"captions":{"playerCaptionsTracklistRenderer":{
+        "captionTracks": tracks,
+        "defaultAudioTrackIndex":1,
+        "audioTracks":[{"audioTrackId":"en.1","captionTrackIndices":[0]}, {"audioTrackId":"ja.4","captionTrackIndices":[1,2]}]
+    }}});
+    let info = youtube_caption_info(&player.to_string(), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(info.language, "ja");
+    assert!(info.caption_url.ends_with("ja-manual"));
+    assert_eq!(
+        youtube_caption_info(&player.to_string(), Some("en"))
+            .unwrap()
+            .unwrap()
+            .language,
+        "en"
+    );
+    player["captions"]["playerCaptionsTracklistRenderer"]["audioTracks"][1]
+        ["defaultCaptionTrackIndex"] = serde_json::json!(1);
+    assert!(youtube_caption_info(&player.to_string(), None)
+        .unwrap()
+        .unwrap()
+        .caption_url
+        .ends_with("lang=ja"));
+    let html = format!("<script>var ytInitialPlayerResponse = {};</script>", player);
+    assert!(youtube_inline_caption_info(
+        &html,
+        Some("https://www.youtube.com/watch?v=other"),
+        None
+    )
+    .unwrap()
+    .is_none());
+    assert!(youtube_inline_caption_info(
+        &html,
+        Some("https://www.youtube.com/watch?v=correct"),
+        None
+    )
+    .unwrap()
+    .is_some());
+}
+
+#[test]
+fn youtube_prefers_original_language_and_regional_english() {
+    use org_defuddle_core::youtube_caption_info;
+    let player = serde_json::json!({"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=af", "languageCode":"af"},
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=fr", "languageCode":"fr", "kind":"asr"},
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=fr-manual", "languageCode":"fr"}
+    ]}}});
+    assert!(youtube_caption_info(&player.to_string(), None)
+        .unwrap()
+        .unwrap()
+        .caption_url
+        .ends_with("fr-manual"));
+    let player = serde_json::json!({"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=af", "languageCode":"af"},
+        {"baseUrl":"https://www.youtube.com/api/timedtext?lang=en-US", "languageCode":"en-US"}
+    ], "defaultCaptionTrackIndex":999}}});
+    assert_eq!(
+        youtube_caption_info(&player.to_string(), None)
+            .unwrap()
+            .unwrap()
+            .language,
+        "en-us"
+    );
+}
+
+#[test]
+fn youtube_matches_manual_language_families_and_preserves_caption_indices() {
+    use org_defuddle_core::youtube_caption_info;
+    let mut player = serde_json::json!({"captions":{"playerCaptionsTracklistRenderer":{
+        "captionTracks":[
+            {"baseUrl":"https://unrelated.example/captions", "languageCode":"af"},
+            {"baseUrl":"https://www.youtube.com/api/timedtext?lang=en", "languageCode":"en", "kind":"asr"},
+            {"baseUrl":"https://www.youtube.com/api/timedtext?lang=en-GB", "languageCode":"en-GB"}
+        ],
+        "audioTracks":[{"audioTrackId":"en.4", "captionTrackIndices":[0,1]}]
+    }}});
+    let selected = |player: &serde_json::Value| {
+        youtube_caption_info(&player.to_string(), None)
+            .unwrap()
+            .unwrap()
+    };
+    assert!(selected(&player).caption_url.ends_with("en-GB"));
+    player["captions"]["playerCaptionsTracklistRenderer"]["audioTracks"][0]
+        ["defaultCaptionTrackIndex"] = serde_json::json!(1);
+    assert!(selected(&player).caption_url.ends_with("lang=en"));
+    player["captions"]["playerCaptionsTracklistRenderer"]["audioTracks"][0]
+        ["defaultCaptionTrackIndex"] = serde_json::json!(0);
+    assert!(selected(&player).caption_url.ends_with("en-GB"));
+    player["captions"]["playerCaptionsTracklistRenderer"]["audioTracks"][0]["audioTrackId"] =
+        serde_json::json!("unknown.4");
+    assert!(selected(&player).caption_url.ends_with("en-GB"));
+}
+
+#[test]
+fn ordinary_fragment_links_do_not_turn_list_items_into_footnotes() {
+    let output = parse_html_to_org(
+        r##"<article><h1>Internal navigation</h1>
+        <p>The article contains a normal link to <a href="#chapter-one">the first chapter</a>.</p>
+        <ol><li id="chapter-one">Chapter one describes the main argument and remains part of the article.</li>
+        <li>Chapter two continues the discussion with further examples.</li></ol></article>"##,
+        DefuddleOptions { content_selector: Some("article".to_string()), remove_content_patterns: false, remove_low_scoring: false, ..DefuddleOptions::default() },
+    ).unwrap();
+    assert!(output.org.contains("[[#chapter-one][the first chapter]]"));
+    assert!(output
+        .org
+        .contains("Chapter one describes the main argument"));
+    assert!(!output.org.contains("[fn:"));
+}
+
+#[test]
+fn org_images_use_responsive_sources_instead_of_inline_placeholders() {
+    let org = render_html_fragment_to_org(
+        r#"<p><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" srcset="https://images.example.com/photo-600.jpg 600w, https://images.example.com/photo-1200.jpg 1200w" alt="Photo"></p>"#,
+    );
+    assert_eq!(
+        org.trim(),
+        "[[https://images.example.com/photo-1200.jpg][Photo]]"
+    );
 }

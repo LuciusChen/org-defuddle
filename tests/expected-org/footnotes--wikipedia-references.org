@@ -1,6 +1,8 @@
 * Placeholder topic
 :PROPERTIES:
+:URL: https://wikipedia-references/
 :SITE: Wikipedia
+:DOMAIN: wikipedia-references
 :WORD_COUNT: 125
 :END:
 

@@ -1,5 +1,8 @@
 * JavaScript Links Test
 :PROPERTIES:
+:URL: https://javascript-links/
+:SITE: javascript-links
+:DOMAIN: javascript-links
 :WORD_COUNT: 57
 :END:
 
@@ -9,6 +12,6 @@ Here is a link with onclick and a link with alert that should both be unwrapped.
 
 A *bold js link* should keep its inner HTML.
 
-Normal links like [[https://example.com][Example]] and [[https://example.com/page][another page]] should stay as links.
+Normal links like [[https://example.com/][Example]] and [[https://example.com/page][another page]] should stay as links.
 
-Mixed: [[https://example.com][real link]], then js link, then [[https://example.com/other][another real link]].
+Mixed: [[https://example.com/][real link]], then js link, then [[https://example.com/other][another real link]].

@@ -1,7 +1,9 @@
 * Weekly Project Review
 :PROPERTIES:
+:URL: https://rehype-pretty-copy/
 :AUTHOR: Jane Smith
 :SITE: Jane Smith
+:DOMAIN: rehype-pretty-copy
 :DESCRIPTION: Test for rehype-pretty-copy injected button and style elements inside code blocks
 :WORD_COUNT: 127
 :END:

@@ -1,7 +1,9 @@
 * Launch Anomaly Disrupts Otherwise Successful Mission
 :PROPERTIES:
+:URL: https://wrapper-with-icon/
 :PUBLISHED: 2026-04-19T18:19:19-04:00
 :SITE: Example Space News
+:DOMAIN: wrapper-with-icon
 :LANGUAGE: en
 :WORD_COUNT: 256
 :END:

@@ -1,5 +1,8 @@
 * Sample C++ Post
 :PROPERTIES:
+:URL: https://rouge-linenums/
+:SITE: rouge-linenums
+:DOMAIN: rouge-linenums
 :LANGUAGE: en
 :WORD_COUNT: 51
 :END:

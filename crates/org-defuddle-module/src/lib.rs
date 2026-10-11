@@ -2,9 +2,9 @@ use emacs::{defun, Env, Result, Value};
 use org_defuddle_core::{
     bilibili_subtitle_info, bilibili_video_info, output_json_string, output_json_string_for_html,
     output_property, parse_bilibili_api_to_org, parse_c2_wiki_json_to_org,
-    parse_fxtwitter_json_to_org, parse_html_to_org, parse_x_oembed_json_to_org,
-    parse_youtube_api_to_org, youtube_caption_info, youtube_inline_caption_info, DefuddleOptions,
-    DefuddleOutput, IncludeReplies,
+    parse_fxtwitter_json_to_org, parse_html_to_org, parse_reddit_atom_to_org,
+    parse_x_oembed_json_to_org, parse_youtube_api_to_org, youtube_caption_info,
+    youtube_inline_caption_info, DefuddleOptions, DefuddleOutput, IncludeReplies,
 };
 
 emacs::plugin_is_GPL_compatible!();
@@ -12,6 +12,23 @@ emacs::plugin_is_GPL_compatible!();
 #[emacs::module(name = "org-defuddle-module")]
 fn init(_: &Env) -> Result<()> {
     Ok(())
+}
+
+#[defun(name = "parse-reddit-atom-org")]
+fn parse_reddit_atom_org(
+    xml: String,
+    url: String,
+    include_images: Value<'_>,
+    include_replies: String,
+) -> Result<String> {
+    parse_reddit_atom_to_org(
+        &xml,
+        &url,
+        include_images.is_not_nil(),
+        parse_include_replies(&include_replies)?,
+    )
+    .map(|output| output.org)
+    .map_err(|err| emacs::Error::msg(err.to_string()))
 }
 
 #[defun(name = "parse-json")]

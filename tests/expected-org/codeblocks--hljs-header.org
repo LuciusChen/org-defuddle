@@ -1,6 +1,7 @@
 * Code Tutorial
 :PROPERTIES:
 :URL: https://example.com/code-tutorial
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 42
 :END:

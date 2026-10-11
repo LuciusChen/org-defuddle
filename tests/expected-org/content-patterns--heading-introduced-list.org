@@ -1,5 +1,8 @@
 * Sample Plugin
 :PROPERTIES:
+:URL: https://content-patterns--heading-introduced-list/
+:SITE: content-patterns--heading-introduced-list
+:DOMAIN: content-patterns--heading-introduced-list
 :LANGUAGE: en
 :WORD_COUNT: 84
 :END:

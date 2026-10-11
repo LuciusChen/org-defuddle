@@ -1,6 +1,7 @@
 * Dependent Type Theory
 :PROPERTIES:
 :URL: https://lean-lang.org/theorem_proving_in_lean4/Dependent-Type-Theory/
+:SITE: lean-lang.org
 :DOMAIN: lean-lang.org
 :LANGUAGE: en
 :WORD_COUNT: 49

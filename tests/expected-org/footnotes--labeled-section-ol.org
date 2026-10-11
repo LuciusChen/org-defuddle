@@ -1,0 +1,20 @@
+* Policy Note
+:PROPERTIES:
+:URL: https://labeled-section-ol/
+:SITE: labeled-section-ol
+:DOMAIN: labeled-section-ol
+:WORD_COUNT: 85
+:END:
+
+We laid out our position in an earlier essay [fn:1], and have held it consistently.
+
+1. The first concern is that capable systems are hard to monitor once released [fn:2].
+1. The second concern is that testing should apply to every sufficiently capable system [fn:3].
+
+These positions are complementary rather than competing.
+
+[fn:1] See Sections 2 and 3 of that essay for the full discussion.
+
+[fn:2] See [[https://example.com/report][this report]] for supporting analysis.
+
+[fn:3] Testing regimes are described in /Appendix B/ of the same document.

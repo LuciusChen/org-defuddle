@@ -1,5 +1,8 @@
 * Loose footnotes: continuation paragraphs
 :PROPERTIES:
+:URL: https://hr-continuation/
+:SITE: hr-continuation
+:DOMAIN: hr-continuation
 :WORD_COUNT: 62
 :END:
 

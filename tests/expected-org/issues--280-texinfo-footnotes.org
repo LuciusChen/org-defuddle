@@ -1,6 +1,7 @@
 * Introduction (Widget)
 :PROPERTIES:
 :URL: https://www.example.org/software/widget/manual/html_node/Introduction.html
+:SITE: example.org
 :DOMAIN: example.org
 :DESCRIPTION: Introduction (Widget)
 :WORD_COUNT: 308

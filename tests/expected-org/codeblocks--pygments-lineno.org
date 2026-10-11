@@ -1,5 +1,8 @@
 * Sample Python Tutorial
 :PROPERTIES:
+:URL: https://pygments-lineno/
+:SITE: pygments-lineno
+:DOMAIN: pygments-lineno
 :LANGUAGE: en
 :WORD_COUNT: 21
 :END:

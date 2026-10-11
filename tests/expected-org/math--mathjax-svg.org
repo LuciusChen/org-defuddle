@@ -1,5 +1,8 @@
 * MathJax v3 SVG Output
 :PROPERTIES:
+:URL: https://mathjax-svg/
+:SITE: mathjax-svg
+:DOMAIN: mathjax-svg
 :WORD_COUNT: 56
 :END:
 

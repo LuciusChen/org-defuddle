@@ -1,5 +1,8 @@
 * Article with Aside Footnotes
 :PROPERTIES:
+:URL: https://aside-ol-start/
+:SITE: aside-ol-start
+:DOMAIN: aside-ol-start
 :LANGUAGE: en
 :WORD_COUNT: 95
 :END:

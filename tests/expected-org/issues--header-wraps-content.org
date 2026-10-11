@@ -1,7 +1,9 @@
 * We Rewrote Example Tool with AI
 :PROPERTIES:
+:URL: https://header-wraps-content/
 :AUTHOR: Jane Smith
 :SITE: Example Blog
+:DOMAIN: header-wraps-content
 :LANGUAGE: en
 :WORD_COUNT: 251
 :END:

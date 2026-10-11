@@ -1,5 +1,8 @@
 * Page with Hero Section
 :PROPERTIES:
+:URL: https://132-hero-class/
+:SITE: 132-hero-class
+:DOMAIN: 132-hero-class
 :WORD_COUNT: 22
 :END:
 

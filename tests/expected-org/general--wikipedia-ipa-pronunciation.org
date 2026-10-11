@@ -1,6 +1,8 @@
 * Example (pronunciation)
 :PROPERTIES:
+:URL: https://wikipedia-ipa-pronunciation/
 :SITE: Wikipedia
+:DOMAIN: wikipedia-ipa-pronunciation
 :LANGUAGE: en
 :WORD_COUNT: 218
 :END:

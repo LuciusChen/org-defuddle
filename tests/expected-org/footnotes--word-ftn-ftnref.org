@@ -1,5 +1,8 @@
 * Word HTML footnotes: _ftn/_ftnref pattern
 :PROPERTIES:
+:URL: https://word-ftn-ftnref/
+:SITE: word-ftn-ftnref
+:DOMAIN: word-ftn-ftnref
 :WORD_COUNT: 34
 :END:
 

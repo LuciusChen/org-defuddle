@@ -1,5 +1,8 @@
 * Sample Java Post
 :PROPERTIES:
+:URL: https://react-syntax-highlighter-linenums/
+:SITE: react-syntax-highlighter-linenums
+:DOMAIN: react-syntax-highlighter-linenums
 :LANGUAGE: en
 :WORD_COUNT: 60
 :END:

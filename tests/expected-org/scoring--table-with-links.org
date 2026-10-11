@@ -1,5 +1,8 @@
 * Model Comparison Table
 :PROPERTIES:
+:URL: https://table-with-links/
+:SITE: table-with-links
+:DOMAIN: table-with-links
 :WORD_COUNT: 84
 :END:
 

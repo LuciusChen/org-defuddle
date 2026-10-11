@@ -1,9 +1,9 @@
 * KaTeX and MathJax Comparison Demo, currently processed as KaTeX
 :PROPERTIES:
-:URL: https://www.intmath.com/cg5/katex-mathjax-comparison.php
+:URL: https://katex/
 :AUTHOR: Murray Bourne
 :SITE: Murray Bourne
-:DOMAIN: intmath.com
+:DOMAIN: katex
 :LANGUAGE: en
 :WORD_COUNT: 319
 :END:

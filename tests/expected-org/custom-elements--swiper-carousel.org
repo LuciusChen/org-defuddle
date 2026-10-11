@@ -1,6 +1,8 @@
 * Article Title
 :PROPERTIES:
+:URL: https://custom-elements--swiper-carousel/
 :SITE: Example
+:DOMAIN: custom-elements--swiper-carousel
 :WORD_COUNT: 11
 :END:
 

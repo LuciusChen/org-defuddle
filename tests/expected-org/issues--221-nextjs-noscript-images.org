@@ -1,6 +1,7 @@
 * Example Post
 :PROPERTIES:
 :URL: https://www.example.com/blog/example-post
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 19
 :END:

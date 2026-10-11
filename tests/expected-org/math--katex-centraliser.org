@@ -1,6 +1,7 @@
 * Centraliser
 :PROPERTIES:
 :URL: https://katex-centraliser/
+:SITE: katex-centraliser
 :DOMAIN: katex-centraliser
 :LANGUAGE: en
 :WORD_COUNT: 585

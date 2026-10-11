@@ -1,12 +1,14 @@
 * 开发者 - Obsidian 中文帮助
 :PROPERTIES:
+:URL: https://obsidian-publish-cjk/
 :SITE: Obsidian 中文帮助
+:DOMAIN: obsidian-publish-cjk
 :LANGUAGE: en
 :WORD_COUNT: 73
 :END:
 
-如果你熟悉 TypeScript 或 CSS，你可以开发自己的 [[https://publish.obsidian.md/help-zh/扩展+Obsidian/第三方插件][第三方插件]] 和 [[https://publish.obsidian.md/help-zh/扩展+Obsidian/主题][主题]] 。
+如果你熟悉 TypeScript 或 CSS，你可以开发自己的 [[https://publish.obsidian.md/help-zh/%E6%89%A9%E5%B1%95+Obsidian/%E7%AC%AC%E4%B8%89%E6%96%B9%E6%8F%92%E4%BB%B6][第三方插件]] 和 [[https://publish.obsidian.md/help-zh/%E6%89%A9%E5%B1%95+Obsidian/%E4%B8%BB%E9%A2%98][主题]] 。
 
-了解更多信息，请访问 [[https://docs.obsidian.md][Obsidian 开发者文档]] 。
+了解更多信息，请访问 [[https://docs.obsidian.md/][Obsidian 开发者文档]] 。
 
 如果想帮助改进我们的开发者文档，请向 [[https://github.com/obsidianmd/obsidian-developer-docs][Obsidian 开发者文档仓库]] 提交请求。

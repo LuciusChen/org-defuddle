@@ -1,7 +1,9 @@
 * Health care subsidies article
 :PROPERTIES:
+:URL: https://apnews-link-enhancement/
 :AUTHOR: Test Author
 :SITE: Test Author
+:DOMAIN: apnews-link-enhancement
 :WORD_COUNT: 108
 :END:
 

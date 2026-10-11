@@ -1,6 +1,7 @@
 * example_size_t - Reference
 :PROPERTIES:
 :URL: https://www.example.com/reference/types/size_t
+:SITE: example.com
 :DOMAIN: example.com
 :LANGUAGE: en
 :WORD_COUNT: 136

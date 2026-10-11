@@ -1,7 +1,9 @@
 * Breaking: Company Removes Ads for Product Liability Cases
 :PROPERTIES:
+:URL: https://gated-content--cookie-consent/
 :AUTHOR: Jane Reporter
 :SITE: Jane Reporter
+:DOMAIN: gated-content--cookie-consent
 :LANGUAGE: en
 :WORD_COUNT: 282
 :END:

@@ -1,5 +1,8 @@
 * Whitespace and newline handling
 :PROPERTIES:
+:URL: https://whitespace-newlines/
+:SITE: whitespace-newlines
+:DOMAIN: whitespace-newlines
 :LANGUAGE: en
 :WORD_COUNT: 65
 :END:

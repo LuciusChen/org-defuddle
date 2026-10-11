@@ -1,5 +1,8 @@
 * Loose footnotes: heading delimiter
 :PROPERTIES:
+:URL: https://heading-notes/
+:SITE: heading-notes
+:DOMAIN: heading-notes
 :WORD_COUNT: 28
 :END:
 

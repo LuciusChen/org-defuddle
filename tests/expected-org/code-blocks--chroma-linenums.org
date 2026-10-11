@@ -1,5 +1,8 @@
 * Sample Technical Post
 :PROPERTIES:
+:URL: https://code-blocks--chroma-linenums/
+:SITE: code-blocks--chroma-linenums
+:DOMAIN: code-blocks--chroma-linenums
 :LANGUAGE: en
 :WORD_COUNT: 77
 :END:

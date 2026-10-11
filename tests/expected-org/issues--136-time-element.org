@@ -1,6 +1,9 @@
 * Article with Time Elements
 :PROPERTIES:
+:URL: https://136-time-element/
 :PUBLISHED: 2025-01-15
+:SITE: 136-time-element
+:DOMAIN: 136-time-element
 :WORD_COUNT: 154
 :END:
 

@@ -1,5 +1,8 @@
 * arXiv Equation Tables
 :PROPERTIES:
+:URL: https://141-arxiv-equation-tables/
+:SITE: 141-arxiv-equation-tables
+:DOMAIN: 141-arxiv-equation-tables
 :LANGUAGE: en
 :WORD_COUNT: 29
 :END:

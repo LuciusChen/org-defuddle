@@ -1,5 +1,8 @@
 * SCP-9935 - SCP Foundation
 :PROPERTIES:
+:URL: https://scp-wiki.wikidot.com-scp-9935/
+:SITE: scp-wiki.wikidot.com-scp-9935
+:DOMAIN: scp-wiki.wikidot.com-scp-9935
 :DESCRIPTION: The SCP Foundation's 'top-secret' archives, declassified for your enjoyment.
 :LANGUAGE: en
 :WORD_COUNT: 237

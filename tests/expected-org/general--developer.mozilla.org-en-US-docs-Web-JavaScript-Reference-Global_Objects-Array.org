@@ -1,6 +1,8 @@
 * Array - JavaScript
 :PROPERTIES:
+:URL: https://developer.mozilla.org-en-us-docs-web-javascript-reference-global_objects-array/
 :SITE: MDN
+:DOMAIN: developer.mozilla.org-en-us-docs-web-javascript-reference-global_objects-array
 :DESCRIPTION: The Array object enables storing a collection of multiple items under a single variable name.
 :WORD_COUNT: 340
 :END:

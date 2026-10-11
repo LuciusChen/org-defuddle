@@ -1,5 +1,8 @@
 * Hidden Footnotes Section
 :PROPERTIES:
+:URL: https://hidden-section/
+:SITE: hidden-section
+:DOMAIN: hidden-section
 :WORD_COUNT: 44
 :END:
 
@@ -9,4 +12,4 @@ We're lucky to have so many good RSS readers that cut through this nonsense. [fn
 
 More article text here to ensure content is detected.
 
-[fn:1] [[https://netnewswire.com][NetNewsWire]], [[https://goldenhillsoftware.com][Unread]], [[https://currentreader.app][Current]], and [[https://reederapp.com/classic/][Reeder]], to name a few.
+[fn:1] [[https://netnewswire.com/][NetNewsWire]], [[https://goldenhillsoftware.com/][Unread]], [[https://currentreader.app/][Current]], and [[https://reederapp.com/classic/][Reeder]], to name a few.

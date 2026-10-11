@@ -94,6 +94,10 @@
                   "org-defuddle-module"
                   (player-json caption-xml chapters-json url language-code))
 
+(declare-function org-defuddle-module-parse-reddit-atom-org
+                  "org-defuddle-module" (xml url include-images include-replies))
+
+(defvar url-http-response-status)
 (defvar url-request-extra-headers)
 (defvar url-request-method)
 (defvar url-request-data)
@@ -301,7 +305,8 @@ language order."
   "Functions that must be provided by the Rust dynamic module.")
 
 (defconst org-defuddle--optional-module-functions
-  '(org-defuddle-module-youtube-inline-caption-info)
+  '(org-defuddle-module-youtube-inline-caption-info
+    org-defuddle-module-parse-reddit-atom-org)
   "Functions used when provided by a newer Rust dynamic module.")
 
 (defun org-defuddle--repo-root ()
@@ -756,12 +761,23 @@ CLIENT-NAME and CLIENT-VERSION identify the Innertube client."
          (scheme (and parsed (url-type parsed)))
          (host (and host (downcase host))))
     (when (and host
-               (not (string= host "old.reddit.com"))
+               (member scheme '("http" "https"))
                (or (string= host "reddit.com")
                    (string-suffix-p ".reddit.com" host))
                filename
-               (string-match-p "/r/[^/]+/comments/[^/]+" filename))
-      (format "%s://old.reddit.com%s" (or scheme "https") filename))))
+               (string-match-p "\\`/r/[^/]+/comments/[^/?#]+" filename))
+      (format "%s://old.reddit.com%s" (or scheme "https") (car (split-string filename "#"))))))
+
+(defun org-defuddle--reddit-feed-url (old-url)
+  "Return the Reddit Atom feed URL corresponding to OLD-URL."
+  (let* ((parsed (url-generic-parse-url old-url))
+         (filename (url-filename parsed))
+         (parts (split-string filename "?"))
+         (path (string-remove-suffix "/.rss"
+                 (string-remove-suffix "/" (car parts)))))
+    (format "%s://www.reddit.com%s/.rss%s"
+            (url-type parsed) path
+            (if (cdr parts) (concat "?" (cadr parts)) ""))))
 
 (defun org-defuddle--response-body ()
   "Return the current `url-retrieve' buffer response body."
@@ -769,19 +785,28 @@ CLIENT-NAME and CLIENT-VERSION identify the Innertube client."
   (re-search-forward "\r?\n\r?\n" nil 'move)
   (buffer-substring-no-properties (point) (point-max)))
 
-(defun org-defuddle--retrieve-body-with-url (url callback headers method data)
-  "Fetch URL with `url-retrieve' and call CALLBACK with the response body.
+(defun org-defuddle--retrieve-body-with-url
+    (url callback headers method data &optional on-error)
+  "Fetch URL and call CALLBACK with its response body.
 
-HEADERS, METHOD, and DATA configure the request."
+HEADERS, METHOD, and DATA configure the request.  ON-ERROR, when non-nil,
+receives a network or HTTP error instead of calling CALLBACK."
   (let ((url-request-extra-headers headers)
         (url-request-method (or method "GET"))
         (url-request-data data))
     (url-retrieve
      url
-     (lambda (_status)
+     (lambda (status)
        (let ((response-buffer (current-buffer)))
          (unwind-protect
-             (funcall callback (org-defuddle--response-body))
+             (let ((failure (or (plist-get status :error)
+                                (and (boundp 'url-http-response-status)
+                                     (numberp url-http-response-status)
+                                     (>= url-http-response-status 400)
+                                     url-http-response-status))))
+               (if (and failure on-error)
+                   (funcall on-error failure)
+                 (funcall callback (org-defuddle--response-body))))
            (when (buffer-live-p response-buffer)
              (kill-buffer response-buffer))))))))
 
@@ -799,11 +824,13 @@ HEADERS, METHOD, and DATA configure the request."
       (setq command (append command (list "--data" data))))
     command))
 
-(defun org-defuddle--retrieve-body-with-cli (url callback headers method data)
+(defun org-defuddle--retrieve-body-with-cli
+    (url callback headers method data &optional on-error)
   "Fetch URL with the Rust CLI and call CALLBACK with the response body.
 
 HEADERS, METHOD, and DATA configure the request.  On CLI failure, fall
-back to `org-defuddle--retrieve-body-with-url'."
+back to `org-defuddle--retrieve-body-with-url'.  ON-ERROR, when supplied,
+receives the fetch failure instead."
   (let* ((buffer (generate-new-buffer " *org-defuddle-fetch*"))
          (command (org-defuddle--cli-fetch-command url headers method data)))
     (make-process
@@ -825,19 +852,22 @@ back to `org-defuddle--retrieve-body-with-url'."
              (kill-buffer output-buffer))
            (if (zerop exit-code)
                (funcall callback (or body ""))
-             (org-defuddle--retrieve-body-with-url
-              url callback headers method data))))))))
+             (if on-error (funcall on-error (or body "CLI fetch failed"))
+               (org-defuddle--retrieve-body-with-url
+                url callback headers method data)))))))))
 
-(defun org-defuddle--retrieve-body (url callback &optional headers method data)
+(defun org-defuddle--retrieve-body
+    (url callback &optional headers method data on-error)
   "Fetch URL and call CALLBACK with the response body.
 
-HEADERS, METHOD, and DATA configure the request."
+HEADERS, METHOD, and DATA configure the request.  ON-ERROR receives
+network or HTTP failures when supplied."
   (if (and org-defuddle-use-cli-url-fetch
            (org-defuddle--cli-file))
       (org-defuddle--retrieve-body-with-cli
-       url callback headers method data)
+       url callback headers method data on-error)
     (org-defuddle--retrieve-body-with-url
-     url callback headers method data)))
+     url callback headers method data on-error)))
 
 (defun org-defuddle--cli-compatible-html-url-options-p (options)
   "Return non-nil when OPTIONS can use the CLI URL backend."
@@ -1639,20 +1669,42 @@ identifier."
    options
    (org-defuddle--youtube-player-configs)))
 
-(defun org-defuddle--reddit-url-to-org (url options old-url)
-  "Fetch Reddit URL through OLD-URL and insert extracted Org.
+(defun org-defuddle-reddit-atom-to-org (xml url &optional options)
+  "Parse Reddit Atom XML for URL and return an Org string.
 
-URL is the original Reddit comments URL.  OPTIONS is passed to the Rust
-HTML extraction path."
-  (org-defuddle--retrieve-body
-   old-url
-   (lambda (body)
-     (condition-case nil
-         (org-defuddle--insert-org-buffer
-          (org-defuddle-html-to-org body url options))
-       (error
-        (org-defuddle--html-url-to-org url options))))
-   '(("User-Agent" . "Mozilla/5.0 (compatible; Defuddle/1.0)"))))
+OPTIONS supplies `:include-images', `:remove-images', and `:include-replies'."
+  (org-defuddle-load-module)
+  (unless (fboundp 'org-defuddle-module-parse-reddit-atom-org)
+    (user-error "Rebuild the org-defuddle module for Reddit Atom support"))
+  (org-defuddle-module-parse-reddit-atom-org
+   xml url (org-defuddle--include-images-option options)
+   (org-defuddle--include-replies-option options)))
+
+(defun org-defuddle--reddit-url-to-org (url options old-url)
+  "Fetch Reddit URL through OLD-URL, then its Atom feed if needed.
+
+OPTIONS controls image and comment inclusion in the extracted Org."
+  (let ((feed (lambda (&optional _failure)
+                (org-defuddle--retrieve-body
+                 (org-defuddle--reddit-feed-url old-url)
+                 (lambda (xml)
+                   (org-defuddle--insert-org-buffer
+                    (org-defuddle-reddit-atom-to-org xml url options)))
+                 '(("User-Agent" . "defuddle (+https://defuddle.md)")
+                   ("Accept" . "application/atom+xml, application/xml, text/xml"))
+                 nil nil
+                 (lambda (failure)
+                   (error "Reddit Atom fetch failed: %s" failure))))))
+    (org-defuddle--retrieve-body
+     old-url
+     (lambda (body)
+       (let ((output (org-defuddle-parse-html body url options)))
+         (if (and (equal (plist-get output :extractorType) "reddit")
+                  (> (or (plist-get output :wordCount) 0) 0))
+             (org-defuddle--insert-org-buffer (plist-get output :org))
+           (funcall feed))))
+     '(("User-Agent" . "defuddle (+https://defuddle.md)"))
+     nil nil feed)))
 
 ;;;###autoload
 (defun org-defuddle-url-to-org (url &optional options)

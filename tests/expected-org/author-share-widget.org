@@ -1,8 +1,10 @@
 * Blog Post Title
 :PROPERTIES:
+:URL: https://author-share-widget/
 :AUTHOR: Jane Smith
 :PUBLISHED: 2025-04-08T00:00:00.000Z
 :SITE: Company Blog
+:DOMAIN: author-share-widget
 :DESCRIPTION: A blog post about an interesting topic.
 :WORD_COUNT: 222
 :END:

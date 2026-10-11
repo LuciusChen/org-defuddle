@@ -1,5 +1,8 @@
 * Small equation images
 :PROPERTIES:
+:URL: https://small-equation-image/
+:SITE: small-equation-image
+:DOMAIN: small-equation-image
 :LANGUAGE: en
 :WORD_COUNT: 86
 :END:

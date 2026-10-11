@@ -1,6 +1,6 @@
 * Example Concept
 :PROPERTIES:
-:URL: https://thin-section-before-see-also/wiki/Example_Concept
+:URL: https://thin-section-before-see-also/
 :SITE: Encyclopedia
 :DOMAIN: thin-section-before-see-also
 :DESCRIPTION: An encyclopedia article about a concept.

@@ -1,6 +1,7 @@
 * Apartments for Sale | Updated 2025
 :PROPERTIES:
 :URL: https://example.com/apartments/
+:SITE: example.com
 :DOMAIN: example.com
 :DESCRIPTION: List of premium apartments currently for sale.
 :LANGUAGE: vi

@@ -1,5 +1,8 @@
 * Empty paragraph br test
 :PROPERTIES:
+:URL: https://empty-p-br/
+:SITE: empty-p-br
+:DOMAIN: empty-p-br
 :WORD_COUNT: 9
 :END:
 

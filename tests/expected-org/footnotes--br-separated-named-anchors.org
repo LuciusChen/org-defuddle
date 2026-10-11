@@ -1,0 +1,19 @@
+* Thoughts on Open Models
+:PROPERTIES:
+:URL: https://br-separated-named-anchors/
+:SITE: br-separated-named-anchors
+:DOMAIN: br-separated-named-anchors
+:WORD_COUNT: 69
+:END:
+
+Everyone remembers the famous open letter, written in 2010, because it started the long, slow decline of a key technology of that era. [fn:1]
+
+A handful of large labs signed on early — but the notable one is obviously the market leader. [fn:2]
+
+The stated reasoning was safety, which is the same rationale invoked every time. [fn:3] Whether that reasoning holds up is another matter entirely.
+
+[fn:1] It's genuinely odd that the company no longer hosts these pivotal posts on its own site.
+
+[fn:2] Other absences from the list [[https://example.com/thread][include]] several large database vendors, though none of them train their own frontier models.
+
+[fn:3] It is still not /entirely/ clear that everyone is on board, given that [[https://example.com/report][reporting suggests otherwise]].

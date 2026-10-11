@@ -1,7 +1,9 @@
 * Sample Article
 :PROPERTIES:
+:URL: https://arm-newsroom/
 :AUTHOR: Jane Smith
 :SITE: Jane Smith
+:DOMAIN: arm-newsroom
 :LANGUAGE: en
 :WORD_COUNT: 189
 :END:

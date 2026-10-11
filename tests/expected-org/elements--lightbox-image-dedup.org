@@ -1,6 +1,7 @@
 * Gallery Post with Lightbox
 :PROPERTIES:
 :URL: https://www.example.com/article/gallery-post
+:SITE: example.com
 :DOMAIN: example.com
 :LANGUAGE: en
 :WORD_COUNT: 83

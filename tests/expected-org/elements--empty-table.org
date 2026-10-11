@@ -1,5 +1,8 @@
 * Empty table test
 :PROPERTIES:
+:URL: https://empty-table/
+:SITE: empty-table
+:DOMAIN: empty-table
 :WORD_COUNT: 48
 :END:
 

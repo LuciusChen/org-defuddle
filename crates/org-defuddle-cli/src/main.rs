@@ -1,7 +1,8 @@
 use encoding_rs::{Encoding, UTF_8, WINDOWS_1252};
 use org_defuddle_core::{
     output_frontmatter, output_json_string_pretty, output_json_string_pretty_for_html,
-    output_property, parse_html_to_org, DefuddleOptions, DefuddleOutput, IncludeReplies,
+    output_property, parse_html_to_org, parse_reddit_atom_to_org, reddit_sources, DefuddleOptions,
+    DefuddleOutput, IncludeReplies,
 };
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -72,9 +73,36 @@ where
     }
 
     let options = parse_args(args)?;
-    let (html, url) = read_source(&options)?;
-    let mut output = parse_html_to_org(&html, defuddle_options(&options, url.clone()))
-        .map_err(|err| err.to_string())?;
+    let (mut output, html) = if let Some(source) = options
+        .source
+        .as_deref()
+        .filter(|url| reddit_sources(url).is_some())
+    {
+        extract_reddit_with_fetch(source, &options, |url, require_html| {
+            fetch_body(
+                url,
+                "GET",
+                &[(
+                    "Accept".to_string(),
+                    if require_html {
+                        "text/html"
+                    } else {
+                        "application/atom+xml, application/xml, text/xml"
+                    }
+                    .to_string(),
+                )],
+                None,
+                options.user_agent.as_deref().unwrap_or(DEFAULT_UA),
+                options.language.as_deref(),
+                require_html,
+            )
+        })?
+    } else {
+        let (html, url) = read_source(&options)?;
+        let output = parse_html_to_org(&html, defuddle_options(&options, url))
+            .map_err(|err| err.to_string())?;
+        (output, html)
+    };
     output = retry_url_with_bot_user_agent(output, &options)?;
     ensure_meaningful_content(&output, &options)?;
     let rendered = render_output_with_html(&output, &options, Some(&html))?;
@@ -92,6 +120,27 @@ where
         stdout.write_all(b"\n").map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+fn extract_reddit_with_fetch(
+    url: &str,
+    options: &CliOptions,
+    mut fetch: impl FnMut(&str, bool) -> Result<String, String>,
+) -> Result<(DefuddleOutput, String), String> {
+    let sources = reddit_sources(url).ok_or("not a Reddit comments URL")?;
+    if let Ok(html) = fetch(&sources.old_url, true) {
+        let output = parse_html_to_org(&html, defuddle_options(options, Some(url.to_string())))
+            .map_err(|err| err.to_string())?;
+        if output.extractor_type.as_deref() == Some("reddit") && output.word_count > 0 {
+            return Ok((output, html));
+        }
+    }
+    let xml = fetch(&sources.feed_url, false)
+        .map_err(|err| format!("Reddit Atom fallback failed: {err}"))?;
+    let output = parse_reddit_atom_to_org(&xml, url, true, IncludeReplies::Extractors)
+        .map_err(|err| format!("Reddit Atom fallback failed: {err}"))?;
+    // Feed markup is not the original page's HTML metatags.
+    Ok((output, String::new()))
 }
 
 fn informational_output(args: &[String]) -> Option<String> {
@@ -1081,6 +1130,56 @@ mod tests {
     use std::sync::mpsc::{self, Receiver};
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn reddit_falls_back_after_login_wall_or_network_failure() {
+        let url = "https://www.reddit.com/r/emacs/comments/example/topic/";
+        for old_result in [
+            Ok("<html><title>Login</title><p>Sign in to Reddit</p></html>".to_string()),
+            Err("HTTP 403".to_string()),
+        ] {
+            let mut calls = Vec::new();
+            let (output, html) =
+                extract_reddit_with_fetch(url, &CliOptions::default(), |source, require_html| {
+                    calls.push((source.to_string(), require_html));
+                    if require_html {
+                        old_result.clone()
+                    } else {
+                        Ok(include_str!("../../../tests/fixtures/reddit.atom").to_string())
+                    }
+                })
+                .unwrap();
+            assert_eq!(output.title, "A & B discussion");
+            assert!(output.org.contains("Helpful reply from Bob."));
+            assert!(html.is_empty());
+            assert_eq!(calls.len(), 2);
+            assert!(calls[0].0.contains("old.reddit.com"));
+            assert!(calls[1].0.ends_with("/.rss"));
+            assert!(!calls[1].1);
+        }
+    }
+
+    #[test]
+    fn reddit_prefers_valid_old_html_and_surfaces_feed_errors() {
+        let url = "https://www.reddit.com/r/emacs/comments/example/topic/";
+        let mut calls = 0;
+        let (output, _) = extract_reddit_with_fetch(url, &CliOptions::default(), |_, _| {
+            calls += 1;
+            Ok(r#"<div class="thing link" data-author="alice" data-subreddit="emacs"><a class="title">Old Reddit post</a><div class="entry"><div class="usertext-body"><div class="md"><p>Original post body.</p></div></div></div></div>"#.to_string())
+        }).unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(output.title, "Old Reddit post");
+        assert!(output.org.contains("Original post body."));
+        let error = extract_reddit_with_fetch(url, &CliOptions::default(), |_, html| {
+            if html {
+                Err("HTTP 403".to_string())
+            } else {
+                Ok("<html>Login</html>".to_string())
+            }
+        })
+        .unwrap_err();
+        assert!(error.contains("Reddit Atom fallback failed"));
+    }
 
     fn sample_output() -> DefuddleOutput {
         DefuddleOutput {

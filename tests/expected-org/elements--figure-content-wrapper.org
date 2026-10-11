@@ -1,5 +1,8 @@
 * Figure Content Wrapper Test
 :PROPERTIES:
+:URL: https://figure-content-wrapper/
+:SITE: figure-content-wrapper
+:DOMAIN: figure-content-wrapper
 :LANGUAGE: en
 :WORD_COUNT: 33
 :END:

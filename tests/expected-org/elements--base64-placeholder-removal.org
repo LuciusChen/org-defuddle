@@ -1,6 +1,7 @@
 * Base64 Placeholder Image Handling
 :PROPERTIES:
 :URL: https://www.example.com/article/base64-test
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 66
 :END:

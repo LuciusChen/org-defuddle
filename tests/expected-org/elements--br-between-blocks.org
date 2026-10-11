@@ -1,5 +1,8 @@
 * BR between blocks test
 :PROPERTIES:
+:URL: https://br-between-blocks/
+:SITE: br-between-blocks
+:DOMAIN: br-between-blocks
 :WORD_COUNT: 51
 :END:
 

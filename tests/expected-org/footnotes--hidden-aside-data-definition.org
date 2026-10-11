@@ -1,5 +1,8 @@
 * Review of a Popular TV Adaptation
 :PROPERTIES:
+:URL: https://hidden-aside-data-definition/
+:SITE: hidden-aside-data-definition
+:DOMAIN: hidden-aside-data-definition
 :LANGUAGE: en
 :WORD_COUNT: 138
 :END:

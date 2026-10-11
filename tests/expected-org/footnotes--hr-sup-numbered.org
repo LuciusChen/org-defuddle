@@ -1,5 +1,8 @@
 * Loose footnotes: sup-numbered after hr
 :PROPERTIES:
+:URL: https://hr-sup-numbered/
+:SITE: hr-sup-numbered
+:DOMAIN: hr-sup-numbered
 :WORD_COUNT: 40
 :END:
 

@@ -1,5 +1,8 @@
 * LaTeX Image Rendering Services
 :PROPERTIES:
+:URL: https://latex-image-services/
+:SITE: latex-image-services
+:DOMAIN: latex-image-services
 :LANGUAGE: en
 :WORD_COUNT: 26
 :END:

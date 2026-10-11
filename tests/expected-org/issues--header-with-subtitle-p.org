@@ -1,8 +1,10 @@
 * Playing a Classic FPS with One Hand in 2026
 :PROPERTIES:
+:URL: https://header-with-subtitle-p/
 :AUTHOR: Alex Johnson
 :PUBLISHED: 2026-03-27T18:09:00-04:00
 :SITE: Example Tech
+:DOMAIN: header-with-subtitle-p
 :LANGUAGE: en
 :WORD_COUNT: 199
 :END:

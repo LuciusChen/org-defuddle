@@ -1,5 +1,8 @@
 * Raw LaTeX Math Delimiters
 :PROPERTIES:
+:URL: https://raw-latex/
+:SITE: raw-latex
+:DOMAIN: raw-latex
 :LANGUAGE: en
 :WORD_COUNT: 95
 :END:

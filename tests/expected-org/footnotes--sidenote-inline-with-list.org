@@ -1,5 +1,8 @@
 * Sample Post with Sidenotes
 :PROPERTIES:
+:URL: https://sidenote-inline-with-list/
+:SITE: sidenote-inline-with-list
+:DOMAIN: sidenote-inline-with-list
 :LANGUAGE: en
 :WORD_COUNT: 51
 :END:

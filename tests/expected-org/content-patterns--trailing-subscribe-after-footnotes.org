@@ -1,5 +1,8 @@
 * Trailing subscribe section after footnotes
 :PROPERTIES:
+:URL: https://content-patterns--trailing-subscribe-after-footnotes/
+:SITE: content-patterns--trailing-subscribe-after-footnotes
+:DOMAIN: content-patterns--trailing-subscribe-after-footnotes
 :WORD_COUNT: 449
 :END:
 

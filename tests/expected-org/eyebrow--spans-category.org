@@ -1,7 +1,9 @@
 * Introducing the New Widget Platform
 :PROPERTIES:
+:URL: https://spans-category/
 :PUBLISHED: 2026-04-16T00:00:00.000Z
 :SITE: Example News
+:DOMAIN: spans-category
 :LANGUAGE: en
 :WORD_COUNT: 248
 :END:

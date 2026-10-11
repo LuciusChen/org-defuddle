@@ -1,6 +1,7 @@
 * Footnotes in Wrapper Spans
 :PROPERTIES:
 :URL: https://example.org/articles/footnotes-in-wrapper-spans
+:SITE: example.org
 :DOMAIN: example.org
 :LANGUAGE: en
 :WORD_COUNT: 121

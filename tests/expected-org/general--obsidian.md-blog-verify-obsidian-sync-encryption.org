@@ -1,15 +1,17 @@
 * How to verify Obsidian Sync's end-to-end encryption
 :PROPERTIES:
+:URL: https://obsidian.md-blog-verify-obsidian-sync-encryption/
 :AUTHOR: Licat
 :PUBLISHED: 2023-06-05T00:00:00+00:00
 :SITE: Obsidian
+:DOMAIN: obsidian.md-blog-verify-obsidian-sync-encryption
 :DESCRIPTION: How can you be sure that your data is end-to-end encrypted? In this guide, we provide step-by-step instructions to trustlessly verify the end-to-end encryption of your data using Obsidian Sync.
 :IMAGE: https://obsidian.md/images/banner.png
 :LANGUAGE: en
 :WORD_COUNT: 789
 :END:
 
-On our [[https://obsidian.md][About page]], we describe the guiding principles that have shaped Obsidian since the start. Privacy is one of these principles, and we go to great lengths to make sure we can uphold this statement:
+On our [[https://obsidian.md/][About page]], we describe the guiding principles that have shaped Obsidian since the start. Privacy is one of these principles, and we go to great lengths to make sure we can uphold this statement:
 
 #+begin_quote
 We believe that your thoughts and ideas belong to you and deserve complete privacy. That’s why your data is stored on your device, inaccessible to us. When you use our online services, your data is protected with end-to-end encryption for maximum security.

@@ -1,9 +1,9 @@
 * Sample Technical Post
 :PROPERTIES:
-:URL: https://example-blog.example.com/posts/sample-post
+:URL: https://date-adjacent-category-link/
 :PUBLISHED: 2025-03-08
-:SITE: example-blog.example.com
-:DOMAIN: example-blog.example.com
+:SITE: date-adjacent-category-link
+:DOMAIN: date-adjacent-category-link
 :LANGUAGE: en
 :WORD_COUNT: 104
 :END:

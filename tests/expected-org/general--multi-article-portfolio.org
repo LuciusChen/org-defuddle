@@ -1,6 +1,8 @@
 * Jane Smith
 :PROPERTIES:
+:URL: https://multi-article-portfolio/
 :SITE: Portfolio
+:DOMAIN: multi-article-portfolio
 :DESCRIPTION: Researcher and developer portfolio
 :WORD_COUNT: 205
 :END:

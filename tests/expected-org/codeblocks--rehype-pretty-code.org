@@ -1,7 +1,9 @@
 * A Social Filesystem
 :PROPERTIES:
+:URL: https://rehype-pretty-code/
 :AUTHOR: Dan Abramov
 :SITE: Dan Abramov
+:DOMAIN: rehype-pretty-code
 :DESCRIPTION: Test for rehype-pretty-code data-line spans
 :WORD_COUNT: 122
 :END:

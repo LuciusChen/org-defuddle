@@ -1,6 +1,7 @@
 * Example Topic
 :PROPERTIES:
 :URL: https://encyclopedia.example.com/wiki/Example_Topic
+:SITE: encyclopedia.example.com
 :DOMAIN: encyclopedia.example.com
 :WORD_COUNT: 321
 :END:

@@ -1,5 +1,8 @@
 * Product Update
 :PROPERTIES:
+:URL: https://external-labeled-section/
+:SITE: external-labeled-section
+:DOMAIN: external-labeled-section
 :WORD_COUNT: 92
 :END:
 

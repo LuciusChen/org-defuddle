@@ -1,6 +1,7 @@
 * Article With Sidebar Toggle
 :PROPERTIES:
 :URL: https://sidebar-toggle-checkbox/
+:SITE: sidebar-toggle-checkbox
 :DOMAIN: sidebar-toggle-checkbox
 :WORD_COUNT: 78
 :END:

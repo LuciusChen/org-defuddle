@@ -8,8 +8,10 @@
 :DESCRIPTION: Example repo here: https://github.com/jmorrell/defuddle-cloudflare-example I was looking forward to ditching my tenuous readbilityjs fork in my workers project. Defuddle ultimately does run to completion, but I ran into a couple of issue...
 :IMAGE: https://opengraph.githubassets.com/0e02d1d5d635552a66587cdd18495678a7a64487b7352f56f63045840fb6dd61/kepano/defuddle/issues/56
 :LANGUAGE: en
-:WORD_COUNT: 246
+:WORD_COUNT: 247
 :END:
+
+** Description
 
 [[https://github.com/jmorrell][jmorrell]]
 

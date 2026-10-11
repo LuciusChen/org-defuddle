@@ -1,5 +1,8 @@
 * Article with Appendix
 :PROPERTIES:
+:URL: https://appendix-heading/
+:SITE: appendix-heading
+:DOMAIN: appendix-heading
 :WORD_COUNT: 116
 :END:
 

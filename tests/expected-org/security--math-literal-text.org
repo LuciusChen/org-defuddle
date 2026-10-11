@@ -1,0 +1,15 @@
+* Literal text in equations
+:PROPERTIES:
+:URL: https://example.com/article
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 27
+:END:
+
+This example contains a formula with text whose spaces are significant.
+
+$$
+\texttt{<div>}
+$$
+
+Preserve the original formula as literal source when escaping would change its text.

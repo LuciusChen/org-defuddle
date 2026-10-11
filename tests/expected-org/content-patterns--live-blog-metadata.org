@@ -1,6 +1,7 @@
 * Breaking News Live Updates
 :PROPERTIES:
 :URL: https://www.example.com/live/2026/04/07/world/breaking-news
+:SITE: example.com
 :DOMAIN: example.com
 :LANGUAGE: en
 :WORD_COUNT: 96

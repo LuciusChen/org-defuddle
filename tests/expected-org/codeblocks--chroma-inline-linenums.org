@@ -1,5 +1,8 @@
 * Sample Python Post
 :PROPERTIES:
+:URL: https://chroma-inline-linenums/
+:SITE: chroma-inline-linenums
+:DOMAIN: chroma-inline-linenums
 :LANGUAGE: en
 :WORD_COUNT: 31
 :END:

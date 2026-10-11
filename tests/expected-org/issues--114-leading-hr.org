@@ -1,6 +1,9 @@
 * Linguist, an ultimate browser extension for translation
 :PROPERTIES:
+:URL: https://114-leading-hr/
 :PUBLISHED: 2023-07-13T00:00:00+00:00
+:SITE: 114-leading-hr
+:DOMAIN: 114-leading-hr
 :WORD_COUNT: 73
 :END:
 

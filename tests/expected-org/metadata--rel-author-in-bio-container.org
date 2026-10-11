@@ -1,8 +1,10 @@
 * Example Article
 :PROPERTIES:
+:URL: https://rel-author-in-bio-container/
 :AUTHOR: Jane Doe
 :PUBLISHED: 2026-04-07T00:00:00+00:00
 :SITE: example.com
+:DOMAIN: rel-author-in-bio-container
 :WORD_COUNT: 112
 :END:
 

@@ -1,5 +1,8 @@
 * Visibility hidden test
 :PROPERTIES:
+:URL: https://visibility/
+:SITE: visibility
+:DOMAIN: visibility
 :WORD_COUNT: 60
 :END:
 

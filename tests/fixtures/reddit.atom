@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><id>t3_example</id><title>A &amp; B discussion</title>
+    <author><name>/u/alice</name></author><updated>2026-10-01T12:00:00Z</updated>
+    <content type="html">&lt;div class="md"&gt;&lt;p&gt;Post with &amp;amp; entities and &lt;a href="/r/emacs/wiki"&gt;wiki&lt;/a&gt;.&lt;/p&gt;&lt;img src="https://example.com/photo.jpg"&gt;&lt;script&gt;unwanted script&lt;/script&gt;&lt;a href="javascript:alert(1)"&gt;safe text&lt;/a&gt;&lt;/div&gt;</content>
+  </entry>
+  <entry><id>t1_reply</id><title>Reply</title><author><name>/u/bob</name></author>
+    <updated>2026-10-02T10:00:00Z</updated><link href="https://www.reddit.com/r/emacs/comments/example/topic/reply/"/>
+    <content type="html">&lt;div class="md"&gt;&lt;p&gt;Helpful reply from Bob.&lt;/p&gt;&lt;/div&gt;</content>
+  </entry>
+</feed>

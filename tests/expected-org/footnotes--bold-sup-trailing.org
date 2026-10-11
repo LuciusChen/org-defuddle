@@ -1,5 +1,8 @@
 * Loose footnotes: bold-wrapped sup with trailing content
 :PROPERTIES:
+:URL: https://bold-sup-trailing/
+:SITE: bold-sup-trailing
+:DOMAIN: bold-sup-trailing
 :WORD_COUNT: 83
 :END:
 

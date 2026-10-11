@@ -1,6 +1,7 @@
 * Image Deduplication Test
 :PROPERTIES:
 :URL: https://www.example.com/article/image-dedup
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 83
 :END:

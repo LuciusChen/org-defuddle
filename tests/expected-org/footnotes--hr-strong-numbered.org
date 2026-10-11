@@ -1,5 +1,8 @@
 * Loose footnotes: strong-numbered after hr
 :PROPERTIES:
+:URL: https://hr-strong-numbered/
+:SITE: hr-strong-numbered
+:DOMAIN: hr-strong-numbered
 :WORD_COUNT: 31
 :END:
 

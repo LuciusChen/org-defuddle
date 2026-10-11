@@ -1,7 +1,8 @@
 * Blog - Acme Corp
 :PROPERTIES:
-:URL: https://tailwind-hidden-blog-index/blog
+:URL: https://tailwind-hidden-blog-index/
 :PUBLISHED: 2026-03-01T00:00:00+00:00
+:SITE: tailwind-hidden-blog-index
 :DOMAIN: tailwind-hidden-blog-index
 :DESCRIPTION: Latest posts from Acme Corp engineering blog.
 :WORD_COUNT: 150

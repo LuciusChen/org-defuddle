@@ -1,5 +1,8 @@
 * arXiv Footnote Marks
 :PROPERTIES:
+:URL: https://144-arxiv-footnote-marks/
+:SITE: 144-arxiv-footnote-marks
+:DOMAIN: 144-arxiv-footnote-marks
 :LANGUAGE: en
 :WORD_COUNT: 35
 :END:

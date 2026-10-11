@@ -1,6 +1,7 @@
 * AI Voice Tutorial
 :PROPERTIES:
 :URL: https://www.example.com/elevenlabs-ai-voice-tutorial/
+:SITE: example.com
 :DOMAIN: example.com
 :LANGUAGE: en
 :WORD_COUNT: 163

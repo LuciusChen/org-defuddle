@@ -1,0 +1,19 @@
+* Explicit image sources
+:PROPERTIES:
+:URL: https://example.com/article
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 40
+:END:
+
+Lazy sources can be relative URLs without file extensions. Metadata must never supply an image source, even when its filename resembles an image or a placeholder.
+
+[[https://example.com/photo][Relative]]
+
+[[https://example.com/article?image=123][Query]]
+
+[[https://example.com/blank.gif][Blank]]
+
+[[https://example.com/assets/loader.gif][Loader]]
+
+The explicit source determines each image independently of attribute order, filename, and unrelated metadata.

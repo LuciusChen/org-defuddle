@@ -1,5 +1,8 @@
 * Restaurant Menu Page
 :PROPERTIES:
+:URL: https://106-menu-id/
+:SITE: 106-menu-id
+:DOMAIN: 106-menu-id
 :DESCRIPTION: Our restaurant menu with appetizers, main courses, and desserts.
 :WORD_COUNT: 66
 :END:

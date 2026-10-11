@@ -1,7 +1,9 @@
 * How Spacecraft Plumbing Works
 :PROPERTIES:
+:URL: https://content-patterns--card-grid-stripped-headings/
 :AUTHOR: Jane Smith
 :SITE: Jane Smith
+:DOMAIN: content-patterns--card-grid-stripped-headings
 :WORD_COUNT: 189
 :END:
 

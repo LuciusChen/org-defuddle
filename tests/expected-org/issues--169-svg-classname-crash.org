@@ -1,6 +1,7 @@
 * Research Paper with SVG
 :PROPERTIES:
 :URL: https://example.org/paper/abstract
+:SITE: example.org
 :DOMAIN: example.org
 :LANGUAGE: en
 :WORD_COUNT: 82

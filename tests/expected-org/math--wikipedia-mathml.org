@@ -1,6 +1,8 @@
 * Quadratic formula
 :PROPERTIES:
+:URL: https://wikipedia-mathml/
 :SITE: Encyclopedia
+:DOMAIN: wikipedia-mathml
 :LANGUAGE: en
 :WORD_COUNT: 89
 :END:

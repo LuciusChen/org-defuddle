@@ -1,5 +1,8 @@
 * MathJax v3 with MathML input and HTML output
 :PROPERTIES:
+:URL: https://mathjax/
+:SITE: mathjax
+:DOMAIN: mathjax
 :LANGUAGE: en
 :WORD_COUNT: 393
 :END:

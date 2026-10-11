@@ -3,6 +3,7 @@
 :URL: https://store.example.com/news/app/123456/view/987654321
 :AUTHOR: Example Game
 :PUBLISHED: 2025-01-15T12:00:00.000Z
+:SITE: store.example.com
 :DOMAIN: store.example.com
 :WORD_COUNT: 31
 :END:

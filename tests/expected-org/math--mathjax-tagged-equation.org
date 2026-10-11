@@ -1,5 +1,8 @@
 * Tagged Equation Test
 :PROPERTIES:
+:URL: https://mathjax-tagged-equation/
+:SITE: mathjax-tagged-equation
+:DOMAIN: mathjax-tagged-equation
 :LANGUAGE: en
 :WORD_COUNT: 63
 :END:

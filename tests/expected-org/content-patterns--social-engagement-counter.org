@@ -1,5 +1,8 @@
 * Understanding Plant Growth
 :PROPERTIES:
+:URL: https://content-patterns--social-engagement-counter/
+:SITE: content-patterns--social-engagement-counter
+:DOMAIN: content-patterns--social-engagement-counter
 :WORD_COUNT: 77
 :END:
 

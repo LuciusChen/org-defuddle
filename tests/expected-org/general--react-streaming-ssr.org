@@ -1,8 +1,10 @@
 * Understanding Widget Architecture | acme blog
 :PROPERTIES:
+:URL: https://react-streaming-ssr/
 :AUTHOR: Jane Smith
 :PUBLISHED: 2025-06-15T00:00:00Z
 :SITE: Jane Smith
+:DOMAIN: react-streaming-ssr
 :DESCRIPTION: A deep dive into how modern widget systems work under the hood.
 :LANGUAGE: en
 :WORD_COUNT: 223

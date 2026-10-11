@@ -1,6 +1,7 @@
 * News Article Title
 :PROPERTIES:
 :URL: https://example.com/news/article
+:SITE: example.com
 :DOMAIN: example.com
 :LANGUAGE: en
 :WORD_COUNT: 103

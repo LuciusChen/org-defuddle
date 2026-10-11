@@ -1,6 +1,7 @@
 * React SSR srcSet Normalization
 :PROPERTIES:
 :URL: https://www.example.com/article/srcset-test
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 78
 :END:

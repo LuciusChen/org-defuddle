@@ -1,7 +1,7 @@
 * obsidian + claude code 101
 :PROPERTIES:
 :URL: https://x.com/arscontexta/status/2013045749580259680
-:AUTHOR: Heinrich
+:AUTHOR: @arscontexta
 :PUBLISHED: 2026-01-19T00:28:01.000Z
 :SITE: X (Twitter)
 :DOMAIN: x.com

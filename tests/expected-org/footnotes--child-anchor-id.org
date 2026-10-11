@@ -1,5 +1,8 @@
 * Anchor-ID Footnote Pattern
 :PROPERTIES:
+:URL: https://child-anchor-id/
+:SITE: child-anchor-id
+:DOMAIN: child-anchor-id
 :LANGUAGE: en
 :WORD_COUNT: 155
 :END:

@@ -1,5 +1,8 @@
 * Data Table Test
 :PROPERTIES:
+:URL: https://data-table/
+:SITE: data-table
+:DOMAIN: data-table
 :WORD_COUNT: 53
 :END:
 

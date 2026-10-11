@@ -1,5 +1,8 @@
 * Google Docs footnotes: ftnt/ftnt_ref pattern
 :PROPERTIES:
+:URL: https://google-docs-ftnt/
+:SITE: google-docs-ftnt
+:DOMAIN: google-docs-ftnt
 :WORD_COUNT: 128
 :END:
 

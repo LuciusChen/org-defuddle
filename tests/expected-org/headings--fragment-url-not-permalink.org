@@ -1,6 +1,7 @@
 * Weekly Roundup
 :PROPERTIES:
 :URL: https://example.com/article/roundup
+:SITE: example.com
 :DOMAIN: example.com
 :LANGUAGE: en
 :WORD_COUNT: 107

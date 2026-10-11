@@ -1,5 +1,8 @@
 * Equation cross-references should not become footnotes
 :PROPERTIES:
+:URL: https://no-false-positive-equation-refs/
+:SITE: no-false-positive-equation-refs
+:DOMAIN: no-false-positive-equation-refs
 :WORD_COUNT: 83
 :END:
 

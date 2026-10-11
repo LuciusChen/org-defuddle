@@ -1,5 +1,8 @@
 * Hugo admonitions test
 :PROPERTIES:
+:URL: https://hugo-admonitions/
+:SITE: hugo-admonitions
+:DOMAIN: hugo-admonitions
 :WORD_COUNT: 44
 :END:
 

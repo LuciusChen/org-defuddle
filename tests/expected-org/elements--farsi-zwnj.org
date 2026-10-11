@@ -1,7 +1,9 @@
 * معرفی Bases در Obsidian
 :PROPERTIES:
+:URL: https://farsi-zwnj/
 :AUTHOR: Obsidian
 :SITE: Obsidian
+:DOMAIN: farsi-zwnj
 :DESCRIPTION: آشنایی با افزونه Bases برای ایجاد نمای پایگاه‌داده از یادداشت‌ها
 :LANGUAGE: fa
 :WORD_COUNT: 105

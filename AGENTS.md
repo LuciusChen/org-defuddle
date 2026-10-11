@@ -58,6 +58,9 @@ extractors, and high-quality Org output.
 - Treat upstream defuddle fixtures as the primary behavioral reference.
   Use `ORG_DEFUDDLE_DEFUDDLE_DIR` to point tests at a defuddle checkout;
   `/private/tmp/defuddle-elisp-source` may be used as a local default.
+  Check out the commit pinned in `tests/upstream-revision`, which is also read
+  by the release workflow. When updating it, run the independent exact Org
+  differential before regenerating snapshots.
 - Prefer tests that drive public paths: Rust core API, dynamic module
   calls, and Elisp wrapper calls.
 - Tests must assert specific metadata and content. A test that would still

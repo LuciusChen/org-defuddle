@@ -1,5 +1,8 @@
 * MathJax CHTML without assistive MathML
 :PROPERTIES:
+:URL: https://mathjax-chtml-no-assistive/
+:SITE: mathjax-chtml-no-assistive
+:DOMAIN: mathjax-chtml-no-assistive
 :LANGUAGE: en
 :WORD_COUNT: 148
 :END:

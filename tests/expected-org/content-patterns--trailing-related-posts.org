@@ -1,5 +1,8 @@
 * Coffee Cooling Article
 :PROPERTIES:
+:URL: https://content-patterns--trailing-related-posts/
+:SITE: content-patterns--trailing-related-posts
+:DOMAIN: content-patterns--trailing-related-posts
 :WORD_COUNT: 61
 :END:
 

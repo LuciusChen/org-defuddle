@@ -1,5 +1,8 @@
 * Sections With Concatenated Anchor Ids
 :PROPERTIES:
+:URL: https://pascalcase-section-id-partial-match/
+:SITE: pascalcase-section-id-partial-match
+:DOMAIN: pascalcase-section-id-partial-match
 :WORD_COUNT: 574
 :END:
 

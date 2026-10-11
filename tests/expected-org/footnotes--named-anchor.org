@@ -1,5 +1,8 @@
 * Essay on Architecture
 :PROPERTIES:
+:URL: https://named-anchor/
+:SITE: named-anchor
+:DOMAIN: named-anchor
 :LANGUAGE: en
 :WORD_COUNT: 184
 :END:

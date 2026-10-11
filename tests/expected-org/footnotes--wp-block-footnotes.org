@@ -1,5 +1,8 @@
 * Article with WordPress Block Footnotes
 :PROPERTIES:
+:URL: https://wp-block-footnotes/
+:SITE: wp-block-footnotes
+:DOMAIN: wp-block-footnotes
 :LANGUAGE: en
 :WORD_COUNT: 117
 :END:

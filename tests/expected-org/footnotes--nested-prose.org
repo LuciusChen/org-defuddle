@@ -1,5 +1,8 @@
 * Loose footnotes: nested prose div
 :PROPERTIES:
+:URL: https://nested-prose/
+:SITE: nested-prose
+:DOMAIN: nested-prose
 :WORD_COUNT: 34
 :END:
 

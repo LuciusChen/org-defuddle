@@ -1,7 +1,10 @@
 * Article with Inline Footnotes
 :PROPERTIES:
+:URL: https://inline-footnote-span/
+:SITE: inline-footnote-span
+:DOMAIN: inline-footnote-span
 :LANGUAGE: en
-:WORD_COUNT: 68
+:WORD_COUNT: 69
 :END:
 
 The field has drifted far from its roots. [fn:1]
@@ -12,6 +15,6 @@ In technical terms, facts and values are orthogonal. [fn:3]
 
 [fn:1] You can pick any recent paper and have no idea what is going on.
 
-[fn:2] The most common areas where this occurs are [[https://en.wikipedia.org/wiki/Analytic_philosophy][analytic philosophy]] and [[https://en.wikipedia.org/wiki/Continental_philosophy][continental philosophy]]
+[fn:2] The most common areas where this occurs are [[https://en.wikipedia.org/wiki/Analytic_philosophy][analytic philosophy]] and [[https://en.wikipedia.org/wiki/Continental_philosophy][continental philosophy]].
 
 [fn:3] Orthogonal means they run independent of one another.

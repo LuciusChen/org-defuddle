@@ -1,5 +1,8 @@
 * Testing Patterns
 :PROPERTIES:
+:URL: https://p-class-footnote/
+:SITE: p-class-footnote
+:DOMAIN: p-class-footnote
 :WORD_COUNT: 77
 :END:
 

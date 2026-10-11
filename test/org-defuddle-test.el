@@ -464,6 +464,112 @@ the capture node as their argument."
       (should (string-match-p "v=module123"
                               (plist-get caption-info :caption_url))))))
 
+(ert-deftest org-defuddle-test-reddit-falls-back-after-login-or-fetch-error ()
+  (dolist (failure '(nil network))
+    (let (calls inserted)
+      (cl-letf (((symbol-function 'org-defuddle--retrieve-body)
+                 (lambda (url callback &optional _headers _method _data on-error)
+                   (push url calls)
+                   (if (= (length calls) 1)
+                       (if failure (funcall on-error failure)
+                         (funcall callback "login page"))
+                     (funcall callback "Atom feed"))))
+                ((symbol-function 'org-defuddle-parse-html)
+                 (lambda (&rest _) '(:extractorType nil :wordCount 12 :org "login page")))
+                ((symbol-function 'org-defuddle-reddit-atom-to-org)
+                 (lambda (xml url options)
+                   (should (equal xml "Atom feed"))
+                   (should (equal url "https://www.reddit.com/r/emacs/comments/example/topic/"))
+                   (should (equal options '(:include-replies nil)))
+                   "Post from feed"))
+                ((symbol-function 'org-defuddle--insert-org-buffer)
+                 (lambda (org) (setq inserted org))))
+        (org-defuddle--reddit-url-to-org
+         "https://www.reddit.com/r/emacs/comments/example/topic/"
+         '(:include-replies nil)
+         "https://old.reddit.com/r/emacs/comments/example/topic/")
+        (should (equal inserted "Post from feed"))
+        (should (equal (reverse calls)
+                       '("https://old.reddit.com/r/emacs/comments/example/topic/"
+                         "https://www.reddit.com/r/emacs/comments/example/topic/.rss")))))))
+
+(ert-deftest org-defuddle-test-reddit-prefers-valid-old-html ()
+  (let ((calls 0) inserted)
+    (cl-letf (((symbol-function 'org-defuddle--retrieve-body)
+               (lambda (_url callback &rest _)
+                 (cl-incf calls)
+                 (funcall callback "old HTML")))
+              ((symbol-function 'org-defuddle-parse-html)
+               (lambda (&rest _) '(:extractorType "reddit" :wordCount 24 :org "Original post")))
+              ((symbol-function 'org-defuddle--insert-org-buffer)
+               (lambda (org) (setq inserted org))))
+      (org-defuddle--reddit-url-to-org
+       "https://www.reddit.com/r/emacs/comments/example/" nil
+       "https://old.reddit.com/r/emacs/comments/example/")
+      (should (= calls 1))
+      (should (equal inserted "Original post")))))
+
+(ert-deftest org-defuddle-test-reddit-feed-errors-stop-fetching ()
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'org-defuddle--retrieve-body)
+               (lambda (_url _callback &optional _headers _method _data on-error)
+                 (cl-incf calls)
+                 (funcall on-error "HTTP 403")))
+              ((symbol-function 'org-defuddle--insert-org-buffer)
+               (lambda (_) (ert-fail "Failed fetch produced article content"))))
+      (should (equal (cadr (should-error
+                           (org-defuddle--reddit-url-to-org
+                            "https://www.reddit.com/r/emacs/comments/example/" nil
+                            "https://old.reddit.com/r/emacs/comments/example/")))
+                     "Reddit Atom fetch failed: HTTP 403"))
+      (should (= calls 2)))))
+
+(ert-deftest org-defuddle-test-reddit-url-validation-and-query ()
+  (should (equal (org-defuddle--reddit-old-comments-url
+                  "https://old.reddit.com/r/emacs/comments/example/topic/?sort=top#reply")
+                 "https://old.reddit.com/r/emacs/comments/example/topic/?sort=top"))
+  (should (equal (org-defuddle--reddit-feed-url
+                  "https://old.reddit.com/r/emacs/comments/example/topic/?sort=top")
+                 "https://www.reddit.com/r/emacs/comments/example/topic/.rss?sort=top"))
+  (dolist (url '("https://reddit.com.evil.test/r/emacs/comments/example/"
+                 "ftp://reddit.com/r/emacs/comments/example/"
+                 "https://reddit.com/r/emacs/"))
+    (should-not (org-defuddle--reddit-old-comments-url url))))
+
+(ert-deftest org-defuddle-test-fetch-http-errors-use-failure-callback ()
+  (let ((response (generate-new-buffer " *org-defuddle-http-error*")) failure)
+    (unwind-protect
+        (cl-letf (((symbol-function 'url-retrieve)
+                   (lambda (_url callback &rest _)
+                     (with-current-buffer response
+                       (setq-local url-http-response-status 403)
+                       (insert "HTTP/1.1 403 Forbidden\r\n\r\nBlocked")
+                       (funcall callback nil)))))
+          (org-defuddle--retrieve-body-with-url
+           "https://old.reddit.com/r/emacs/comments/example/"
+           (lambda (_) (ert-fail "HTTP error was accepted as article content"))
+           nil nil nil (lambda (error) (setq failure error)))
+          (should (= failure 403))
+          (should-not (buffer-live-p response)))
+      (when (buffer-live-p response) (kill-buffer response)))))
+
+(ert-deftest org-defuddle-test-reddit-atom-through-built-module ()
+  (let ((org-defuddle-module-file (org-defuddle--default-module-file))
+        (org-defuddle--module-loaded
+         (fboundp 'org-defuddle-module-parse-reddit-atom-org)))
+    (unless (file-exists-p org-defuddle-module-file)
+      (ert-skip "Build the Rust module first"))
+    (let* ((xml (with-temp-buffer
+                  (insert-file-contents (expand-file-name "tests/fixtures/reddit.atom" org-defuddle-test--root))
+                  (buffer-string)))
+           (org (org-defuddle-reddit-atom-to-org
+                 xml "https://www.reddit.com/r/emacs/comments/example/topic/"
+                 '(:remove-images t :include-replies nil))))
+      (should (string-match-p "A & B discussion" org))
+      (should (string-match-p "Post with & entities" org))
+      (should-not (string-match-p "Helpful reply" org))
+      (should-not (string-match-p "photo.jpg" org)))))
+
 (provide 'org-defuddle-test)
 
 ;;; org-defuddle-test.el ends here

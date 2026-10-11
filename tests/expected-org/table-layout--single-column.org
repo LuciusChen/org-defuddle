@@ -1,5 +1,8 @@
 * My Homepage
 :PROPERTIES:
+:URL: https://table-layout--single-column/
+:SITE: table-layout--single-column
+:DOMAIN: table-layout--single-column
 :LANGUAGE: en
 :WORD_COUNT: 32
 :END:
@@ -12,7 +15,7 @@ Hello, welcome to my website!
 
 - [[https://example.com/project-one][Project One]] - a cool project
 - [[https://example.com/project-two][Project Two]] - another project
-- [[/local-page.html][Local Page]]
+- [[https://table-layout--single-column/local-page.html][Local Page]]
 
 ** Contact
 

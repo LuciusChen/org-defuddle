@@ -1,5 +1,8 @@
 * Example Article
 :PROPERTIES:
+:URL: https://orgmode-css-sidenotes/
+:SITE: orgmode-css-sidenotes
+:DOMAIN: orgmode-css-sidenotes
 :WORD_COUNT: 54
 :END:
 

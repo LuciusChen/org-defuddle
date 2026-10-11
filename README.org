@@ -3,9 +3,8 @@
 ~org-defuddle~ is intended to be a Rust rewrite of [[https://github.com/kepano/defuddle][kepano/defuddle]] with an
 Emacs dynamic module frontend that inserts extracted readable content into Org.
 
-The current reference snapshot is upstream commit ~6152604~. The long-term goal
-is feature parity with defuddle's extraction
-pipeline: metadata, schema.org fallback, DOM cleanup, scoring, site-specific
+The current reference snapshot is upstream commit ~556d74e~ (0.19.5 plus the latest YouTube fixes), pinned in
+~tests/upstream-revision~. The long-term goal is feature parity with defuddle's extraction pipeline: metadata, schema.org fallback, DOM cleanup, scoring, site-specific
 extractors, media handling, footnotes, math/code normalization, and Org content
 conversion.
 
@@ -99,8 +98,9 @@ upgrade from silently loading an older native module.  Customize
 
 * Building From Source
 
-Building requires the Rust toolchain and is only needed for development or an
-unsupported release platform.
+Building requires Rust 1.80 or later and is only needed for development or an
+unsupported release platform. Atom feed parsing uses ~roxmltree~ alongside the
+HTML parser; Node is needed only to build the independent upstream test reference.
 
 #+begin_src sh
 cargo build --release -p org-defuddle-module
@@ -234,7 +234,11 @@ specific language where the site exposes multiple tracks:
 #+end_src
 
 The language option ranks subtitle tracks already exposed by the video service;
-it does not transcribe audio.  When a YouTube video has no caption track,
+it does not transcribe audio. YouTube selection follows the default audio track
+and its default caption index, then the original language (with manual captions
+preferred within that language), regional English, and remaining tracks. An
+explicit language takes precedence. Inline player data from another video is
+rejected. When a YouTube video has no caption track,
 extraction falls back to the video metadata and description without a
 transcript.
 
@@ -356,10 +360,10 @@ For local HTML:
 
 This repository targets Defuddle extraction parity with Org as the canonical
 output. It does not target byte-for-byte Markdown output or the JavaScript
-public API. The fixture harness covers all 203 upstream fixture HTML files in
+public API. The fixture harness covers all 226 upstream fixture HTML files in
 the inspected defuddle snapshot. Every fixture strictly matches the upstream
 expected ~title~, ~author~, ~site~, and ~published~ metadata, alongside
-fixture-specific content and cleanup assertions. All 203 final upstream content
+fixture-specific content and cleanup assertions. All 226 final upstream content
 fragments also match the Rust output exactly after both are rendered through
 the same Org renderer. Every generated Org document is compared byte-for-byte
 with its checked-in snapshot under
@@ -379,15 +383,23 @@ entry point, then compare every upstream final content fragment and every Rust
 final content fragment through the same Org renderer:
 
 #+begin_src sh
-cd /path/to/defuddle && npm ci && npm run build:node
 cd /path/to/org-defuddle
+git -C /path/to/defuddle fetch origin "$(cat tests/upstream-revision)"
+git -C /path/to/defuddle checkout --detach "$(cat tests/upstream-revision)"
+npm --prefix /path/to/defuddle ci
+npm --prefix /path/to/defuddle run build:node
 ORG_DEFUDDLE_DEFUDDLE_DIR=/path/to/defuddle cargo test -p org-defuddle-core \
   --test upstream_fixtures all_upstream_fixture_content_matches_exact_org_rendering \
   -- --ignored
 #+end_src
 
+The fixture tests verify that the upstream checkout matches ~tests/upstream-revision~.
+The release workflow reads the same file and runs this differential gate before
+building release assets. Update that pin, the fixture count, and the snapshots
+together after checking upstream behavior.
+
 This differential test is intentionally ignored in the default suite because
-it requires a separately installed and built upstream Node checkout. The 203
+it requires a separately installed and built upstream Node checkout. The 226
 checked-in Org snapshots remain the normal offline regression gate.
 
 Set ~ORG_DEFUDDLE_DIFF_FIXTURE=<fixture-name>~ on the same command to print the
@@ -395,7 +407,7 @@ exact expected and actual Org for one mismatch.
 
 Known remaining gaps:
 
-- The 203-fixture completion gate proves canonical Org content, not identical
+- The 226-fixture completion gate proves canonical Org content, not identical
   intermediate HTML. Several site extractors still retain a wider DOM container
   than upstream's canonical ~contentHtml~, so serialized ~html~ and
   ~wordCount~ are not yet an exact parity contract.
@@ -599,8 +611,10 @@ Implemented:
   ~picture/source~ fallbacks including source-only ~picture~ elements,
   standalone image ~source~ elements, and cleanup of promoted ~picture source~
   nodes, React-style ~srcSet~,
-  noscript fallbacks, non-standard lazy image attributes that contain direct
-  image URLs or ~srcset~ values,
+  noscript fallbacks, explicit ~data-src~/~data-original~/~data-lazy-src~
+  precedence and ~data-srcset~/~data-lazy-srcset~ sources, with invalid candidates
+  skipped in favor of safe alternatives. Org rendering uses the highest-width
+  responsive source instead of an inline placeholder,
   base64/SVG placeholders with resolvable alternatives, duplicate figure
   images with upstream-style best-resolution selection, adjacent lazy-load
   duplicate image pairs, metadata cover/hero image deduplication with
@@ -738,8 +752,14 @@ Implemented:
 - Selected LeetCode problem extraction, including description-content selection,
   LeetCode title suffix cleanup, relative URL normalization, and problem
   statement/code/list rendering.
+- Selected Gmail thread extraction using stable message-row selectors, subject,
+  sender/date metadata, quote and UI removal, attachment preservation, and reply
+  inclusion controls.
 - Selected Mastodon and Reddit conversation extraction, including automatic
-  ~old.reddit.com~ retrieval for modern comments URLs, main post metadata,
+  ~old.reddit.com~ retrieval for comments URLs and Atom feed fallback when the old
+  host fails or returns a login/blocked page. Both Elisp and CLI use the fallback;
+  Atom preserves post/comment text and image/reply controls, but has no vote
+  counts or nesting. Malformed feeds surface errors. Main post metadata,
   thread continuation text, nested comments, scores/dates, Mastodon
   multi-image media galleries, Reddit media galleries, and Mastodon link cards.
 - Selected arXiv/LaTeXML rendering cleanup for equation tables, cross-reference
@@ -825,7 +845,7 @@ Implemented:
   plus UI/form-oriented ~label~ cleanup that preserves flowing prose labels and
   footnote/sidenote labels. It preserves guarded math scripts, source-backed
   audio/video, gradient ad content, and callout asides. Partial selector
-  cleanup includes all 542 patterns from the inspected upstream snapshot in
+  cleanup includes all 539 patterns from the inspected upstream snapshot in
   source order. It follows upstream code-block, main-content ancestor, heading,
   negative-lookbehind, footnote, math, and id guards. Main content is selected
   before selector cleanup, matching the upstream pipeline, so noise removal
@@ -834,7 +854,7 @@ Implemented:
   buttons before removing UI controls. Debug/profile records from this pass use
   the upstream ~removeBySelector~ step name.
 - Upstream defuddle fixture smoke tests that validate strict expected metadata
-  for all 203 fixtures and selected Org content across JavaScript links, code
+  for all 226 fixtures and selected Org content across JavaScript links, code
   blocks, syntax highlighter
   cleanup including selected table-based codeblock layouts, hidden nodes with
   substantial aria-hidden content preservation, content-bearing hidden dialog
@@ -888,7 +908,7 @@ Implemented:
   equations, Wikipedia MathML, full MathJax MathML samples, KaTeX Centraliser
   output, and selected MathJax CHTML output without assistive MathML, using
   ~ORG_DEFUDDLE_DEFUDDLE_DIR~ or the local ~/private/tmp/defuddle-elisp-source~
-  checkout. Checked-in exact Org snapshots cover all 203 fixtures and the test
+  checkout. Checked-in exact Org snapshots cover all 226 fixtures and the test
   requires the snapshot filename set to match the upstream fixture set.
 - Project-level agent instructions in ~AGENTS.md~ adapted from
   ~/repos/coding-guidelines~.

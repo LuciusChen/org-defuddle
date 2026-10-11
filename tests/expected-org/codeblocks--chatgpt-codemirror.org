@@ -1,8 +1,9 @@
-* ChatGPT
+* Fibonacci in Python
 :PROPERTIES:
 :URL: https://chatgpt.com/share/example-12345
+:SITE: chatgpt.com
 :DOMAIN: chatgpt.com
-:WORD_COUNT: 43
+:WORD_COUNT: 40
 :END:
 
 Here is a generator-based implementation:

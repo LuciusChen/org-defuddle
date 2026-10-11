@@ -1,5 +1,8 @@
 * arXiv Cross-References
 :PROPERTIES:
+:URL: https://143-arxiv-cross-references/
+:SITE: 143-arxiv-cross-references
+:DOMAIN: 143-arxiv-cross-references
 :LANGUAGE: en
 :WORD_COUNT: 35
 :END:

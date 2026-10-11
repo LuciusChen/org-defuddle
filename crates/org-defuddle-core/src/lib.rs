@@ -88,6 +88,8 @@ pub enum DefuddleError {
     Serialize(String),
     #[error("failed to parse JSON: {0}")]
     Json(String),
+    #[error("failed to parse XML: {0}")]
+    Xml(String),
 }
 
 #[derive(Debug, Clone)]
@@ -828,6 +830,7 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     ".Sidebar",
     ".newsletter",
     ".pagination",
+    "ignore",
     ".book-card .metadata",
     ".infobox",
     ".mw-editsection",
@@ -876,7 +879,6 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     "[data-orientation=\"vertical\"]",
     ".gh-header-sticky",
     "[data-testid=\"issue-metadata-sticky\"]",
-    ".sr-only",
     "#siteNotice",
     "#siteSub",
     "#contentSub",
@@ -988,6 +990,8 @@ pub fn render_html_fragment_to_org(html: &str) -> String {
 
 fn find_largest_hidden_content_selector(html: &str) -> Option<String> {
     let document = kuchiki::parse_html().one(html);
+    flatten_serialized_shadow_roots(&document);
+    materialize_react_streaming_content(&document);
     let matches = document.select("*").ok()?;
     let mut best: Option<(NodeRef, usize)> = None;
 
@@ -1153,6 +1157,14 @@ fn parse_html_to_org_once(
         return Ok(output);
     }
     if let Some(output) = reddit_output(
+        &document,
+        options.url.as_deref(),
+        options.include_images,
+        options.include_replies,
+    )? {
+        return Ok(output);
+    }
+    if let Some(output) = gmail_output(
         &document,
         options.url.as_deref(),
         options.include_images,
@@ -1927,6 +1939,139 @@ pub fn parse_bilibili_api_to_org(
     bilibili_output(view, subtitle_json, provided_url, language_code)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedditSources {
+    pub old_url: String,
+    pub feed_url: String,
+}
+
+pub fn reddit_sources(url: &str) -> Option<RedditSources> {
+    let mut parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !(host == "reddit.com" || host.ends_with(".reddit.com"))
+    {
+        return None;
+    }
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    if segments.first() != Some(&"r")
+        || segments.get(2) != Some(&"comments")
+        || segments.get(3).map_or(true, |id| id.is_empty())
+    {
+        return None;
+    }
+    parsed.set_fragment(None);
+    parsed.set_host(Some("old.reddit.com")).ok()?;
+    let old_url = parsed.to_string();
+    parsed.set_host(Some("www.reddit.com")).ok()?;
+    let path = format!(
+        "{}/.rss",
+        parsed
+            .path()
+            .trim_end_matches('/')
+            .trim_end_matches("/.rss")
+    );
+    parsed.set_path(&path);
+    Some(RedditSources {
+        old_url,
+        feed_url: parsed.to_string(),
+    })
+}
+
+pub fn parse_reddit_atom_to_org(
+    xml: &str,
+    url: &str,
+    include_images: bool,
+    include_replies: IncludeReplies,
+) -> Result<DefuddleOutput, DefuddleError> {
+    let document =
+        roxmltree::Document::parse(xml).map_err(|err| DefuddleError::Xml(err.to_string()))?;
+    if document.root_element().tag_name().name() != "feed" {
+        return Err(DefuddleError::Xml("expected an Atom feed".to_string()));
+    }
+    fn field(entry: roxmltree::Node<'_, '_>, name: &str) -> String {
+        entry
+            .children()
+            .find(|node| node.is_element() && node.tag_name().name() == name)
+            .and_then(|node| node.text())
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+    let mut post = None;
+    let mut comments = Vec::new();
+    for entry in document
+        .root_element()
+        .children()
+        .filter(|node| node.is_element() && node.tag_name().name() == "entry")
+    {
+        let id = field(entry, "id");
+        if !id.starts_with("t3_") && !(include_replies.extractor_replies() && id.starts_with("t1_"))
+        {
+            continue;
+        }
+        let author = entry
+            .children()
+            .find(|node| node.is_element() && node.tag_name().name() == "author")
+            .map(|node| field(node, "name"))
+            .unwrap_or_default()
+            .trim_start_matches("/u/")
+            .to_string();
+        let raw = field(entry, "content");
+        let html_document = kuchiki::parse_html().one(raw);
+        strip_unsafe_elements(&html_document);
+        sanitize_links(&html_document);
+        resolve_relative_urls(&html_document, url);
+        if !include_images {
+            remove_content_images(&html_document);
+        }
+        let content_node = select_first_node(&html_document, ".md")
+            .or_else(|| select_first_node(&html_document, "body"))
+            .unwrap_or(html_document);
+        let content = serialize_children_html(&content_node);
+        if id.starts_with("t3_") && post.is_none() {
+            post = Some((field(entry, "title"), author, content));
+        } else if id.starts_with("t1_") {
+            let link = entry
+                .children()
+                .find(|node| {
+                    node.is_element()
+                        && node.tag_name().name() == "link"
+                        && node.attribute("rel").unwrap_or("alternate") == "alternate"
+                })
+                .and_then(|node| node.attribute("href"))
+                .and_then(|href| absolutize_url(Some(url), href))
+                .filter(|href| !is_dangerous_url(href));
+            comments.push(format!("<blockquote><div class=\"comment\"><div class=\"comment-metadata\"><strong>{}</strong> · {}</div><div class=\"comment-content\">{}</div></div></blockquote>",
+                escape_html_text(&author), link.map(|link| format!("<a href=\"{}\">{}</a>", escape_html_attr(&link), escape_html_text(&date_part(&field(entry, "updated"))))).unwrap_or_else(|| escape_html_text(&date_part(&field(entry, "updated")))), content));
+        }
+    }
+    let (title, author, content) =
+        post.ok_or_else(|| DefuddleError::Xml("Atom feed has no Reddit post entry".to_string()))?;
+    let parsed_url = Url::parse(url).map_err(|err| DefuddleError::Xml(err.to_string()))?;
+    let subreddit = parsed_url
+        .path_segments()
+        .and_then(|mut segments| segments.nth(1))
+        .unwrap_or_default();
+    let metadata = Metadata {
+        title,
+        author,
+        site: format!("r/{subreddit}"),
+        url: url.to_string(),
+        domain: parsed_url.host_str().unwrap_or_default().to_string(),
+        description: normalize_ws(&kuchiki::parse_html().one(content.clone()).text_contents()),
+        ..Metadata::default()
+    };
+    let html = standardized_post_comments_html("reddit", &content, &comments.join(""));
+    Ok(standard_extractor_output(
+        metadata,
+        html.clone(),
+        &render_html_fragment_to_org(&html),
+        count_html_words(&html),
+        "reddit",
+    ))
+}
+
 pub fn youtube_caption_info(
     player_json: &str,
     preferred_language: Option<&str>,
@@ -1936,6 +2081,7 @@ pub fn youtube_caption_info(
     Ok(youtube_pick_caption_track(
         &youtube_caption_tracks(&value),
         preferred_language,
+        &value,
     ))
 }
 
@@ -1953,9 +2099,11 @@ pub fn youtube_inline_caption_info(
     let Some(player) = player else {
         return Ok(None);
     };
-    let Some(caption) =
-        youtube_pick_caption_track(&youtube_caption_tracks(&player), preferred_language)
-    else {
+    let Some(caption) = youtube_pick_caption_track(
+        &youtube_caption_tracks(&player),
+        preferred_language,
+        &player,
+    ) else {
         return Ok(None);
     };
     let player_json =
@@ -2333,9 +2481,6 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
     let proximity = extract_h1_sibling_metadata(document);
     let steam_event = extract_steam_event(document);
     let canonical = select_attr(document, "link[rel=\"canonical\"]", "href");
-    let has_canonical = canonical
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
     let raw_url = first_present(&[
         provided_url.map(str::to_owned),
         meta_content(document, "property", "og:url"),
@@ -2392,7 +2537,9 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
         h1_title.clone(),
     ])
     .unwrap_or_default();
-    let raw_title = if should_prefer_h1_title(&raw_title, h1_title.as_deref()) {
+    let raw_title = if should_prefer_h1_title(&raw_title, h1_title.as_deref())
+        || (h1_title.is_some() && title_is_site_identifier(&raw_title, &site_name, &domain))
+    {
         h1_title.clone().unwrap_or(raw_title)
     } else {
         raw_title
@@ -2449,7 +2596,7 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
         Some(site_name),
         known_site_name_for_domain(&domain),
         author_as_site,
-        has_canonical.then(|| domain.clone()),
+        Some(domain.clone()),
     ])
     .unwrap_or_default();
     let favicon = first_present(&[
@@ -3671,8 +3818,20 @@ fn github_first_comment_body(document: &NodeRef) -> Option<NodeRef> {
     select_first_node(document, ".comment-body.markdown-body")
 }
 
+fn github_has_description_heading(document: &NodeRef) -> bool {
+    document
+        .select(".react-issue-body > h2.sr-only")
+        .is_ok_and(|mut headings| {
+            headings
+                .any(|heading| normalize_ws(&heading.as_node().text_contents()) == "Description")
+        })
+}
+
 fn github_issue_body_org(document: &NodeRef, primary_body: &NodeRef) -> String {
     let mut parts = Vec::new();
+    if github_has_description_heading(document) {
+        parts.push("** Description".to_string());
+    }
     if let Some(author) = github_issue_author_link_org(document) {
         parts.push(author);
     }
@@ -3808,6 +3967,9 @@ fn github_body_html(
 
 fn github_issue_body_html(document: &NodeRef, primary_html: &str) -> String {
     let mut parts = Vec::new();
+    if github_has_description_heading(document) {
+        parts.push("<h2>Description</h2>".to_string());
+    }
     if let Some(author) = select_first_node(document, "[data-testid=\"issue-body-header-author\"]")
     {
         let text = cleanup_inline(&author.text_contents());
@@ -3911,7 +4073,7 @@ fn remove_github_chrome(document: &NodeRef) {
         ".js-clipboard-copy",
         ".ClipboardButton",
         "[role=\"toolbar\"]",
-        ".sr-only",
+        ".sr-only:not(h2)",
         "button",
     ] {
         let Ok(matches) = document.select(selector) else {
@@ -5194,6 +5356,7 @@ struct YoutubeTranscript {
 
 #[derive(Debug, Clone)]
 struct YoutubeCaptionTrack {
+    index: usize,
     base_url: String,
     language_code: String,
     kind: String,
@@ -5706,7 +5869,8 @@ fn youtube_caption_tracks(player: &Value) -> Vec<YoutubeCaptionTrack> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|track| {
+        .enumerate()
+        .filter_map(|(index, track)| {
             let base_url = track.get("baseUrl").and_then(Value::as_str)?.trim();
             let language_code = track
                 .get("languageCode")
@@ -5719,6 +5883,7 @@ fn youtube_caption_tracks(player: &Value) -> Vec<YoutubeCaptionTrack> {
                 .unwrap_or_default()
                 .trim();
             youtube_caption_url_is_allowed(base_url).then_some(YoutubeCaptionTrack {
+                index,
                 base_url: base_url.to_string(),
                 language_code: language_code.to_string(),
                 kind: kind.to_string(),
@@ -5737,17 +5902,67 @@ fn youtube_caption_url_is_allowed(url: &str) -> bool {
 fn youtube_pick_caption_track(
     tracks: &[YoutubeCaptionTrack],
     preferred_language: Option<&str>,
+    player: &Value,
 ) -> Option<YoutubeCaptionInfo> {
-    let preferred = preferred_language
-        .map(youtube_normalize_language_code)
-        .filter(|language| !language.is_empty());
-    let selected = preferred
-        .as_deref()
-        .and_then(|language| youtube_find_preferred_caption_track(tracks, language))
+    let renderer = &player["captions"]["playerCaptionsTracklistRenderer"];
+    let audio_tracks = renderer.get("audioTracks").and_then(Value::as_array);
+    let default_audio = audio_tracks.and_then(|audio| {
+        renderer
+            .get("defaultAudioTrackIndex")
+            .and_then(Value::as_u64)
+            .and_then(|index| audio.get(index as usize))
+            .or_else(|| (audio.len() == 1).then(|| &audio[0]))
+    });
+    let explicit_audio = default_audio.or_else(|| audio_tracks.and_then(|audio| audio.first()));
+    let indexed = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_u64)
+            .and_then(|index| tracks.iter().find(|track| track.index == index as usize))
+    };
+    let default_caption =
+        indexed(explicit_audio.and_then(|audio| audio.get("defaultCaptionTrackIndex")))
+            .or_else(|| indexed(renderer.get("defaultCaptionTrackIndex")));
+    let original_language = default_audio
+        .and_then(|audio| audio.get("audioTrackId"))
+        .and_then(Value::as_str)
+        .and_then(|id| id.split('.').next());
+    let audio_asr = default_audio
+        .and_then(|audio| audio.get("captionTrackIndices"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|index| indexed(Some(index)))
+        .find(|track| track.kind == "asr");
+    let original_asr = audio_asr.or_else(|| tracks.iter().find(|track| track.kind == "asr"));
+    let selected = preferred_language
+        .filter(|language| !language.trim().is_empty())
+        .and_then(|language| youtube_find_preferred_caption_track(tracks, language, false))
+        .or(default_caption)
+        .or_else(|| {
+            original_language.and_then(|language| {
+                youtube_find_preferred_caption_track(tracks, language, true)
+                    .or_else(|| youtube_find_preferred_caption_track(tracks, language, false))
+            })
+        })
+        .or_else(|| {
+            original_asr.and_then(|track| {
+                let base = youtube_normalize_language_code(&track.language_code);
+                tracks
+                    .iter()
+                    .find(|candidate| {
+                        candidate.kind != "asr"
+                            && youtube_normalize_language_code(&candidate.language_code)
+                                .split('-')
+                                .next()
+                                == base.split('-').next()
+                    })
+                    .or(Some(track))
+            })
+        })
         .or_else(|| {
             let manual = tracks
                 .iter()
-                .filter(|track| !track.kind.eq_ignore_ascii_case("asr"))
+                .filter(|track| track.kind != "asr")
                 .collect::<Vec<_>>();
             let pool = if manual.is_empty() {
                 tracks.iter().collect::<Vec<_>>()
@@ -5757,11 +5972,13 @@ fn youtube_pick_caption_track(
             pool.iter()
                 .copied()
                 .find(|track| {
-                    youtube_normalize_language_code(&track.language_code).as_str() == "en"
+                    youtube_normalize_language_code(&track.language_code)
+                        .split('-')
+                        .next()
+                        == Some("en")
                 })
                 .or_else(|| pool.first().copied())
         })?;
-
     Some(YoutubeCaptionInfo {
         caption_url: selected.base_url.clone(),
         language: youtube_normalize_language_code(&selected.language_code),
@@ -5771,12 +5988,14 @@ fn youtube_pick_caption_track(
 fn youtube_find_preferred_caption_track<'a>(
     tracks: &'a [YoutubeCaptionTrack],
     preferred_language: &str,
+    manual_only: bool,
 ) -> Option<&'a YoutubeCaptionTrack> {
     let preferred = youtube_normalize_language_code(preferred_language);
     let base = preferred.split('-').next().unwrap_or_default();
     for specificity in 0..3 {
         let matches = tracks
             .iter()
+            .filter(|track| !manual_only || track.kind != "asr")
             .filter(|track| {
                 let code = youtube_normalize_language_code(&track.language_code);
                 match specificity {
@@ -7452,6 +7671,36 @@ fn medium_output(
 
     let metadata = medium_metadata(document, provided_url, &article);
     medium_clean_article(&article);
+    let byline_links = article
+        .select("a[href]")
+        .map(|links| {
+            links
+                .filter_map(|link| {
+                    let node = link.as_node();
+                    let author_text = same_text_ignore_ascii_case(
+                        &normalize_ws(&node.text_contents()),
+                        &metadata.author,
+                    );
+                    let author_photo = select_first_node(node, "img[alt]").is_some_and(|image| {
+                        let element = image.as_element().unwrap();
+                        let attrs = element.attributes.borrow();
+                        attrs
+                            .get("alt")
+                            .is_some_and(|alt| same_text_ignore_ascii_case(alt, &metadata.author))
+                            && image_dimension_hints(&attrs)
+                                .is_some_and(|(w, h)| w <= 100.0 && h <= 100.0)
+                    });
+                    (!metadata.author.is_empty()
+                        && (author_text || author_photo)
+                        && count_preceding_words(&article, node) < 25)
+                        .then(|| node.clone())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for node in byline_links {
+        highest_same_text_wrapper(&node, &article).detach();
+    }
     normalize_images(&article);
     standardize_headings(&article, &metadata.title);
     sanitize_links(&article);
@@ -8888,6 +9137,7 @@ fn x_metadata(
     ])
     .unwrap_or_else(|| "X".to_string());
     let author = first_present(&[
+        article.and_then(|_| url.and_then(x_status_author_from_url)),
         x_itemprop_author(document),
         meta_content(document, "property", "og:title")
             .and_then(|title| x_author_from_page_title(&title)),
@@ -12290,6 +12540,164 @@ fn mastodon_comment_html(comment: &MastodonStatus) -> String {
     )
 }
 
+fn gmail_output(
+    document: &NodeRef,
+    provided_url: Option<&str>,
+    include_images: bool,
+    include_replies: IncludeReplies,
+) -> Result<Option<DefuddleOutput>, DefuddleError> {
+    if !provided_url
+        .and_then(|url| Url::parse(url).ok())
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| host == "mail.google.com")
+    {
+        return Ok(None);
+    }
+    let rows = document
+        .select(".adn.ads")
+        .map(|rows| rows.map(|row| row.as_node().clone()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let mut messages = Vec::new();
+    for row in rows {
+        let Some(body) = select_first_node(&row, ".a3s") else {
+            continue;
+        };
+        let quoted_or_ui_nodes = body
+            .select(".gmail_quote, .gmail_attr, .gmail_extra, blockquote[type=\"cite\"], .moz-cite-prefix, blockquote[style*=\"border-left\"], .yahoo_quoted, .a6S, .adL, .h5, .adm, .ajR, .ajT, .h4, .yj6qo")
+            .expect("valid Gmail cleanup selector")
+            .map(|node| node.as_node().clone())
+            .collect::<Vec<_>>();
+        for node in quoted_or_ui_nodes {
+            node.detach();
+        }
+        strip_unsafe_elements(&body);
+        strip_gmail_plain_quotes(&body);
+        trim_gmail_trailing_blanks(&body);
+        remove_empty_elements(&body);
+        sanitize_links(&body);
+        resolve_relative_urls(&body, provided_url.unwrap_or_default());
+        if !include_images {
+            remove_content_images(&body);
+        }
+        let content = serialize_children_html(&body);
+        if content.trim().is_empty() {
+            continue;
+        }
+        let author = select_attr(&row, ".gD", "name")
+            .or_else(|| select_text(&row, ".gD"))
+            .unwrap_or_else(|| "Unknown".to_string());
+        let email = select_attr(&row, ".gD", "email").unwrap_or_default();
+        let date = select_attr(&row, ".g3", "title")
+            .or_else(|| select_text(&row, ".g3"))
+            .unwrap_or_default();
+        messages.push((author, email, date, content));
+    }
+    let Some(first) = messages.first() else {
+        return Ok(None);
+    };
+    let mut metadata = extract_metadata(document, provided_url);
+    metadata.title = select_text(document, "h2.hP").unwrap_or_else(|| {
+        static SUFFIX: Lazy<Regex> = Lazy::new(|| Regex::new(r" - [^-]+ - Gmail$").unwrap());
+        SUFFIX
+            .replace(&select_text(document, "title").unwrap_or_default(), "")
+            .to_string()
+    });
+    metadata.author = first.0.clone();
+    metadata.site = "Gmail".to_string();
+    metadata.published = parse_english_date_to_utc(&first.2)
+        .map(|date| date_part(&date))
+        .unwrap_or_default();
+    metadata.description = format!(
+        "Gmail thread from {} with {} messages",
+        first.0,
+        messages.len()
+    );
+    let mut html = String::from("<article data-defuddle><div class=\"gmail comments\">");
+    for (author, _, date, content) in messages
+        .iter()
+        .take(if include_replies.extractor_replies() {
+            messages.len()
+        } else {
+            1
+        })
+    {
+        html.push_str(&format!("<blockquote><div class=\"comment\"><div class=\"comment-metadata\"><span class=\"comment-author\"><strong>{}</strong></span> · <span class=\"comment-date\">{}</span></div><div class=\"comment-content\">{}</div></div></blockquote>", escape_html_text(author), escape_html_text(date), content));
+    }
+    html.push_str("</div></article>");
+    let mut output = standard_extractor_output(
+        metadata,
+        html.clone(),
+        &render_html_fragment_to_org(&html),
+        count_html_words(&html),
+        "gmail",
+    );
+    let variables = output.variables.get_or_insert_with(HashMap::new);
+    variables.insert("messageCount".to_string(), messages.len().to_string());
+    if !first.1.is_empty() {
+        variables.insert("postAuthor".to_string(), first.1.clone());
+    }
+    Ok(Some(output))
+}
+
+fn strip_gmail_plain_quotes(root: &NodeRef) {
+    fn walk(parent: &NodeRef, line: &mut Vec<NodeRef>, lines: &mut Vec<Vec<NodeRef>>) {
+        for child in parent.children() {
+            match tag_name(&child).as_deref() {
+                Some("br") => {
+                    line.push(child);
+                    lines.push(std::mem::take(line));
+                }
+                Some("div" | "p" | "blockquote" | "ul" | "ol" | "li") => {
+                    lines.push(std::mem::take(line));
+                    walk(&child, line, lines);
+                    lines.push(std::mem::take(line));
+                }
+                Some(_) if count_selector(&child, "br") > 0 => walk(&child, line, lines),
+                _ => line.push(child),
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    let mut line = Vec::new();
+    walk(root, &mut line, &mut lines);
+    lines.push(line);
+    for line in lines {
+        if line
+            .iter()
+            .map(NodeRef::text_contents)
+            .collect::<String>()
+            .trim_start()
+            .starts_with('>')
+        {
+            for node in line {
+                node.detach();
+            }
+        }
+    }
+}
+
+fn trim_gmail_trailing_blanks(node: &NodeRef) {
+    while let Some(last) = node.last_child() {
+        if last.text_contents().trim().is_empty()
+            && !matches!(
+                tag_name(&last).as_deref(),
+                Some("img" | "picture" | "video" | "audio" | "iframe" | "svg" | "canvas")
+            )
+            && count_selector(&last, "img, picture, video, audio, iframe, svg, canvas") == 0
+        {
+            last.detach();
+        } else {
+            if last.as_element().is_some() {
+                trim_gmail_trailing_blanks(&last);
+            }
+            break;
+        }
+    }
+}
+
 fn reddit_output(
     document: &NodeRef,
     provided_url: Option<&str>,
@@ -13410,13 +13818,16 @@ fn lesswrong_published(document: &NodeRef, domain: &str) -> Option<String> {
 }
 
 fn daring_fireball_author(document: &NodeRef, domain: &str) -> Option<String> {
-    (domain == "daringfireball.net")
-        .then(|| select_text(document, "#Sidebar p strong"))
-        .flatten()
+    (domain == "daringfireball.net"
+        || meta_content(document, "name", "twitter:site").as_deref() == Some("@daringfireball"))
+    .then(|| select_text(document, "#Sidebar p strong"))
+    .flatten()
 }
 
 fn daring_fireball_published(document: &NodeRef, domain: &str) -> Option<String> {
-    if domain != "daringfireball.net" {
+    if domain != "daringfireball.net"
+        && meta_content(document, "name", "twitter:site").as_deref() != Some("@daringfireball")
+    {
         return None;
     }
     select_text(document, ".dateline").and_then(|text| parse_english_date_to_utc(&text))
@@ -13600,6 +14011,22 @@ fn is_author_metadata_line(line: &MetadataLine) -> bool {
         || text_lc.starts_with("written by ")
         || text_lc.contains(" author");
     explicit_author_signal || !text.ends_with(['.', '!', '?'])
+}
+
+fn title_is_site_identifier(title: &str, site: &str, domain: &str) -> bool {
+    let normalized = |value: &str| {
+        value
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let domain = domain
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(domain);
+    (!site.is_empty() && title.eq_ignore_ascii_case(site))
+        || (!domain.is_empty() && normalized(title) == normalized(domain))
 }
 
 fn should_prefer_h1_title(raw_title: &str, h1: Option<&str>) -> bool {
@@ -13868,7 +14295,14 @@ fn flatten_serialized_shadow_roots(document: &NodeRef) {
             .children()
             .filter_map(|child| serialize_node(&child).ok())
             .collect::<String>();
-        replace_shadow_host(&host, &shadow_html);
+        if is_html_or_body_node(&host) {
+            for child in template_contents.children().collect::<Vec<_>>() {
+                template.insert_before(child);
+            }
+            template.detach();
+        } else {
+            replace_shadow_host(&host, &shadow_html);
+        }
     }
 }
 
@@ -15227,6 +15661,46 @@ fn remove_partial_noise(
             &node,
         );
         node.detach();
+    }
+    remove_screen_reader_link_annotations(document);
+}
+
+fn remove_screen_reader_link_annotations(document: &NodeRef) {
+    static ANNOTATION: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)^[\s,(–-]*(?:(?:link )?opens in (?:a )?new (?:window|tab)|new (?:window|tab)|external(?: link| site| website)?)[\s).]*$").unwrap()
+    });
+    fn screen_reader(node: &NodeRef) -> bool {
+        element_attr(node, "class").is_some_and(|class| {
+            ["sr-only", "visually-hidden", "screen-reader-text"]
+                .iter()
+                .any(|name| class.contains(name))
+        })
+    }
+    fn visible_text(node: &NodeRef) -> bool {
+        node.children().any(|child| match child.data() {
+            NodeData::Text(text) => !text.borrow().trim().is_empty(),
+            NodeData::Element(_) => !screen_reader(&child) && visible_text(&child),
+            _ => false,
+        })
+    }
+    let Ok(matches) = document.select("a [class]") else {
+        return;
+    };
+    let annotations = matches
+        .map(|m| m.as_node().clone())
+        .filter(|node| {
+            screen_reader(node)
+                && ANNOTATION.is_match(&node.text_contents())
+                && !has_ancestor_tag(node, &["pre", "code"])
+        })
+        .filter(|node| {
+            node.ancestors()
+                .find(|parent| tag_name(parent).as_deref() == Some("a"))
+                .is_some_and(|link| visible_text(&link))
+        })
+        .collect::<Vec<_>>();
+    for annotation in annotations {
+        annotation.detach();
     }
 }
 
@@ -17524,51 +17998,29 @@ fn normalize_lazy_images(document: &NodeRef) {
         normalize_case_insensitive_attr(&mut attrs, "srcset");
         normalize_case_insensitive_attr(&mut attrs, "src");
 
-        if attrs.get("srcset").is_none() {
-            if let Some(srcset) = first_existing_attr(
-                &attrs,
-                &[
-                    "data-srcset",
-                    "data-lazy-srcset",
-                    "data-original-srcset",
-                    "data-hi-res-srcset",
-                ],
-            )
-            .or_else(|| generic_image_srcset_attr(&attrs))
+        for (target, sources) in [
+            ("src", &["data-src", "data-original", "data-lazy-src"][..]),
+            ("srcset", &["data-srcset", "data-lazy-srcset"][..]),
+        ] {
+            if let Some(value) = sources
+                .iter()
+                .filter_map(|name| attrs.get(*name))
+                .map(str::trim)
+                .find(|value| !value.is_empty() && !is_dangerous_url(value))
+                .map(str::to_string)
             {
-                attrs.insert("srcset", srcset);
+                attrs.insert(target, value);
             }
         }
-
-        let current_srcset = attrs.get("srcset").map(str::to_owned);
-        let current_src = attrs.get("src").unwrap_or_default().to_string();
-
-        let replacement_src = first_existing_attr(
-            &attrs,
-            &[
-                "data-src",
-                "data-lazy-src",
-                "data-original",
-                "data-original-src",
-                "data-image-loader",
-                "data-full-src",
-                "data-hi-res-src",
-            ],
-        )
-        .or_else(|| generic_image_src_attr(&attrs, &current_src))
-        .or_else(|| attrs.get("srcset").and_then(first_srcset_url))
-        .filter(|src| is_valid_image_src(src));
-
-        if let Some(src) = replacement_src {
-            if current_src.is_empty()
-                || is_placeholder_image_src(&current_src)
-                || !is_valid_image_src(&current_src)
+        let current = attrs.get("src").unwrap_or_default();
+        if current.is_empty() || is_placeholder_image_src(current) {
+            if let Some(loader) = attrs
+                .get("data-image-loader")
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && !is_dangerous_url(value))
+                .map(str::to_string)
             {
-                attrs.insert("src", src);
-            }
-        } else if current_src.is_empty() || is_placeholder_image_src(&current_src) {
-            if let Some(src) = current_srcset.as_deref().and_then(first_srcset_url) {
-                attrs.insert("src", src);
+                attrs.insert("src", loader);
             }
         }
 
@@ -17587,56 +18039,6 @@ fn normalize_lazy_images(document: &NodeRef) {
         }
         remove_class_tokens(&mut attrs, &["lazy", "lazyload"]);
     }
-}
-
-fn generic_image_srcset_attr(attrs: &kuchiki::Attributes) -> Option<String> {
-    attrs.map.keys().find_map(|key| {
-        let name = key.local.as_ref();
-        if matches!(name, "src" | "srcset" | "alt") {
-            return None;
-        }
-        let value = attrs.get(name)?.trim();
-        if image_attr_value_is_json_like(value) {
-            return None;
-        }
-        (looks_like_generic_image_srcset(value)).then(|| value.to_string())
-    })
-}
-
-fn generic_image_src_attr(attrs: &kuchiki::Attributes, current_src: &str) -> Option<String> {
-    let current_src_is_absolute = current_src.trim_start().starts_with("http://")
-        || current_src.trim_start().starts_with("https://");
-
-    attrs.map.keys().find_map(|key| {
-        let name = key.local.as_ref();
-        if matches!(name, "src" | "srcset" | "alt") {
-            return None;
-        }
-        let value = attrs.get(name)?.trim();
-        if image_attr_value_is_json_like(value) || !looks_like_generic_image_url(value) {
-            return None;
-        }
-        let candidate_is_absolute =
-            value.trim_start().starts_with("http://") || value.trim_start().starts_with("https://");
-        (!current_src_is_absolute || candidate_is_absolute).then(|| value.to_string())
-    })
-}
-
-fn image_attr_value_is_json_like(value: &str) -> bool {
-    matches!(value.trim_start().chars().next(), Some('{' | '['))
-}
-
-fn looks_like_generic_image_srcset(value: &str) -> bool {
-    srcset_descriptor_candidates(value)
-        .iter()
-        .any(|(url, _)| looks_like_generic_image_url(url))
-}
-
-fn looks_like_generic_image_url(value: &str) -> bool {
-    static IMAGE_URL_ATTR_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)^\s*\S+\.(?:avif|gif|jpe?g|png|webp)(?:[?#]\S*)?\s*$").unwrap()
-    });
-    IMAGE_URL_ATTR_RE.is_match(value) && is_valid_image_src(value)
 }
 
 fn remove_class_tokens(attrs: &mut kuchiki::Attributes, tokens: &[&str]) {
@@ -18324,6 +18726,7 @@ fn remove_content_patterns(
     remove_trailing_heading_sections(main, &mut debug_removals);
     remove_related_content_intros(main, &mut debug_removals);
     remove_newsletter_signup_blocks(main, &mut debug_removals);
+    remove_headingless_related_grids(main, &mut debug_removals);
     remove_trailing_related_posts_blocks(main, &mut debug_removals);
     remove_trailing_thin_sections(main, &mut debug_removals);
     remove_trailing_non_content(main, &mut debug_removals);
@@ -18961,6 +19364,37 @@ fn trailing_heading_section_nodes(heading: &NodeRef) -> Option<Vec<NodeRef>> {
     }
 
     (following_elements > 0 && following_words <= 160).then_some(nodes)
+}
+
+fn remove_headingless_related_grids(main: &NodeRef, debug: &mut Option<&mut Vec<DebugRemoval>>) {
+    let Ok(matches) = main.select("div, ul, ol") else {
+        return;
+    };
+    let grids = matches
+        .map(|m| m.as_node().clone())
+        .filter(|node| {
+            let children = element_children(node);
+            if children.len() < 2
+                || count_preceding_words(main, node) < 100
+                || count_following_words(main, node) >= 25
+            {
+                return false;
+            }
+            let cards = children
+                .iter()
+                .filter(|child| {
+                    count_selector(child, "img, picture") > 0
+                        && count_selector(child, "a[href]") > 0
+                })
+                .count();
+            cards >= 2
+                && cards * 10 >= children.len() * 7
+                && count_words(&node.text_contents()) * 10 <= count_words(&main.text_contents()) * 3
+        })
+        .collect::<Vec<_>>();
+    for grid in grids {
+        detach_content_pattern(debug, "related post card grid", &grid);
+    }
 }
 
 fn remove_trailing_related_posts_blocks(
@@ -23120,6 +23554,20 @@ fn element_selector_path(node: &NodeRef) -> String {
                     part.push_str(&css_identifier(class_name));
                 }
             }
+            let siblings = candidate
+                .parent()
+                .map(|parent| {
+                    element_children(&parent)
+                        .into_iter()
+                        .filter(|sibling| tag_name(sibling).as_deref() == Some(&tag))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if siblings.len() > 1 {
+                if let Some(index) = siblings.iter().position(|sibling| sibling == &candidate) {
+                    part.push_str(&format!(":nth-of-type({})", index + 1));
+                }
+            }
             parts.push(part);
         }
         current = candidate.parent();
@@ -23829,11 +24277,7 @@ impl MarkdownRenderer {
 
     fn render_image(&mut self, element: &ElementData) {
         let attrs = element.attributes.borrow();
-        let src = attrs
-            .get("srcset")
-            .and_then(best_srcset_url)
-            .or_else(|| attrs.get("src").map(str::to_string))
-            .or_else(|| attrs.get("data-src").map(str::to_string));
+        let src = image_source_for_rendering(&attrs);
         let alt = attrs.get("alt").unwrap_or("");
         let title = attrs.get("title");
         if let Some(src) = src.filter(|src| !src.trim().is_empty() && !is_dangerous_url(src)) {
@@ -24824,12 +25268,12 @@ impl<'a> OrgRenderer<'a> {
 
     fn render_image(&mut self, element: &ElementData) {
         let attrs = element.attributes.borrow();
-        let src = attrs.get("src").or_else(|| attrs.get("data-src"));
+        let src = image_source_for_rendering(&attrs);
         let alt = attrs.get("alt").unwrap_or("");
         if let Some(src) = src.filter(|s| !is_dangerous_url(s)) {
             self.ensure_inline_space("[[");
             self.out.push_str("[[");
-            self.out.push_str(&escape_link(src));
+            self.out.push_str(&escape_link(&src));
             if !alt.trim().is_empty() {
                 self.out.push_str("][");
                 self.out.push_str(&escape_link_text(alt.trim()));
@@ -25294,6 +25738,7 @@ fn collect_footnotes(root: &NodeRef) -> FootnoteState {
     collect_arxiv_bibliography_footnotes(root, &mut state);
     collect_structured_footnotes(root, &mut state);
     collect_easy_footnote_wrapper_fallbacks(root, &mut state);
+    collect_br_separated_footnotes(root, &mut state);
     collect_named_anchor_footnotes(root, &mut state);
     collect_footnote_definition_divs(root, &mut state);
     collect_orgmode_css_footnotes(root, &mut state);
@@ -25460,6 +25905,65 @@ fn collect_easy_footnote_wrapper_fallbacks(root: &NodeRef, state: &mut FootnoteS
     }
 }
 
+fn collect_br_separated_footnotes(root: &NodeRef, state: &mut FootnoteState) {
+    let linked = href_fragments(root).into_iter().collect::<HashSet<_>>();
+    let Ok(blocks) = root.select("p, div") else {
+        return;
+    };
+    for block in blocks {
+        let block = block.as_node();
+        let mut runs = vec![Vec::new()];
+        for child in block.children() {
+            if tag_name(&child).as_deref() == Some("br") {
+                if !runs.last().unwrap().is_empty() {
+                    runs.push(Vec::new());
+                }
+            } else {
+                runs.last_mut().unwrap().push(child);
+            }
+        }
+        runs.retain(|run| {
+            run.iter()
+                .any(|node| !node.text_contents().trim().is_empty() || node.as_element().is_some())
+        });
+        let run_count = runs.len();
+        let definitions = runs
+            .into_iter()
+            .filter_map(|nodes| {
+                let anchor = nodes.iter().find(|node| {
+                    !node.text_contents().trim().is_empty() || node.as_element().is_some()
+                })?;
+                if tag_name(anchor).as_deref() != Some("a") {
+                    return None;
+                }
+                let id = node_id(anchor).or_else(|| element_attr(anchor, "name"))?;
+                if !linked.contains(&id) {
+                    return None;
+                }
+                let content = nodes
+                    .iter()
+                    .filter(|node| *node != anchor)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Some((id, content))
+            })
+            .collect::<Vec<_>>();
+        if definitions.len() < 2 || definitions.len() != run_count {
+            continue;
+        }
+        for (id, nodes) in definitions {
+            if let Some(wrapper) = new_html_element("div") {
+                for node in nodes {
+                    wrapper.append(node);
+                }
+                add_footnote_entry(state, id, wrapper, None);
+            }
+        }
+        state.definition_nodes.insert(node_key(block));
+        mark_previous_footnote_separator(state, block);
+    }
+}
+
 fn collect_named_anchor_footnotes(root: &NodeRef, state: &mut FootnoteState) {
     let Ok(matches) = root.select("a[id], a[name]") else {
         return;
@@ -25551,7 +26055,7 @@ fn collect_dhammatalks_note_footnotes(root: &NodeRef, state: &mut FootnoteState)
         strip_leading_text_footnote_marker(&node);
         let content_nodes = dhammatalks_note_content_nodes(&node);
         if let Some(last) = content_nodes.last() {
-            trim_footnote_edge_punctuation(last);
+            trim_footnote_trailing_whitespace(last);
         }
         add_footnote_entry_nodes(state, id, content_nodes, Some(number));
         mark_nearest_ancestor_class(state, &node, "note");
@@ -26149,14 +26653,7 @@ fn collect_footnote_noise_nodes(state: &mut FootnoteState, node: &NodeRef) {
             continue;
         };
         let value = text.borrow();
-        if !value.is_empty()
-            && value
-                .chars()
-                .all(|ch| ch.is_whitespace() || ",.;".contains(ch))
-        {
-            if value.trim() == "." && has_ancestor_class(&last, "reference-text") {
-                continue;
-            }
+        if !value.is_empty() && value.chars().all(char::is_whitespace) {
             state.noise_nodes.insert(node_key(&last));
         }
     }
@@ -26253,7 +26750,19 @@ fn definition_id(node: &NodeRef) -> Option<String> {
         return node_id(node);
     }
     node_id(node)
-        .filter(|id| looks_like_footnote_definition_id(id))
+        .filter(|id| {
+            looks_like_footnote_definition_id(id) || {
+                let root = node.ancestors().last().unwrap_or_else(|| node.clone());
+                root.select("sup a[href], a[role=\"doc-noteref\"]")
+                    .is_ok_and(|mut references| {
+                        references.any(|reference| {
+                            href_fragments(reference.as_node())
+                                .iter()
+                                .any(|fragment| fragment == id)
+                        })
+                    })
+            }
+        })
         .or_else(|| first_footnote_anchor_identifier(node))
 }
 
@@ -27277,16 +27786,18 @@ fn first_existing_attr(attrs: &kuchiki::Attributes, names: &[&str]) -> Option<St
         .filter(|value| !value.is_empty())
 }
 
+fn image_source_for_rendering(attrs: &kuchiki::Attributes) -> Option<String> {
+    attrs
+        .get("srcset")
+        .and_then(best_srcset_url)
+        .or_else(|| attrs.get("src").map(str::to_string))
+        .or_else(|| attrs.get("data-src").map(str::to_string))
+}
+
 fn first_image_src(node: &NodeRef) -> Option<String> {
     node.select("img")
         .ok()?
-        .find_map(|matched| {
-            let attrs = matched.attributes.borrow();
-            attrs
-                .get("src")
-                .or_else(|| attrs.get("data-src"))
-                .map(str::to_owned)
-        })
+        .find_map(|matched| image_source_for_rendering(&matched.attributes.borrow()))
         .filter(|src| is_valid_image_src(src))
 }
 
@@ -29164,7 +29675,7 @@ fn standardize_inline_footnote_html(html: &str) -> Result<String, DefuddleError>
             continue;
         };
         let number = items.len() + 1;
-        trim_footnote_edge_punctuation(&content);
+        trim_footnote_trailing_whitespace(&content);
         let content_html = serialize_children_html(&content);
         let reference = kuchiki::parse_html().one(format!(
             "<html><body><sup id=\"fnref:{number}\"><a href=\"#fn:{number}\">{number}</a></sup></body></html>"
@@ -29531,16 +30042,13 @@ fn parse_first_html_node(html: &str, selector: &str) -> Option<NodeRef> {
     select_first_node(&document, selector)
 }
 
-fn trim_footnote_edge_punctuation(node: &NodeRef) {
+fn trim_footnote_trailing_whitespace(node: &NodeRef) {
     while let Some(last) = node.last_child() {
         let NodeData::Text(text) = last.data() else {
             break;
         };
         let value = text.borrow();
-        if value
-            .chars()
-            .all(|ch| ch.is_whitespace() || matches!(ch, ',' | '.' | ';'))
-        {
+        if value.chars().all(char::is_whitespace) {
             drop(value);
             last.detach();
         } else {
@@ -31423,7 +31931,7 @@ mod tests {
 
         assert_eq!(output.image, "https://cdn.example.com/cover.jpg?width=1600");
         assert!(output.org.contains(
-            "[[https://cdn.example.com/cover.jpg?width=640][Historic launch photograph]]"
+            "[[https://cdn.example.com/cover.jpg?width=1600][Historic launch photograph]]"
         ));
         assert!(output
             .org
@@ -32394,7 +32902,7 @@ mod tests {
 
         assert!(
             output.org.contains(
-                "[[https://example.com/images/source-only-small.webp]]\n\nSource-only picture rendered from its best source candidate."
+                "[[https://example.com/images/source-only-large.webp]]\n\nSource-only picture rendered from its best source candidate."
             ),
             "{}",
             output.org
@@ -32404,7 +32912,7 @@ mod tests {
             .contains("continues after the source-only picture"));
         assert!(output.html.contains("<img"));
         assert!(!output.html.contains("<source"), "{}", output.html);
-        assert!(!output.org.contains("source-only-large.webp"));
+        assert!(!output.org.contains("source-only-small.webp"));
     }
 
     #[test]
@@ -32444,12 +32952,12 @@ mod tests {
 
         assert!(
             output.org.contains(
-                "[[https://example.com/images/wrapper-small.webp][Wrapper source diagram]]\n\nWrapper source diagram rendered from a standalone source element."
+                "[[https://example.com/images/wrapper-large.webp][Wrapper source diagram]]\n\nWrapper source diagram rendered from a standalone source element."
             ),
             "{}",
             output.org
         );
-        assert!(!output.org.contains("wrapper-large.webp"), "{}", output.org);
+        assert!(!output.org.contains("wrapper-small.webp"), "{}", output.org);
         assert!(!output.html.contains("<source"), "{}", output.html);
         assert!(output
             .org
@@ -32488,7 +32996,7 @@ mod tests {
     }
 
     #[test]
-    fn promotes_generic_lazy_image_attributes() {
+    fn ignores_unrecognized_lazy_image_attributes() {
         let html = r##"
         <!doctype html>
         <html lang="en">
@@ -32542,12 +33050,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(output
-            .org
-            .contains("[[https://example.com/images/custom-lazy.jpg][Custom lazy image]]"));
-        assert!(output
-            .org
-            .contains("[[https://example.com/images/custom-small.jpg][Custom srcset image]]"));
+        assert!(!output.org.contains("custom-lazy.jpg"));
+        assert!(!output.org.contains("custom-small.jpg"));
+        assert!(!output.org.contains("custom-large.jpg"));
         assert!(!output.html.contains("lazyload"));
         assert!(!output.html.contains("class=\"hero lazy"));
         assert!(!output.html.contains("class=\"gallery lazy"));
@@ -33860,7 +34365,7 @@ mod tests {
         assert!(selected.caption_url.ends_with("lang=zh"));
 
         let default = youtube_caption_info(player_json, None).unwrap().unwrap();
-        assert_eq!(default.language, "zh-hant");
+        assert_eq!(default.language, "en");
         assert!(!default.caption_url.contains("example.com"));
     }
 
@@ -35289,8 +35794,8 @@ Output: [0,1]</code></pre>
         )
         .unwrap();
 
-        assert_eq!(output.title, "ChatGPT");
-        assert_eq!(output.site, "");
+        assert_eq!(output.title, "Fibonacci in Python");
+        assert_eq!(output.site, "chatgpt.com");
         assert_eq!(output.extractor_type, None);
     }
 
@@ -36151,7 +36656,7 @@ Output: [0,1]</code></pre>
 
     #[test]
     fn partial_selector_cleanup_uses_full_upstream_pattern_set() {
-        assert_eq!(partial_selectors::PATTERNS.len(), 542);
+        assert_eq!(partial_selectors::PATTERNS.len(), 539);
 
         let html = r##"
         <!doctype html>
@@ -40452,7 +40957,7 @@ let value = \`tick\`;
         assert!(output.html.contains(r#"<div id="footnotes"><ol>"#));
         assert!(output
             .html
-            .contains(r#"<li id="fn:1"><p>Note <em>content</em> <a class="footnote-backref""#));
+            .contains(r#"<li id="fn:1"><p>Note <em>content</em>. <a class="footnote-backref""#));
         assert!(!output.html.contains("footnote-container"));
         assert!(output.org.contains("Body text [fn:7]"), "{}", output.org);
         assert!(

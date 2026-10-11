@@ -1,5 +1,8 @@
 * arXiv Multi-Citations
 :PROPERTIES:
+:URL: https://142-arxiv-multi-citations/
+:SITE: 142-arxiv-multi-citations
+:DOMAIN: 142-arxiv-multi-citations
 :LANGUAGE: en
 :WORD_COUNT: 139
 :END:

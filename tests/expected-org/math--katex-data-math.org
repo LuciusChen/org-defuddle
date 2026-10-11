@@ -1,6 +1,7 @@
 * Gemini - Math response
 :PROPERTIES:
 :URL: https://gemini.google.com/app
+:SITE: gemini.google.com
 :DOMAIN: gemini.google.com
 :LANGUAGE: en
 :WORD_COUNT: 44

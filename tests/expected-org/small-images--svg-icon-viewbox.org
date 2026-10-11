@@ -1,6 +1,7 @@
 * Blog Post with SVG Icons
 :PROPERTIES:
 :URL: https://example.org/blog/post
+:SITE: example.org
 :DOMAIN: example.org
 :LANGUAGE: en
 :WORD_COUNT: 70

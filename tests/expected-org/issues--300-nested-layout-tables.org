@@ -1,6 +1,7 @@
 * Overview of shortcuts
 :PROPERTIES:
 :URL: https://www.example.org/cheatsheet.html
+:SITE: example.org
 :DOMAIN: example.org
 :WORD_COUNT: 84
 :END:

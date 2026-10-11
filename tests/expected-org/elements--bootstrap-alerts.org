@@ -1,5 +1,8 @@
 * Bootstrap alerts test
 :PROPERTIES:
+:URL: https://bootstrap-alerts/
+:SITE: bootstrap-alerts
+:DOMAIN: bootstrap-alerts
 :WORD_COUNT: 36
 :END:
 

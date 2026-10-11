@@ -12,9 +12,6 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-env:
-  DEFUDDLE_UPSTREAM_COMMIT: 19520add09282abdfadbc6d23eb6bf8393af2bf8
-
 jobs:
   prepare:
     runs-on: macos-latest
@@ -84,7 +81,7 @@ jobs:
         run: |
           git init /private/tmp/defuddle-elisp-source
           git -C /private/tmp/defuddle-elisp-source remote add origin https://github.com/kepano/defuddle.git
-          git -C /private/tmp/defuddle-elisp-source fetch --depth 1 origin "${DEFUDDLE_UPSTREAM_COMMIT}"
+          git -C /private/tmp/defuddle-elisp-source fetch --depth 1 origin "$(cat tests/upstream-revision)"
           git -C /private/tmp/defuddle-elisp-source checkout --detach FETCH_HEAD
           npm --prefix /private/tmp/defuddle-elisp-source ci
           npm --prefix /private/tmp/defuddle-elisp-source run build:node

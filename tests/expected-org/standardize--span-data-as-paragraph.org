@@ -1,6 +1,7 @@
 * Cloud Sessions
 :PROPERTIES:
 :URL: https://example.com/docs/cloud-sessions
+:SITE: example.com
 :DOMAIN: example.com
 :DESCRIPTION: How cloud sessions work and what is available inside them.
 :LANGUAGE: en

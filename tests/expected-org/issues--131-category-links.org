@@ -1,6 +1,7 @@
 * Blog Post with Categories
 :PROPERTIES:
 :URL: https://131-category-links/
+:SITE: 131-category-links
 :DOMAIN: 131-category-links
 :WORD_COUNT: 31
 :END:

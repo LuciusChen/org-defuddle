@@ -1,6 +1,7 @@
 * Inline Code with Links
 :PROPERTIES:
 :URL: https://example.org/docs/inline-code-links
+:SITE: example.org
 :DOMAIN: example.org
 :LANGUAGE: en
 :WORD_COUNT: 68

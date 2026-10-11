@@ -1,5 +1,8 @@
 * Maker's Schedule, Manager's Schedule
 :PROPERTIES:
+:URL: https://table-layout--paulgraham.com-makersschedule/
+:SITE: table-layout--paulgraham.com-makersschedule
+:DOMAIN: table-layout--paulgraham.com-makersschedule
 :WORD_COUNT: 1148
 :END:
 
@@ -25,13 +28,13 @@ I find one meeting can sometimes affect a whole day. A meeting commonly blows at
 
 Each type of schedule works fine by itself. Problems arise when they meet. Since most powerful people operate on the manager's schedule, they're in a position to make everyone resonate at their frequency if they want to. But the smarter ones restrain themselves, if they know that some of the people working for them need long chunks of time to work in.
 
-Our case is an unusual one. Nearly all investors, including all VCs I know, operate on the manager's schedule. But [[http://ycombinator.com][Y Combinator]] runs on the maker's schedule. Rtm and Trevor and I do because we always have, and Jessica does too, mostly, because she's gotten into sync with us.
+Our case is an unusual one. Nearly all investors, including all VCs I know, operate on the manager's schedule. But [[http://ycombinator.com/][Y Combinator]] runs on the maker's schedule. Rtm and Trevor and I do because we always have, and Jessica does too, mostly, because she's gotten into sync with us.
 
 I wouldn't be surprised if there start to be more companies like us. I suspect founders may increasingly be able to resist, or at least postpone, turning into managers, just as a few decades ago they started to be able to resist switching from jeans to suits.
 
 How do we manage to advise so many startups on the maker's schedule? By using the classic device for simulating the manager's schedule within the maker's: office hours. Several times a week I set aside a chunk of time to meet founders we've funded. These chunks of time are at the end of my working day, and I wrote a signup program that ensures all the appointments within a given set of office hours are clustered at the end. Because they come at the end of my day these meetings are never an interruption. (Unless their working day ends at the same time as mine, the meeting presumably interrupts theirs, but since they made the appointment it must be worth it to them.) During busy periods, office hours sometimes get long enough that they compress the day, but they never interrupt it.
 
-When we were working on [[start.html][our own startup]], back in the 90s, I evolved another trick for partitioning the day. I used to program from dinner till about 3 am every day, because at night no one could interrupt me. Then I'd sleep till about 11 am, and come in and work until dinner on what I called "business stuff." I never thought of it in these terms, but in effect I had two workdays each day, one on the manager's schedule and one on the maker's.
+When we were working on [[https://table-layout--paulgraham.com-makersschedule/start.html][our own startup]], back in the 90s, I evolved another trick for partitioning the day. I used to program from dinner till about 3 am every day, because at night no one could interrupt me. Then I'd sleep till about 11 am, and come in and work until dinner on what I called "business stuff." I never thought of it in these terms, but in effect I had two workdays each day, one on the manager's schedule and one on the maker's.
 
 When you're operating on the manager's schedule you can do something you'd never want to do on the maker's: you can have speculative meetings. You can meet someone just to get to know one another. If you have an empty slot in your schedule, why not? Maybe it will turn out you can help one another in some way.
 

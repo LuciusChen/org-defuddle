@@ -1,5 +1,8 @@
 * Embedded videos test
 :PROPERTIES:
+:URL: https://embedded-videos/
+:SITE: embedded-videos
+:DOMAIN: embedded-videos
 :WORD_COUNT: 19
 :END:
 

@@ -1,5 +1,8 @@
 * Numeric Anchor-ID Footnote Pattern
 :PROPERTIES:
+:URL: https://numeric-anchor-id/
+:SITE: numeric-anchor-id
+:DOMAIN: numeric-anchor-id
 :LANGUAGE: en
 :WORD_COUNT: 72
 :END:

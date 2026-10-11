@@ -1,6 +1,7 @@
 * Blog Posts
 :PROPERTIES:
 :URL: https://www.example.com/blog/
+:SITE: example.com
 :DOMAIN: example.com
 :LANGUAGE: en
 :WORD_COUNT: 98

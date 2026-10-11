@@ -1,0 +1,19 @@
+* Invalid lazy sources
+:PROPERTIES:
+:URL: https://example.com/article
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 39
+:END:
+
+Lazy-loading attributes sometimes hold empty or unsafe values instead of image URLs, and must not overwrite a working source.
+
+[[https://images.example.com/empty.jpg][Empty]]
+
+[[https://images.example.com/script.jpg][Script]]
+
+[[https://images.example.com/inline.jpg][Inline]]
+
+[[https://images.example.com/real.jpg][Fallback]]
+
+Each image should keep a usable source that points to an actual image rather than an empty or unsafe URL.

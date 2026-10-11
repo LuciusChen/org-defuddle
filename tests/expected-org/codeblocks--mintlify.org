@@ -1,6 +1,8 @@
 * Cover vs Contain Modes
 :PROPERTIES:
+:URL: https://mintlify/
 :SITE: Sanity Image
+:DOMAIN: mintlify
 :DESCRIPTION: Learn the difference between cover and contain modes and when to use each one
 :LANGUAGE: en
 :WORD_COUNT: 263

@@ -1,0 +1,15 @@
+* Lazy srcset placeholder
+:PROPERTIES:
+:URL: https://example.com/article
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 36
+:END:
+
+Lazy images may ship a tiny inline placeholder in both src and srcset while the real responsive sources wait in data-srcset.
+
+[[https://images.example.com/photo-1200.jpg][Photo]]
+
+[[https://images.example.com/other-1200.jpg][Other]]
+
+The extracted image should use the real responsive sources rather than the placeholder source set.

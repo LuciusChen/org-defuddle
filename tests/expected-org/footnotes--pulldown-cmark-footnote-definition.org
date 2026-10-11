@@ -1,9 +1,10 @@
-* pulldown-cmark footnote-definition
+* Example post with a footnote
 :PROPERTIES:
-:WORD_COUNT: 112
+:URL: https://pulldown-cmark-footnote-definition/
+:SITE: pulldown-cmark-footnote-definition
+:DOMAIN: pulldown-cmark-footnote-definition
+:WORD_COUNT: 108
 :END:
-
-** Example post with a footnote
 
 Example bit-shift analysis: a common simplification is to replace ~x & \~0~ with ~x~ [fn:1]. Other paragraph content follows that explains the broader idea in more detail.
 
@@ -11,4 +12,4 @@ This is an additional paragraph with more prose to give the post enough weight f
 
 Thanks to everyone for reading. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
 
-[fn:1] Possibly with masking of the top bit if our IR semantics have defined wrapping/truncation behavior: ~x & 0x7fff..ffff~
+[fn:1] Possibly with masking of the top bit if our IR semantics have defined wrapping/truncation behavior: ~x & 0x7fff..ffff~.

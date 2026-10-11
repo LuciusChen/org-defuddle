@@ -1,0 +1,13 @@
+* Markdown image escaping
+:PROPERTIES:
+:URL: https://example.com/article
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 26
+:END:
+
+This example article contains an image with literal brackets in its description.
+
+[[https://example.com/photo.png][Photo \[one\]]]
+
+The description should remain plain image text when the article is converted to Markdown.

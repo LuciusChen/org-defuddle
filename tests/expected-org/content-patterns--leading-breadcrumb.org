@@ -1,5 +1,8 @@
 * Sample Newsletter Post
 :PROPERTIES:
+:URL: https://content-patterns--leading-breadcrumb/
+:SITE: content-patterns--leading-breadcrumb
+:DOMAIN: content-patterns--leading-breadcrumb
 :LANGUAGE: en
 :WORD_COUNT: 227
 :END:

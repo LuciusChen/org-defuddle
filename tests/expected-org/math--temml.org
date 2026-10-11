@@ -1,5 +1,8 @@
 * Temml Math Test
 :PROPERTIES:
+:URL: https://temml/
+:SITE: temml
+:DOMAIN: temml
 :LANGUAGE: en
 :WORD_COUNT: 104
 :END:

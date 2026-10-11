@@ -1,7 +1,9 @@
 * Framework Performance Benchmarks
 :PROPERTIES:
+:URL: https://complex-tables/
 :AUTHOR: Jordan Lee
 :SITE: Jordan Lee
+:DOMAIN: complex-tables
 :WORD_COUNT: 117
 :END:
 

@@ -1,5 +1,8 @@
 * Footnotes with span fnref:id pattern
 :PROPERTIES:
+:URL: https://span-fnref-colon/
+:SITE: span-fnref-colon
+:DOMAIN: span-fnref-colon
 :WORD_COUNT: 46
 :END:
 

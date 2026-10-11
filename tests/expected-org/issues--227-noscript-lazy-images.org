@@ -1,6 +1,7 @@
 * Test Article with Lazy Images
 :PROPERTIES:
 :URL: https://www.example.com/article/test-article
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 184
 :END:

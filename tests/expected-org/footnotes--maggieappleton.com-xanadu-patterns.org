@@ -1,9 +1,9 @@
 * The Pattern Language of Project Xanadu
 :PROPERTIES:
-:URL: https://maggieappleton.com/xanadu-patterns
+:URL: https://maggieappleton.com-xanadu-patterns/
 :PUBLISHED: 2024-05-24T02:20:06+00:00
-:SITE: maggieappleton.com
-:DOMAIN: maggieappleton.com
+:SITE: maggieappleton.com-xanadu-patterns
+:DOMAIN: maggieappleton.com-xanadu-patterns
 :DESCRIPTION: Project Xanadu as a pattern language, rather than a failed software project
 :IMAGE: https://maggieappleton.com/og/xanadu-patterns.png
 :LANGUAGE: en
@@ -36,13 +36,13 @@ Yet these historical skirmishes and financial flops are also the least interesti
 
 ** Architectural Pattern Languages
 
-[[https://maggieappleton.com/pattern-languages][Pattern Languages]] are sets of flexible, reusable solutions to common design problems.
+[[https://maggieappleton.com-xanadu-patterns/pattern-languages][Pattern Languages]] are sets of flexible, reusable solutions to common design problems.
 
 They come from the land of architects: the software developers of the material world. Namely, the architect [[https://en.wikipedia.org/wiki/Christopher_Alexander][Christopher Alexander]], whose philosophy of constructing vibrant and humane living space escaped the confines of urban planning and infused the world of software design in the late 1980’s.
 
 In their book [[https://en.wikipedia.org/wiki/A_Pattern_Language][A Pattern Language]], Alexander defined 253 architectural patterns for designing cities, towns, and homes. These became the example patterns for writing patterns. Each one is composed of a context, problem, example, and solution.
 
-[[https://maggieappleton.com/_astro/patterns.D8-ibnKY_Z2ngng6.webp][A Pattern Language]]
+[[https://maggieappleton.com-xanadu-patterns/_astro/patterns.D8-ibnKY_Z2ngng6.webp][A Pattern Language]]
 
 For example, the design pattern *A Place to Wait* asks that we create comfortable accommodation and ambient activity whenever someone needs to wait; benches, cafes, reading rooms, miniature playgrounds, three-reel slot machines (if we happen to be in the Las Vegas airport). This solves the problem of huddles of people awkwardly hovering in liminal space; near doorways, taking up sidewalks, anxiously waiting for delayed flights or dental operations or immigration investigations without anything to distract them from uncertain fates.
 
@@ -92,7 +92,7 @@ In lieu of Xanadoc links, the modern web has landed on some fairly decent soluti
 
 Wikipedia's interface showing one of the hover previews that appear over links
 
-Hover previews have also become popular in the [[https://maggieappleton.com/garden-history][Digital Gardening]] community as a way to help visitors quickly navigate through collections of public notes and essays that are deeply interlinked. [[https://notes.andymatuschak.org/][Andy Matuschak]] and [[https://www.gwern.net/index][Gwern Branwen]] are two gardeners with good examples of how these work in action.
+Hover previews have also become popular in the [[https://maggieappleton.com-xanadu-patterns/garden-history][Digital Gardening]] community as a way to help visitors quickly navigate through collections of public notes and essays that are deeply interlinked. [[https://notes.andymatuschak.org/][Andy Matuschak]] and [[https://www.gwern.net/index][Gwern Branwen]] are two gardeners with good examples of how these work in action.
 
 [[https://res.cloudinary.com/dg3gyk0gu/image/upload/c_scale,f_auto,q_auto:good,w_1000/v1592343501/maggieappleton.com/notes/Screenshot_2020-06-16_at_22.38.06.png][Andy Matuschak's notes website featuring hover link previews]]
 
@@ -166,11 +166,11 @@ The interface of LiquidText with transpointing between sections of text
 
 *** 4. Transclusion
 
-- [[https://maggieappleton.com/transcopyright-dreams][Transclusion and Transcopyright Dreams]]
+- [[https://maggieappleton.com-xanadu-patterns/transcopyright-dreams][Transclusion and Transcopyright Dreams]]
 
 *** 5. Bi-Directional Links
 
-- [[https://maggieappleton.com/bidirectionals][A Short History of Bi-Directional Links]]
+- [[https://maggieappleton.com-xanadu-patterns/bidirectionals][A Short History of Bi-Directional Links]]
 
 *** 6. Version Control
 

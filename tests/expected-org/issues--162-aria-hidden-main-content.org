@@ -1,6 +1,7 @@
 * Invitation
 :PROPERTIES:
 :URL: https://earendil.com/posts/invitation/
+:SITE: earendil.com
 :DOMAIN: earendil.com
 :LANGUAGE: en
 :WORD_COUNT: 84

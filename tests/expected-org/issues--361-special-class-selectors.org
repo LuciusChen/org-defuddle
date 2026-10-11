@@ -1,0 +1,17 @@
+* Selector example
+:PROPERTIES:
+:URL: https://example.com/article
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 170
+:END:
+
+** Hidden article
+
+This is the main article with meaningful prose about a practical experiment. It explains the methods used to collect observations and the reasoning behind the conclusions. Readers need the complete text to understand how the results were obtained and what they mean.
+
+This is the main article with meaningful prose about a practical experiment. It explains the methods used to collect observations and the reasoning behind the conclusions. Readers need the complete text to understand how the results were obtained and what they mean.
+
+This is the main article with meaningful prose about a practical experiment. It explains the methods used to collect observations and the reasoning behind the conclusions. Readers need the complete text to understand how the results were obtained and what they mean.
+
+This is the main article with meaningful prose about a practical experiment. It explains the methods used to collect observations and the reasoning behind the conclusions. Readers need the complete text to understand how the results were obtained and what they mean.

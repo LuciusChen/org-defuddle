@@ -1,6 +1,7 @@
 * Sample Chapter
 :PROPERTIES:
 :URL: https://www.example.com/library/view/sample-book/ch02.html
+:SITE: example.com
 :DOMAIN: example.com
 :WORD_COUNT: 224
 :END:

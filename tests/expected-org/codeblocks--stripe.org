@@ -1,6 +1,8 @@
 * x402 payments
 :PROPERTIES:
+:URL: https://stripe/
 :SITE: Stripe Documentation
+:DOMAIN: stripe
 :DESCRIPTION: Use x402 for machine-to-machine payments.
 :WORD_COUNT: 170
 :END:
