@@ -926,7 +926,12 @@ pub fn parse_html_to_org(
     options: DefuddleOptions,
 ) -> Result<DefuddleOutput, DefuddleError> {
     let parse_start = Instant::now();
-    let mut effects = StageEffects::default();
+    // A content selector skips every retry below, so there is nothing to decide.
+    let mut effects = if options.content_selector.is_some() {
+        StageEffects::default()
+    } else {
+        StageEffects::tracking()
+    };
     let mut result = parse_html_to_org_once(html, options.clone(), &mut effects)?;
     let markdown_enabled = options.markdown || options.separate_markdown;
     if options.content_selector.is_some() {
@@ -1056,6 +1061,8 @@ const STAGE_TRACKING_MAX_HTML_BYTES: usize = 64 * 1024;
 /// changed.
 #[derive(Default)]
 struct StageEffects {
+    /// Only the first pass is tracked; retries never read the result.
+    track: bool,
     tracked: bool,
     hidden: bool,
     partial: bool,
@@ -1064,6 +1071,13 @@ struct StageEffects {
 }
 
 impl StageEffects {
+    fn tracking() -> Self {
+        Self {
+            track: true,
+            ..Self::default()
+        }
+    }
+
     fn partial_retry_is_noop(&self) -> bool {
         self.tracked && !self.partial
     }
@@ -1249,8 +1263,10 @@ fn parse_html_to_org_once(
         .is_some_and(|host| host.eq_ignore_ascii_case("github.com"));
     let mut debug_removals = Vec::new();
     // The snapshots would otherwise be counted in the per-step profile timings.
-    let track_stages =
-        !options.debug && !options.profile && html.len() <= STAGE_TRACKING_MAX_HTML_BYTES;
+    let track_stages = effects.track
+        && !options.debug
+        && !options.profile
+        && html.len() <= STAGE_TRACKING_MAX_HTML_BYTES;
 
     let step_start = Instant::now();
     flatten_serialized_shadow_roots(&document);
@@ -29551,12 +29567,24 @@ fn is_code_tab_selector_node(node: &NodeRef, attrs: &str) -> bool {
 }
 
 fn ancestor_contains_code_block(node: &NodeRef) -> bool {
-    // Each ancestor's subtree contains the previous one, so only the highest
-    // of the four nearest ancestors needs scanning.
-    let Some(top) = node.ancestors().take(4).last() else {
-        return false;
-    };
-    contains_code_content(&top)
+    // Same result as scanning each of the four nearest ancestors' subtrees, but
+    // working outwards so a nearby match stops early and no node is visited twice.
+    let mut scanned: Option<NodeRef> = None;
+    for ancestor in node.ancestors().take(4) {
+        if ancestor.as_element().is_some_and(is_code_content_element) {
+            return true;
+        }
+        for child in ancestor.children() {
+            if scanned.as_ref() == Some(&child) {
+                continue;
+            }
+            if contains_code_content(&child) {
+                return true;
+            }
+        }
+        scanned = Some(ancestor);
+    }
+    false
 }
 
 /// Equivalent to `count_selector(node, "pre, code, .cm-content") > 0`.
@@ -29584,6 +29612,11 @@ fn is_code_content_element(element: &ElementData) -> bool {
         })
 }
 
+/// Well above the number of selector literals in this file, so they never evict
+/// each other; selectors built from page content or caller options are bounded
+/// by clearing the cache when it fills.
+const SELECTOR_CACHE_LIMIT: usize = 1024;
+
 thread_local! {
     static SELECTOR_CACHE: RefCell<HashMap<String, Option<Rc<Selectors>>>> =
         RefCell::new(HashMap::new());
@@ -29596,6 +29629,9 @@ fn compiled_selector(selector: &str) -> Option<Rc<Selectors>> {
             return compiled.clone();
         }
         let compiled = Selectors::compile(selector).ok().map(Rc::new);
+        if cache.len() >= SELECTOR_CACHE_LIMIT {
+            cache.clear();
+        }
         cache.insert(selector.to_owned(), compiled.clone());
         compiled
     })
@@ -43394,7 +43430,7 @@ let value = \`tick\`;
             "<html><head><title>T</title></head><body><article>{}</article></body></html>",
             filler_paragraphs(20)
         );
-        let mut effects = StageEffects::default();
+        let mut effects = StageEffects::tracking();
         parse_html_to_org_once(&html, DefuddleOptions::default(), &mut effects).unwrap();
 
         assert!(effects.tracked);
@@ -43409,7 +43445,7 @@ let value = \`tick\`;
             r#"<html><body><article>{}<div style="display:none">secret hidden words</div></article></body></html>"#,
             filler_paragraphs(20)
         );
-        let mut effects = StageEffects::default();
+        let mut effects = StageEffects::tracking();
         let output =
             parse_html_to_org_once(&html, DefuddleOptions::default(), &mut effects).unwrap();
 
@@ -43424,7 +43460,7 @@ let value = \`tick\`;
             "<html><body><article>{}</article></body></html>",
             filler_paragraphs(20)
         );
-        let mut effects = StageEffects::default();
+        let mut effects = StageEffects::tracking();
         let debug = DefuddleOptions {
             debug: true,
             ..DefuddleOptions::default()
@@ -43434,7 +43470,7 @@ let value = \`tick\`;
         assert!(!effects.partial_retry_is_noop());
         assert!(!effects.cleanup_retry_is_noop());
 
-        let mut effects = StageEffects::default();
+        let mut effects = StageEffects::tracking();
         let profile = DefuddleOptions {
             profile: true,
             ..DefuddleOptions::default()
@@ -43449,7 +43485,7 @@ let value = \`tick\`;
             filler_paragraphs(20),
             "x".repeat(STAGE_TRACKING_MAX_HTML_BYTES)
         );
-        let mut effects = StageEffects::default();
+        let mut effects = StageEffects::tracking();
         parse_html_to_org_once(&large, DefuddleOptions::default(), &mut effects).unwrap();
         assert!(!effects.tracked);
         assert!(!effects.hidden_retry_is_noop());
@@ -43602,5 +43638,48 @@ let value = \`tick\`;
         let main = select_first_node(&ten_words, "main").unwrap();
         remove_pre_content_author_date_metadata(&main, &mut None);
         assert!(!serialize_node(&ten_words).unwrap().contains("Jane Doe"));
+    }
+    #[test]
+    fn only_a_tracking_pass_records_stage_effects() {
+        let html = format!(
+            "<html><body><article>{}</article></body></html>",
+            filler_paragraphs(20)
+        );
+        let mut retry_effects = StageEffects::default();
+        parse_html_to_org_once(&html, DefuddleOptions::default(), &mut retry_effects).unwrap();
+        assert!(!retry_effects.tracked);
+        assert!(!retry_effects.cleanup_retry_is_noop());
+    }
+
+    #[test]
+    fn selector_cache_stays_bounded_and_correct() {
+        let document = html_fragment("<body><p id=target class=c>x</p></body>");
+        for i in 0..SELECTOR_CACHE_LIMIT * 2 + 7 {
+            let selector = format!("p.c-{i}, #target");
+            assert_eq!(count_selector(&document, &selector), 1, "{selector}");
+            assert!(SELECTOR_CACHE.with(|cache| cache.borrow().len()) <= SELECTOR_CACHE_LIMIT);
+        }
+        assert_eq!(count_selector(&document, "p.c"), 1);
+        assert_eq!(count_selector(&document, "p.missing"), 0);
+    }
+
+    #[test]
+    fn ancestor_scan_prefers_a_nearby_match_over_a_large_unrelated_subtree() {
+        let filler = "<span>filler</span>".repeat(50);
+        for (html, expected) in [
+            // nearby code, large unrelated sibling subtrees further out
+            (format!("<div id=z><div class=blob>{filler}</div><div id=a><pre>c</pre><p id=t>x</p></div><div class=blob>{filler}</div></div>"), true),
+            // code only in a distant sibling subtree of the fourth ancestor
+            (format!("<div id=z><div id=a><div id=b><div id=c><p id=t>x</p></div></div></div><div class=blob>{filler}</div><code>c</code></div>"), true),
+            // code beyond the fourth ancestor
+            (format!("<div id=y><div id=z><div id=a><div id=b><div id=c><p id=t>x</p></div></div></div></div><div class=blob>{filler}</div><code>c</code></div>"), false),
+            // the code element is an ancestor itself
+            ("<code><b><i id=t>x</i></b></code>".to_string(), true),
+        ] {
+            let document = html_fragment(&html);
+            let target = select_first_node(&document, "#t").unwrap();
+            assert_eq!(ancestor_contains_code_block(&target), expected, "{html}");
+            assert_eq!(reference_ancestor_contains_code_block(&target), expected, "{html}");
+        }
     }
 }
