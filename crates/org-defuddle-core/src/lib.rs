@@ -23918,6 +23918,7 @@ fn html_node_to_org_fragment_with_render_options(
 }
 
 fn html_children_to_org_with_footnotes(node: &NodeRef, footnotes: &FootnoteState) -> String {
+    let _code_memo = CodeSubtreeScope::enter(node);
     let mut renderer = OrgRenderer::new(footnotes, RenderOptions::default());
     for child in node.children() {
         renderer.render_node(&child, false);
@@ -29575,39 +29576,49 @@ thread_local! {
     static CODE_SUBTREE_FLAGS: RefCell<Option<HashMap<usize, bool>>> = const { RefCell::new(None) };
 }
 
-/// Memoizes, for every element of one tree, whether its subtree holds a
-/// `pre`, `code` or `.cm-content` element. The answer only depends on the
-/// tree, so while a read-only phase runs it replaces repeated subtree scans.
+/// Memoizes, for the elements near one rendered node, whether their subtree
+/// holds a `pre`, `code` or `.cm-content` element. The answer only depends on
+/// the tree, so while a read-only phase runs it replaces repeated subtree
+/// scans.
 ///
-/// Queries about nodes outside the memoized tree fall back to scanning. The
-/// memo must not outlive a phase that modifies the tree; debug builds check
-/// this when the scope ends.
+/// The memo covers the subtree of the fourth ancestor of the node. That is
+/// all the ancestor check looks at for the node and its descendants, and it
+/// keeps a short fragment of a large page from paying for the whole page.
+/// Queries about other nodes fall back to scanning. A scope inside one that
+/// already covers its node reuses it; otherwise it stacks its own memo and
+/// restores the outer one when it ends. The memo must not outlive a phase
+/// that modifies the tree; debug builds check this when the scope ends.
 struct CodeSubtreeScope {
-    root: Option<NodeRef>,
+    owned: Option<(NodeRef, Option<HashMap<usize, bool>>)>,
 }
 
 impl CodeSubtreeScope {
     fn enter(node: &NodeRef) -> Self {
-        if CODE_SUBTREE_FLAGS.with(|flags| flags.borrow().is_some()) {
-            return Self { root: None };
-        }
-        let root = node
-            .inclusive_ancestors()
+        let top = node
+            .ancestors()
+            .take(4)
             .last()
             .unwrap_or_else(|| node.clone());
-        CODE_SUBTREE_FLAGS.with(|flags| *flags.borrow_mut() = Some(code_subtree_flags(&root)));
-        Self { root: Some(root) }
+        if memoized_code_subtree(&top).is_some() {
+            return Self { owned: None };
+        }
+        let flags = code_subtree_flags(&top);
+        let outer = CODE_SUBTREE_FLAGS.with(|slot| slot.borrow_mut().replace(flags));
+        Self {
+            owned: Some((top, outer)),
+        }
     }
 }
 
 impl Drop for CodeSubtreeScope {
     fn drop(&mut self) {
-        let Some(root) = self.root.take() else {
+        let Some((top, outer)) = self.owned.take() else {
             return;
         };
-        let memo = CODE_SUBTREE_FLAGS.with(|flags| flags.borrow_mut().take());
+        let memo =
+            CODE_SUBTREE_FLAGS.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), outer));
         debug_assert!(
-            memo.map_or(true, |memo| memo == code_subtree_flags(&root)),
+            memo.map_or(true, |memo| memo == code_subtree_flags(&top)),
             "the tree changed while its code-subtree memo was in use"
         );
     }
@@ -43839,18 +43850,76 @@ let value = \`tick\`;
     }
 
     #[test]
-    fn code_subtree_memo_falls_back_for_nodes_outside_its_tree() {
+    fn code_subtree_memo_falls_back_for_nodes_outside_its_window() {
         let document = html_fragment(CODE_MEMO_PAGE);
         let other = html_fragment("<html><body><div><pre>c</pre><p id=t>x</p></div></body></html>");
-        let _memo = CodeSubtreeScope::enter(&document);
         let target = select_first_node(&other, "#t").unwrap();
+        let _memo = CodeSubtreeScope::enter(&document);
         assert!(memoized_code_subtree(&target).is_none());
         assert!(ancestor_contains_code_block(&target));
+    }
 
-        // A nested scope reuses the outer memo instead of replacing it.
-        let _nested = CodeSubtreeScope::enter(&other);
+    #[test]
+    fn nested_scopes_reuse_a_covering_memo_and_stack_otherwise() {
+        let document = html_fragment(CODE_MEMO_PAGE);
+        let other = html_fragment("<html><body><div><pre>c</pre><p id=t>x</p></div></body></html>");
+        let target = select_first_node(&other, "#t").unwrap();
+        let plain = select_first_node(&document, "#plain").unwrap();
+
+        let outer = CodeSubtreeScope::enter(&document);
+        assert!(outer.owned.is_some());
+        {
+            // Covered by the outer memo: reused, nothing replaced.
+            let inner = CodeSubtreeScope::enter(&plain);
+            assert!(inner.owned.is_none());
+        }
+        {
+            // A different tree gets its own memo while the outer one waits.
+            let inner = CodeSubtreeScope::enter(&target);
+            assert!(inner.owned.is_some());
+            assert!(memoized_code_subtree(&target).is_some());
+        }
         assert!(memoized_code_subtree(&target).is_none());
-        assert!(memoized_code_subtree(&document).is_some());
+        assert!(memoized_code_subtree(&plain).is_some());
+        drop(outer);
+        assert!(memoized_code_subtree(&plain).is_none());
+    }
+
+    #[test]
+    fn code_subtree_memo_for_a_fragment_covers_only_its_ancestor_window() {
+        let filler = "<p>filler</p>".repeat(30);
+        let html = format!(
+            "<html><body><main>{filler}<div id=a><div id=b><div id=c><div id=d><p id=t>x <b id=u>y</b></p></div></div></div></div>{filler}</main></body></html>"
+        );
+        let document = html_fragment(&html);
+        let message = select_first_node(&document, "#t").unwrap();
+        let in_window: Vec<NodeRef> = ["#d", "#c", "#b", "#a"]
+            .iter()
+            .map(|selector| select_first_node(&document, selector).unwrap())
+            .collect();
+        let outside = select_first_node(&document, "main").unwrap();
+        let first_filler = select_first_node(&document, "main > p").unwrap();
+
+        let elements: Vec<NodeRef> = message
+            .inclusive_descendants()
+            .filter(|n| n.as_element().is_some())
+            .collect();
+        let scanned: Vec<bool> = elements.iter().map(ancestor_contains_code_block).collect();
+
+        let _memo = CodeSubtreeScope::enter(&message);
+        for node in &in_window {
+            assert!(memoized_code_subtree(node).is_some());
+        }
+        assert!(
+            memoized_code_subtree(&outside).is_none(),
+            "the fifth ancestor is outside"
+        );
+        assert!(
+            memoized_code_subtree(&first_filler).is_none(),
+            "siblings of the window are outside"
+        );
+        let memoized: Vec<bool> = elements.iter().map(ancestor_contains_code_block).collect();
+        assert_eq!(memoized, scanned);
     }
 
     #[test]
