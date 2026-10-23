@@ -147,6 +147,24 @@ backend is selected.  Use ~org-defuddle-note-keywords~ for note tags and
 ~org-defuddle-denote-directory~ or ~org-defuddle-org-roam-file-name~ to
 customize the destination.
 
+** Literal markup characters
+
+Org has no backslash escape for emphasis markers, so text such as ~/Agent/~,
+~*do*~ or ~(/ɪɡˈzæmpəl/)~ would be rendered as italic or bold with the markers
+hidden. When an opening ~*~, ~/~, ~_~, ~+~, ~=~ or ~~~ in page text would be
+closed by a later marker of the same kind, org-defuddle puts a zero-width space
+(U+200B) after it, as the Org manual suggests. This applies to body text and
+the headline; code, URLs, real emphasis and property values such as
+~:DESCRIPTION:~ are left alone, so ~org-entry-get~ returns the original string. The rules follow ~org-emphasis-regexp-components~ with non-ASCII
+characters allowed next to the markers, which is how many people configure Org
+for CJK text, so the output is safe with that setting and with the default one.
+
+Each piece of text is checked on its own. If the two markers of a pair sit in
+different inline elements with nothing between them, for example
+~<span>/Agent</span>/ was~, neither piece is escaped and Org can still read the
+pair as emphasis. The renderer usually puts a space between adjacent inline
+elements, which keeps most such pairs from forming.
+
 * CLI Usage
 
 The Rust CLI supports upstream-style ~parse~ options for URLs, local HTML
