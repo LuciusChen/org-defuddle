@@ -1052,7 +1052,8 @@ const STAGE_TRACKING_MAX_HTML_BYTES: usize = 64 * 1024;
 ///
 /// A retry that only disables stages that changed nothing would repeat the
 /// first pass exactly, so the caller can skip it. When a pass is not tracked
-/// (extractor output, debug mode, large input) every stage counts as changed.
+/// (extractor output, debug or profile mode, large input) every stage counts as
+/// changed.
 #[derive(Default)]
 struct StageEffects {
     tracked: bool,
@@ -1247,7 +1248,9 @@ fn parse_html_to_org_once(
     let github_document = meta_content(&document, "name", "expected-hostname")
         .is_some_and(|host| host.eq_ignore_ascii_case("github.com"));
     let mut debug_removals = Vec::new();
-    let track_stages = !options.debug && html.len() <= STAGE_TRACKING_MAX_HTML_BYTES;
+    // The snapshots would otherwise be counted in the per-step profile timings.
+    let track_stages =
+        !options.debug && !options.profile && html.len() <= STAGE_TRACKING_MAX_HTML_BYTES;
 
     let step_start = Instant::now();
     flatten_serialized_shadow_roots(&document);
@@ -43416,7 +43419,7 @@ let value = \`tick\`;
     }
 
     #[test]
-    fn stage_tracking_is_off_for_debug_and_large_inputs() {
+    fn stage_tracking_is_off_for_debug_profile_and_large_inputs() {
         let small = format!(
             "<html><body><article>{}</article></body></html>",
             filler_paragraphs(20)
@@ -43430,6 +43433,16 @@ let value = \`tick\`;
         assert!(!effects.tracked);
         assert!(!effects.partial_retry_is_noop());
         assert!(!effects.cleanup_retry_is_noop());
+
+        let mut effects = StageEffects::default();
+        let profile = DefuddleOptions {
+            profile: true,
+            ..DefuddleOptions::default()
+        };
+        let output = parse_html_to_org_once(&small, profile, &mut effects).unwrap();
+        assert!(output.profile.is_some());
+        assert!(!effects.tracked);
+        assert!(!effects.hidden_retry_is_noop());
 
         let large = format!(
             "<html><body><article>{}</article><!-- {} --></body></html>",
