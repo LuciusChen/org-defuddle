@@ -15813,17 +15813,17 @@ fn remove_low_scoring_blocks(
     else {
         return;
     };
-    let code_memo = CodeSubtreeScope::enter(document);
+    let code = CodeIndex::around(document);
     let nodes = matches
         .filter_map(|matched| {
             let node = matched.as_node();
-            if low_scoring_should_skip(node, main) || is_low_scoring_likely_content(node) {
+            if low_scoring_should_skip(node, main) || is_low_scoring_likely_content(node, &code) {
                 return None;
             }
             (score_non_content_block(node) < 0).then(|| node.clone())
         })
         .collect::<Vec<_>>();
-    drop(code_memo);
+    code.assert_current();
 
     for node in nodes {
         if node.parent().is_some() {
@@ -15856,7 +15856,7 @@ fn low_scoring_should_skip(node: &NodeRef, main: &NodeRef) -> bool {
     false
 }
 
-fn is_low_scoring_likely_content(node: &NodeRef) -> bool {
+fn is_low_scoring_likely_content(node: &NodeRef, code: &CodeIndex) -> bool {
     let Some(element) = node.as_element() else {
         return false;
     };
@@ -15882,7 +15882,7 @@ fn is_low_scoring_likely_content(node: &NodeRef) -> bool {
     }
 
     let text = normalize_ws(&node.text_contents());
-    let words = count_node_words(node);
+    let words = count_node_words(node, code);
     if is_non_content_heading_wrapper(node, &text) {
         return false;
     }
@@ -23887,10 +23887,10 @@ fn html_node_to_org_with_render_options(
     footnotes: &FootnoteState,
     render_options: RenderOptions,
 ) -> String {
-    let _code_memo = CodeSubtreeScope::enter(node);
-    let mut renderer = OrgRenderer::new(footnotes, render_options);
+    let mut renderer = OrgRenderer::around(node, footnotes, render_options);
     renderer.render_node(node, false);
     renderer.render_footnote_definitions();
+    renderer.code.assert_current();
     cleanup_org(&renderer.out)
 }
 
@@ -23903,19 +23903,19 @@ fn html_node_to_org_fragment_with_render_options(
     footnotes: &FootnoteState,
     render_options: RenderOptions,
 ) -> String {
-    let _code_memo = CodeSubtreeScope::enter(node);
-    let mut renderer = OrgRenderer::new(footnotes, render_options);
+    let mut renderer = OrgRenderer::around(node, footnotes, render_options);
     renderer.render_node(node, false);
+    renderer.code.assert_current();
     cleanup_org(&renderer.out)
 }
 
 fn html_children_to_org_with_footnotes(node: &NodeRef, footnotes: &FootnoteState) -> String {
-    let _code_memo = CodeSubtreeScope::enter(node);
-    let mut renderer = OrgRenderer::new(footnotes, RenderOptions::default());
+    let mut renderer = OrgRenderer::around(node, footnotes, RenderOptions::default());
     for child in node.children() {
         renderer.render_node(&child, false);
     }
     renderer.render_footnote_definitions();
+    renderer.code.assert_current();
     cleanup_org(&renderer.out)
 }
 
@@ -24988,6 +24988,7 @@ struct OrgRenderer<'a> {
     footnotes: &'a FootnoteState,
     options: RenderOptions,
     rendering_footnote_defs: bool,
+    code: Rc<CodeIndex>,
 }
 
 impl<'a> OrgRenderer<'a> {
@@ -24999,6 +25000,22 @@ impl<'a> OrgRenderer<'a> {
             footnotes,
             options,
             rendering_footnote_defs: false,
+            code: Rc::new(CodeIndex::default()),
+        }
+    }
+
+    /// A renderer for `node` and its descendants, with the code index for them.
+    fn around(node: &NodeRef, footnotes: &'a FootnoteState, options: RenderOptions) -> Self {
+        Self {
+            code: Rc::new(CodeIndex::around(node)),
+            ..Self::new(footnotes, options)
+        }
+    }
+
+    fn nested(&self) -> OrgRenderer<'a> {
+        OrgRenderer {
+            code: Rc::clone(&self.code),
+            ..OrgRenderer::new(self.footnotes, self.options)
         }
     }
 
@@ -25415,7 +25432,7 @@ impl<'a> OrgRenderer<'a> {
     fn render_quote(&mut self, node: &NodeRef) {
         self.ensure_blank_line();
         self.out.push_str("#+begin_quote\n");
-        let mut nested = OrgRenderer::new(self.footnotes, self.options);
+        let mut nested = self.nested();
         for child in node.children() {
             nested.render_node(&child, false);
         }
@@ -25436,7 +25453,7 @@ impl<'a> OrgRenderer<'a> {
         }
         self.out.push('\n');
 
-        let mut nested = OrgRenderer::new(self.footnotes, self.options);
+        let mut nested = self.nested();
         match callout.content_node {
             Some(content) => {
                 for child in content.children() {
@@ -25646,7 +25663,7 @@ impl<'a> OrgRenderer<'a> {
     }
 
     fn render_inline_children(&self, node: &NodeRef) -> String {
-        let mut nested = OrgRenderer::new(self.footnotes, self.options);
+        let mut nested = self.nested();
         nested.rendering_footnote_defs = self.rendering_footnote_defs;
         for child in node.children() {
             nested.render_node(&child, true);
@@ -25746,7 +25763,7 @@ impl<'a> OrgRenderer<'a> {
         }
         self.rendering_footnote_defs = true;
         for entry in &self.footnotes.entries {
-            let mut nested = OrgRenderer::new(self.footnotes, self.options);
+            let mut nested = self.nested();
             nested.rendering_footnote_defs = true;
             for node in &entry.content_nodes {
                 render_footnote_content_node(&mut nested, node);
@@ -25778,7 +25795,7 @@ impl<'a> OrgRenderer<'a> {
         if self.rendering_footnote_defs && self.footnotes.noise_nodes.contains(&key) {
             return true;
         }
-        is_code_block_chrome_node(node)
+        is_code_block_chrome_node(node, &self.code)
             || is_non_content_button_node(node)
             || is_arxiv_footnote_mark_node(node)
     }
@@ -29483,12 +29500,12 @@ fn infer_code_language_from_text(text: &str) -> Option<String> {
     None
 }
 
-fn is_code_block_chrome_node(node: &NodeRef) -> bool {
+fn is_code_block_chrome_node(node: &NodeRef, code: &CodeIndex) -> bool {
     let Some(element) = node.as_element() else {
         return false;
     };
     // Cheap and false for most nodes; the math check walks every ancestor.
-    if !ancestor_contains_code_block(node) {
+    if !code.ancestor_has_code(node) {
         return false;
     }
     if is_math_node(node) || is_inside_math_tree(node) {
@@ -29509,11 +29526,11 @@ fn is_code_block_chrome_node(node: &NodeRef) -> bool {
     if is_code_chrome_attr_text(&attrs) {
         return true;
     }
-    if is_code_tab_selector_node(node, &attrs) {
+    if is_code_tab_selector_node(node, &attrs, code) {
         return true;
     }
 
-    if subtree_has_code(node) {
+    if code.subtree_has_code(node) {
         return false;
     }
     if text.is_empty() || count_words(&text) > 3 {
@@ -29555,8 +29572,8 @@ fn is_code_chrome_attr_text(attrs: &str) -> bool {
         || attrs.contains("code-header")
 }
 
-fn is_code_tab_selector_node(node: &NodeRef, attrs: &str) -> bool {
-    if subtree_has_code(node) {
+fn is_code_tab_selector_node(node: &NodeRef, attrs: &str, code: &CodeIndex) -> bool {
+    if code.subtree_has_code(node) {
         return false;
     }
     attrs
@@ -29564,54 +29581,63 @@ fn is_code_tab_selector_node(node: &NodeRef, attrs: &str) -> bool {
         .any(|part| matches!(part, "listbox" | "option" | "tablist" | "tab"))
 }
 
-thread_local! {
-    static CODE_SUBTREE_FLAGS: RefCell<Option<HashMap<usize, bool>>> = const { RefCell::new(None) };
-}
-
-/// Memoizes, for the elements near one rendered node, whether their subtree
-/// holds a `pre`, `code` or `.cm-content` element. The answer only depends on
-/// the tree, so while a read-only phase runs it replaces repeated subtree
-/// scans.
+/// Which elements near a rendered node hold a `pre`, `code` or `.cm-content`
+/// element in their subtree, worked out once so that asking about each
+/// element does not rescan its ancestors.
 ///
-/// The memo covers the subtree of the fourth ancestor of the node. That is
-/// all the ancestor check looks at for the node and its descendants, and it
-/// keeps a short fragment of a large page from paying for the whole page.
-/// Queries about other nodes fall back to scanning. A scope inside one that
-/// already covers its node reuses it; otherwise it stacks its own memo and
-/// restores the outer one when it ends. The memo must not outlive a phase
-/// that modifies the tree; debug builds check this when the scope ends.
-struct CodeSubtreeScope {
-    owned: Option<(NodeRef, Option<HashMap<usize, bool>>)>,
+/// The index covers the subtree of the fourth ancestor of the node it is
+/// built around. The ancestor check looks at most four levels up, so that is
+/// all the node and its descendants can ask about, and a fragment of a large
+/// page does not pay for the whole page. Anything outside is answered by
+/// scanning, so the default (empty) index is always correct, only slower.
+///
+/// The index describes the tree as it was when built: keep it only for a
+/// read-only phase.
+#[derive(Default)]
+struct CodeIndex {
+    top: Option<NodeRef>,
+    flags: HashMap<usize, bool>,
 }
 
-impl CodeSubtreeScope {
-    fn enter(node: &NodeRef) -> Self {
+impl CodeIndex {
+    fn around(node: &NodeRef) -> Self {
         let top = node
             .ancestors()
             .take(4)
             .last()
             .unwrap_or_else(|| node.clone());
-        if memoized_code_subtree(&top).is_some() {
-            return Self { owned: None };
-        }
-        let flags = code_subtree_flags(&top);
-        let outer = CODE_SUBTREE_FLAGS.with(|slot| slot.borrow_mut().replace(flags));
         Self {
-            owned: Some((top, outer)),
+            flags: code_subtree_flags(&top),
+            top: Some(top),
         }
     }
-}
 
-impl Drop for CodeSubtreeScope {
-    fn drop(&mut self) {
-        let Some((top, outer)) = self.owned.take() else {
-            return;
-        };
-        let memo =
-            CODE_SUBTREE_FLAGS.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), outer));
+    /// Whether the subtree of `node`, itself included, holds code content.
+    fn subtree_has_code(&self, node: &NodeRef) -> bool {
+        self.flags
+            .get(&node_key(node))
+            .copied()
+            .unwrap_or_else(|| contains_code_content(node))
+    }
+
+    /// Whether the subtree of one of the four nearest ancestors holds code.
+    fn ancestor_has_code(&self, node: &NodeRef) -> bool {
+        for ancestor in node.ancestors().take(4) {
+            match self.flags.get(&node_key(&ancestor)) {
+                Some(true) => return true,
+                Some(false) => {}
+                None => return ancestor_contains_code_block(node),
+            }
+        }
+        false
+    }
+
+    fn assert_current(&self) {
         debug_assert!(
-            memo.map_or(true, |memo| memo == code_subtree_flags(&top)),
-            "the tree changed while its code-subtree memo was in use"
+            self.top
+                .as_ref()
+                .map_or(true, |top| self.flags == code_subtree_flags(top)),
+            "the tree changed while its code index was in use"
         );
     }
 }
@@ -29640,19 +29666,7 @@ fn code_subtree_flags(root: &NodeRef) -> HashMap<usize, bool> {
     flags
 }
 
-fn memoized_code_subtree(node: &NodeRef) -> Option<bool> {
-    CODE_SUBTREE_FLAGS.with(|flags| flags.borrow().as_ref()?.get(&node_key(node)).copied())
-}
-
-/// Whether the subtree of `node`, itself included, holds code content.
-fn subtree_has_code(node: &NodeRef) -> bool {
-    memoized_code_subtree(node).unwrap_or_else(|| contains_code_content(node))
-}
-
 fn ancestor_contains_code_block(node: &NodeRef) -> bool {
-    if let Some(known) = memoized_ancestor_contains_code_block(node) {
-        return known;
-    }
     // Same result as scanning each of the four nearest ancestors' subtrees, but
     // working outwards so a nearby match stops early and no node is visited twice.
     let mut scanned: Option<NodeRef> = None;
@@ -29671,15 +29685,6 @@ fn ancestor_contains_code_block(node: &NodeRef) -> bool {
         scanned = Some(ancestor);
     }
     false
-}
-
-fn memoized_ancestor_contains_code_block(node: &NodeRef) -> Option<bool> {
-    for ancestor in node.ancestors().take(4) {
-        if memoized_code_subtree(&ancestor)? {
-            return Some(true);
-        }
-    }
-    Some(false)
 }
 
 /// Equivalent to `count_selector(node, "pre, code, .cm-content") > 0`.
@@ -30452,13 +30457,13 @@ fn contains_layout_table(node: &NodeRef) -> bool {
         .any(|table| is_layout_table(&table))
 }
 
-fn count_node_words(node: &NodeRef) -> usize {
-    fn append_text(node: &NodeRef, text: &mut String) {
+fn count_node_words(node: &NodeRef, code: &CodeIndex) -> usize {
+    fn append_text(node: &NodeRef, text: &mut String, code: &CodeIndex) {
         match node.data() {
             NodeData::Text(value) => text.push_str(&value.borrow()),
             NodeData::Element(element) => {
                 let tag = element.name.local.as_ref();
-                if is_code_block_chrome_node(node) {
+                if is_code_block_chrome_node(node, code) {
                     return;
                 }
                 if tag == "pre" || is_code_block_container(node, element) {
@@ -30469,20 +30474,20 @@ fn count_node_words(node: &NodeRef) -> usize {
                 }
                 text.push(' ');
                 for child in node.children() {
-                    append_text(&child, text);
+                    append_text(&child, text, code);
                 }
                 text.push(' ');
             }
             _ => {
                 for child in node.children() {
-                    append_text(&child, text);
+                    append_text(&child, text, code);
                 }
             }
         }
     }
 
     let mut text = String::new();
-    append_text(node, &mut text);
+    append_text(node, &mut text, code);
     count_words(&text)
 }
 
@@ -41014,7 +41019,7 @@ let value = \`tick\`;
         assert_eq!(count_html_words("<p>a&lt;b &#169; &copy;</p>"), 1);
         let document = kuchiki::parse_html()
             .one("<article><p>one <code><span>two</span></code></p><p>three</p></article>");
-        assert_eq!(count_node_words(&document), 3);
+        assert_eq!(count_node_words(&document, &CodeIndex::default()), 3);
     }
 
     #[test]
@@ -43717,151 +43722,96 @@ let value = \`tick\`;
     </article></body></html>"#;
 
     #[test]
-    fn code_subtree_memo_includes_the_document_and_every_element() {
+    fn code_index_covers_the_document_and_every_element() {
         let document = html_fragment(CODE_MEMO_PAGE);
-        let flags = code_subtree_flags(&document);
-        assert_eq!(flags.get(&node_key(&document)), Some(&true));
+        let index = CodeIndex::around(&document);
         for node in document.inclusive_descendants() {
-            let expected = node
-                .as_element()
-                .map(|_| contains_code_content(&node))
-                .or_else(|| {
-                    matches!(node.data(), NodeData::Document(_))
-                        .then(|| contains_code_content(&node))
-                });
-            assert_eq!(flags.get(&node_key(&node)).copied(), expected);
+            let expected = match node.data() {
+                NodeData::Element(_) | NodeData::Document(_) => Some(contains_code_content(&node)),
+                _ => None,
+            };
+            assert_eq!(index.flags.get(&node_key(&node)).copied(), expected);
         }
+        assert_eq!(index.flags.get(&node_key(&document)), Some(&true));
     }
 
     #[test]
-    fn memoized_code_queries_match_scanning_for_every_element() {
+    fn indexed_code_queries_match_scanning_for_every_element() {
         let document = html_fragment(CODE_MEMO_PAGE);
-        let elements: Vec<NodeRef> = document
-            .descendants()
-            .filter(|node| node.as_element().is_some())
-            .collect();
-        let scanned: Vec<(bool, bool, bool)> = elements
-            .iter()
-            .map(|node| {
-                (
-                    ancestor_contains_code_block(node),
-                    subtree_has_code(node),
-                    is_code_block_chrome_node(node),
-                )
-            })
-            .collect();
-        assert!(scanned.iter().any(|(ancestor, _, _)| *ancestor));
-        assert!(scanned.iter().any(|(ancestor, _, _)| !*ancestor));
-        assert!(scanned.iter().any(|(_, _, chrome)| *chrome));
-
-        let _memo = CodeSubtreeScope::enter(&document);
-        for (node, expected) in elements.iter().zip(&scanned) {
-            assert!(memoized_code_subtree(node).is_some());
+        let index = CodeIndex::around(&document);
+        let scanning = CodeIndex::default();
+        let mut with_code = 0;
+        let mut without_code = 0;
+        for node in document.descendants().filter(|n| n.as_element().is_some()) {
+            let expected = reference_ancestor_contains_code_block(&node);
+            assert_eq!(index.ancestor_has_code(&node), expected);
+            assert_eq!(scanning.ancestor_has_code(&node), expected);
             assert_eq!(
-                (
-                    ancestor_contains_code_block(node),
-                    subtree_has_code(node),
-                    is_code_block_chrome_node(node),
-                ),
-                *expected,
-                "{:?}",
-                node.as_element().map(|e| e.name.local.to_string())
+                index.subtree_has_code(&node),
+                scanning.subtree_has_code(&node)
             );
+            if expected {
+                with_code += 1;
+            } else {
+                without_code += 1;
+            }
         }
+        assert!(with_code > 0 && without_code > 0);
     }
 
     #[test]
-    fn code_subtree_memo_falls_back_for_nodes_outside_its_window() {
-        let document = html_fragment(CODE_MEMO_PAGE);
-        let other = html_fragment("<html><body><div><pre>c</pre><p id=t>x</p></div></body></html>");
-        let target = select_first_node(&other, "#t").unwrap();
-        let _memo = CodeSubtreeScope::enter(&document);
-        assert!(memoized_code_subtree(&target).is_none());
-        assert!(ancestor_contains_code_block(&target));
-    }
-
-    #[test]
-    fn nested_scopes_reuse_a_covering_memo_and_stack_otherwise() {
-        let document = html_fragment(CODE_MEMO_PAGE);
-        let other = html_fragment("<html><body><div><pre>c</pre><p id=t>x</p></div></body></html>");
-        let target = select_first_node(&other, "#t").unwrap();
-        let plain = select_first_node(&document, "#plain").unwrap();
-
-        let outer = CodeSubtreeScope::enter(&document);
-        assert!(outer.owned.is_some());
-        {
-            // Covered by the outer memo: reused, nothing replaced.
-            let inner = CodeSubtreeScope::enter(&plain);
-            assert!(inner.owned.is_none());
-        }
-        {
-            // A different tree gets its own memo while the outer one waits.
-            let inner = CodeSubtreeScope::enter(&target);
-            assert!(inner.owned.is_some());
-            assert!(memoized_code_subtree(&target).is_some());
-        }
-        assert!(memoized_code_subtree(&target).is_none());
-        assert!(memoized_code_subtree(&plain).is_some());
-        drop(outer);
-        assert!(memoized_code_subtree(&plain).is_none());
-    }
-
-    #[test]
-    fn code_subtree_memo_for_a_fragment_covers_only_its_ancestor_window() {
+    fn code_index_for_a_fragment_covers_only_its_ancestor_window() {
         let filler = "<p>filler</p>".repeat(30);
         let html = format!(
             "<html><body><main>{filler}<div id=a><div id=b><div id=c><div id=d><p id=t>x <b id=u>y</b></p></div></div></div></div>{filler}</main></body></html>"
         );
         let document = html_fragment(&html);
         let message = select_first_node(&document, "#t").unwrap();
-        let in_window: Vec<NodeRef> = ["#d", "#c", "#b", "#a"]
-            .iter()
-            .map(|selector| select_first_node(&document, selector).unwrap())
-            .collect();
-        let outside = select_first_node(&document, "main").unwrap();
-        let first_filler = select_first_node(&document, "main > p").unwrap();
+        let index = CodeIndex::around(&message);
+        let covered = |selector: &str| {
+            let node = select_first_node(&document, selector).unwrap();
+            index.flags.contains_key(&node_key(&node))
+        };
+        for selector in ["#t", "#u", "#d", "#c", "#b", "#a"] {
+            assert!(covered(selector), "{selector}");
+        }
+        assert!(!covered("main"), "the fifth ancestor is outside");
+        assert!(!covered("main > p"), "siblings of the window are outside");
 
-        let elements: Vec<NodeRef> = message
+        // Elements of the fragment get the same answers as by scanning.
+        let scanning = CodeIndex::default();
+        for node in message
             .inclusive_descendants()
             .filter(|n| n.as_element().is_some())
-            .collect();
-        let scanned: Vec<bool> = elements.iter().map(ancestor_contains_code_block).collect();
-
-        let _memo = CodeSubtreeScope::enter(&message);
-        for node in &in_window {
-            assert!(memoized_code_subtree(node).is_some());
+        {
+            assert_eq!(
+                index.ancestor_has_code(&node),
+                scanning.ancestor_has_code(&node)
+            );
         }
-        assert!(
-            memoized_code_subtree(&outside).is_none(),
-            "the fifth ancestor is outside"
-        );
-        assert!(
-            memoized_code_subtree(&first_filler).is_none(),
-            "siblings of the window are outside"
-        );
-        let memoized: Vec<bool> = elements.iter().map(ancestor_contains_code_block).collect();
-        assert_eq!(memoized, scanned);
     }
 
     #[test]
-    fn code_subtree_memo_is_dropped_with_its_scope() {
+    fn code_index_answers_nodes_outside_its_window_by_scanning() {
         let document = html_fragment(CODE_MEMO_PAGE);
-        {
-            let _memo = CodeSubtreeScope::enter(&document);
-            assert!(memoized_code_subtree(&document).is_some());
-        }
-        assert!(memoized_code_subtree(&document).is_none());
+        let other = html_fragment("<html><body><div><pre>c</pre><p id=t>x</p></div></body></html>");
+        let target = select_first_node(&other, "#t").unwrap();
+        let index = CodeIndex::around(&document);
+        assert!(!index.flags.contains_key(&node_key(&target)));
+        assert!(index.ancestor_has_code(&target));
+        assert!(index.subtree_has_code(&select_first_node(&other, "div").unwrap()));
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "memo")]
-    fn debug_builds_detect_a_tree_changed_under_the_memo() {
+    #[should_panic(expected = "code index")]
+    fn debug_builds_detect_a_tree_changed_under_the_index() {
         let document = html_fragment(CODE_MEMO_PAGE);
-        let _memo = CodeSubtreeScope::enter(&document);
+        let index = CodeIndex::around(&document);
         for pre in document.select("pre").unwrap().collect::<Vec<_>>() {
             pre.as_node().detach();
         }
+        index.assert_current();
     }
 
     fn reference_is_code_block_chrome_node(node: &NodeRef) -> bool {
@@ -43919,7 +43869,14 @@ let value = \`tick\`;
         let mut chrome = 0;
         for node in document.descendants() {
             let expected = reference_is_code_block_chrome_node(&node);
-            assert_eq!(is_code_block_chrome_node(&node), expected);
+            assert_eq!(
+                is_code_block_chrome_node(&node, &CodeIndex::around(&document)),
+                expected
+            );
+            assert_eq!(
+                is_code_block_chrome_node(&node, &CodeIndex::default()),
+                expected
+            );
             chrome += expected as usize;
         }
         assert!(chrome >= 2, "the page should exercise the true branch");
