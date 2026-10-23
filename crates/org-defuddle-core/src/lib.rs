@@ -19114,10 +19114,13 @@ fn remove_timezone_widgets(main: &NodeRef, debug_removals: &mut Option<&mut Vec<
     let nodes = matches
         .filter_map(|matched| {
             let node = matched.as_node();
-            if node.parent().is_none() || count_preceding_words(main, node) > 60 {
+            if node.parent().is_none()
+                || !is_timezone_widget_label(node)
+                || count_preceding_words(main, node) > 60
+            {
                 return None;
             }
-            is_timezone_widget_label(node).then(|| timezone_widget_target(node, main))
+            Some(timezone_widget_target(node, main))
         })
         .collect::<Vec<_>>();
 
@@ -19915,9 +19918,12 @@ fn remove_pre_content_author_date_metadata(
         if is_substantive_content_start(&node) {
             break;
         }
-        if count_preceding_words(main, &node) <= 25
-            && is_pre_content_author_date_metadata_node(&node)
-        {
+        // Words before a node never decrease in document order, and nothing is
+        // detached before the first match, so no later node can qualify.
+        if count_preceding_words(main, &node) > 25 {
+            break;
+        }
+        if is_pre_content_author_date_metadata_node(&node) {
             let target = highest_same_text_wrapper(&node, main);
             detach_content_pattern(debug_removals, "author date metadata", &target);
             removed = true;
@@ -21622,12 +21628,17 @@ fn highest_single_child_wrapper(node: &NodeRef, boundary: &NodeRef) -> NodeRef {
     target
 }
 
+/// Nearby word counts are capped here. That keeps `< t` and `>= t` exact for
+/// `t <= NEARBY_WORDS_LIMIT` and `> t` and `<= t` exact for `t < NEARBY_WORDS_LIMIT`,
+/// which covers every caller.
+const NEARBY_WORDS_LIMIT: usize = 100;
+
 fn count_preceding_words(boundary: &NodeRef, node: &NodeRef) -> usize {
     let mut total = 0usize;
     let mut current = node.clone();
     loop {
         for sibling in current.preceding_siblings() {
-            total += count_words(&sibling.text_contents());
+            total += count_words_up_to(&sibling, NEARBY_WORDS_LIMIT - total);
             if total > 90 {
                 return total;
             }
@@ -21647,7 +21658,7 @@ fn count_following_words(boundary: &NodeRef, node: &NodeRef) -> usize {
     let mut current = node.clone();
     loop {
         for sibling in current.following_siblings() {
-            total += count_words(&sibling.text_contents());
+            total += count_words_up_to(&sibling, NEARBY_WORDS_LIMIT - total);
             if total > 90 {
                 return total;
             }
@@ -29711,24 +29722,45 @@ fn cleanup_markdown(text: &str) -> String {
     }
 }
 
-fn count_words(text: &str) -> usize {
-    let mut cjk_count = 0;
-    let mut word_count = 0;
-    let mut in_word = false;
+#[derive(Default)]
+struct WordCounter {
+    count: usize,
+    in_word: bool,
+}
 
-    for ch in text.chars() {
+impl WordCounter {
+    fn push(&mut self, ch: char) {
         if is_frontmatter_cjk(ch) {
-            cjk_count += 1;
-            in_word = false;
+            self.count += 1;
+            self.in_word = false;
         } else if (ch as u32) <= 32 {
-            in_word = false;
-        } else if !in_word {
-            word_count += 1;
-            in_word = true;
+            self.in_word = false;
+        } else if !self.in_word {
+            self.count += 1;
+            self.in_word = true;
         }
     }
+}
 
-    cjk_count + word_count
+fn count_words(text: &str) -> usize {
+    let mut counter = WordCounter::default();
+    text.chars().for_each(|ch| counter.push(ch));
+    counter.count
+}
+
+/// `count_words(&node.text_contents())` without building the string, stopping
+/// as soon as `limit` words have been seen.
+fn count_words_up_to(node: &NodeRef, limit: usize) -> usize {
+    let mut counter = WordCounter::default();
+    for text_node in node.inclusive_descendants().text_nodes() {
+        for ch in text_node.borrow().chars() {
+            counter.push(ch);
+            if counter.count >= limit {
+                return counter.count;
+            }
+        }
+    }
+    counter.count
 }
 
 fn count_html_words(html: &str) -> usize {
@@ -43427,5 +43459,135 @@ let value = \`tick\`;
         .unwrap();
         assert_eq!(tracked.org, debug.org);
         assert_eq!(tracked.word_count, debug.word_count);
+    }
+    #[test]
+    fn bounded_word_count_matches_count_words_on_text_contents() {
+        let document = html_fragment(
+            "<body><p>alpha <b>beta</b>gamma delta</p><p>日本語 text 한국어</p>\
+             <p>  </p><!-- comment words here --><p>one<span>two</span> three</p></body>",
+        );
+        for node in document.descendants() {
+            let exact = count_words(&node.text_contents());
+            for limit in [1, 2, 3, 5, 100] {
+                if exact < limit {
+                    assert_eq!(count_words_up_to(&node, limit), exact);
+                } else {
+                    assert_eq!(count_words_up_to(&node, limit), limit);
+                }
+            }
+        }
+    }
+
+    fn reference_nearby_words(
+        boundary: &NodeRef,
+        node: &NodeRef,
+        siblings: fn(&NodeRef) -> Vec<NodeRef>,
+    ) -> usize {
+        let mut total = 0usize;
+        let mut current = node.clone();
+        loop {
+            for sibling in siblings(&current) {
+                total += count_words(&sibling.text_contents());
+                if total > 90 {
+                    return total;
+                }
+            }
+            let Some(parent) = current.parent() else {
+                return total;
+            };
+            if parent == *boundary {
+                return total;
+            }
+            current = parent;
+        }
+    }
+
+    #[test]
+    fn nearby_word_counts_agree_with_the_unbounded_count_at_every_threshold() {
+        let long = "word ".repeat(70);
+        let html = format!(
+            "<body><main><div><p>{long}</p><section><p>short one</p>{long}<p id=mid>middle text</p>\
+             <p>{long}</p></section><span>tail</span></div><p>{long}</p></main></body>"
+        );
+        let document = html_fragment(&html);
+        let main = select_first_node(&document, "main").unwrap();
+        let mut compared = 0;
+        for node in main.descendants().filter(|n| n.as_element().is_some()) {
+            let before = reference_nearby_words(&main, &node, |n| n.preceding_siblings().collect());
+            let after = reference_nearby_words(&main, &node, |n| n.following_siblings().collect());
+            let (got_before, got_after) = (
+                count_preceding_words(&main, &node),
+                count_following_words(&main, &node),
+            );
+            assert_eq!(got_before, before.min(NEARBY_WORDS_LIMIT));
+            assert_eq!(got_after, after.min(NEARBY_WORDS_LIMIT));
+            for threshold in [25, 50, 60, 80, 90, 99, 100] {
+                assert_eq!(got_before < threshold, before < threshold, "{threshold}");
+                assert_eq!(got_after >= threshold, after >= threshold, "{threshold}");
+            }
+            for threshold in [25, 50, 60, 80, 90, 99] {
+                assert_eq!(got_before > threshold, before > threshold, "{threshold}");
+                assert_eq!(got_after <= threshold, after <= threshold, "{threshold}");
+            }
+            compared += 1;
+        }
+        assert!(compared > 5);
+    }
+
+    fn reference_remove_pre_content_author_date_metadata(main: &NodeRef) {
+        let candidates: Vec<NodeRef> = main
+            .descendants()
+            .filter(|node| node.as_element().is_some())
+            .collect();
+        let mut removed = false;
+        for node in candidates {
+            if removed || node.parent().is_none() || is_heading_node(&node) {
+                continue;
+            }
+            if is_substantive_content_start(&node) {
+                break;
+            }
+            if reference_nearby_words(main, &node, |n| n.preceding_siblings().collect()) <= 25
+                && is_pre_content_author_date_metadata_node(&node)
+            {
+                let target = highest_same_text_wrapper(&node, main);
+                target.detach();
+                removed = true;
+            }
+        }
+    }
+
+    #[test]
+    fn author_date_metadata_removal_matches_the_unbounded_scan() {
+        let filler = "word ".repeat(30);
+        for html in [
+            "<body><main><h1>Title</h1><div>By Jane Doe, March 3, 2024</div><p>Body text goes here and is long enough to count as the real content of this article page.</p></main></body>".to_string(),
+            format!("<body><main><h1>Title</h1><div>{filler}</div><div>By Jane Doe, March 3, 2024</div><p>Body</p></main></body>"),
+            "<body><main><div><span>By Jane Doe</span> <span>March 3, 2024</span></div><div>By John Roe, May 5, 2023</div></main></body>".to_string(),
+            "<body><main><p>No metadata here at all.</p></main></body>".to_string(),
+            // ten words precede the byline: below the 25-word cutoff, above 5
+            "<body><main><div>one two three four five six seven eight nine ten</div><div>By Jane Doe, March 3, 2024</div></main></body>".to_string(),
+        ] {
+            let expected_doc = html_fragment(&html);
+            let expected_main = select_first_node(&expected_doc, "main").unwrap();
+            reference_remove_pre_content_author_date_metadata(&expected_main);
+
+            let actual_doc = html_fragment(&html);
+            let actual_main = select_first_node(&actual_doc, "main").unwrap();
+            remove_pre_content_author_date_metadata(&actual_main, &mut None);
+
+            assert_eq!(
+                serialize_node(&actual_doc).unwrap(),
+                serialize_node(&expected_doc).unwrap(),
+                "{html}"
+            );
+        }
+
+        let ten_words = html_fragment(
+            "<body><main><div>one two three four five six seven eight nine ten</div><div>By Jane Doe, March 3, 2024</div></main></body>",
+        );
+        let main = select_first_node(&ten_words, "main").unwrap();
+        remove_pre_content_author_date_metadata(&main, &mut None);
+        assert!(!serialize_node(&ten_words).unwrap().contains("Jane Doe"));
     }
 }
