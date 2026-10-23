@@ -159,6 +159,12 @@ the headline; code, URLs, real emphasis and property values such as
 characters allowed next to the markers, which is how many people configure Org
 for CJK text, so the output is safe with that setting and with the default one.
 
+Each piece of text is checked on its own. If the two markers of a pair sit in
+different inline elements with nothing between them, for example
+~<span>/Agent</span>/ was~, neither piece is escaped and Org can still read the
+pair as emphasis. The renderer usually puts a space between adjacent inline
+elements, which keeps most such pairs from forming.
+
 * CLI Usage
 
 The Rust CLI supports upstream-style ~parse~ options for URLs, local HTML
