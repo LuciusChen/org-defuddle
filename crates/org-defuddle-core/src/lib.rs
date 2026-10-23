@@ -25598,7 +25598,7 @@ impl<'a> OrgRenderer<'a> {
     }
 
     fn push_plain_text(&mut self, text: &str) {
-        let text = normalize_ws(text);
+        let text = escape_org_emphasis(&normalize_ws(text));
         if text.is_empty() {
             return;
         }
@@ -27225,7 +27225,11 @@ fn build_org_document(metadata: &Metadata, body: &str, word_count: usize) -> Str
     push_property(&mut out, "PUBLISHED", &metadata.published);
     push_property(&mut out, "SITE", &metadata.site);
     push_property(&mut out, "DOMAIN", &metadata.domain);
-    push_property(&mut out, "DESCRIPTION", &metadata.description);
+    push_property(
+        &mut out,
+        "DESCRIPTION",
+        &escape_org_emphasis(&metadata.description),
+    );
     push_property(&mut out, "IMAGE", &metadata.image);
     push_property(&mut out, "LANGUAGE", &metadata.language);
     push_property(&mut out, "WORD_COUNT", &word_count.to_string());
@@ -30271,7 +30275,66 @@ fn next_sibling_starts_without_whitespace(node: &NodeRef) -> bool {
 }
 
 fn escape_org_headline(text: &str) -> String {
-    text.trim_start_matches('*').trim().to_string()
+    escape_org_emphasis(text.trim_start_matches('*').trim())
+}
+
+const ORG_EMPHASIS_MARKERS: [char; 6] = ['*', '/', '_', '+', '=', '~'];
+
+/// Keeps literal text that looks like Org markup literal.
+///
+/// Org turns `/word/`, `*word*`, `_word_`, `+word+`, `=word=` and `~word~`
+/// into emphasis, and hides the markers. Org has no backslash escape for
+/// them; its manual suggests a zero-width space, so put one after an opening
+/// marker that a later marker of the same kind would close. The rules are the
+/// ones in `org-emphasis-regexp-components`, with non-ASCII characters allowed
+/// next to the markers because many people configure Org that way for CJK
+/// text. `a/b/c`, URLs and `x*y*z` are left alone.
+fn escape_org_emphasis(text: &str) -> String {
+    if !text.contains(ORG_EMPHASIS_MARKERS) {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let can_precede = |c: Option<char>| {
+        c.map_or(true, |c| {
+            c.is_whitespace() || "-('\"{".contains(c) || !c.is_ascii()
+        })
+    };
+    let can_follow = |c: Option<char>| {
+        c.map_or(true, |c| {
+            c.is_whitespace() || "-.,:!?;'\")}[".contains(c) || !c.is_ascii()
+        })
+    };
+
+    let mut closers: HashMap<char, Vec<usize>> = HashMap::new();
+    for (index, &c) in chars.iter().enumerate() {
+        if ORG_EMPHASIS_MARKERS.contains(&c)
+            && index > 0
+            && !chars[index - 1].is_whitespace()
+            && can_follow(chars.get(index + 1).copied())
+        {
+            closers.entry(c).or_default().push(index);
+        }
+    }
+
+    let mut out = String::with_capacity(text.len() + 4);
+    for (index, &c) in chars.iter().enumerate() {
+        out.push(c);
+        let opens = ORG_EMPHASIS_MARKERS.contains(&c)
+            && can_precede(index.checked_sub(1).map(|previous| chars[previous]))
+            && chars
+                .get(index + 1)
+                .is_some_and(|next| !next.is_whitespace() && *next != '\u{200b}');
+        if opens {
+            let later = closers.get(&c).map_or(&[][..], Vec::as_slice);
+            if later
+                .get(later.partition_point(|&closer| closer <= index + 1))
+                .is_some()
+            {
+                out.push('\u{200b}');
+            }
+        }
+    }
+    out
 }
 
 fn escape_inline_code(text: &str) -> String {
@@ -43092,5 +43155,80 @@ let value = \`tick\`;
             .org
             .contains("See how our platform can help your team"));
         assert!(!output.org.contains("Tips, tutorials"));
+    }
+    #[test]
+    fn org_emphasis_lookalikes_get_a_zero_width_space_after_the_opening_marker() {
+        let zw = "\u{200b}";
+        for (input, expected) in [
+            (
+                "标准/Agent/网关 就是基本盘了",
+                format!("标准/{zw}Agent/网关 就是基本盘了"),
+            ),
+            ("plain /word/ here", format!("plain /{zw}word/ here")),
+            ("a *do* b", format!("a *{zw}do* b")),
+            (
+                "an =eq= and ~tilde~ and +plus+ and _under_",
+                format!("an ={zw}eq= and ~{zw}tilde~ and +{zw}plus+ and _{zw}under_"),
+            ),
+            ("中文*强调*文字", format!("中文*{zw}强调*文字")),
+            (
+                "IPA (/ɪɡˈzæmpəl/) here",
+                format!("IPA (/{zw}ɪɡˈzæmpəl/) here"),
+            ),
+            ("/usr/bin/ is a path", format!("/{zw}usr/bin/ is a path")),
+        ] {
+            assert_eq!(escape_org_emphasis(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn org_emphasis_escaping_leaves_ordinary_text_alone() {
+        for input in [
+            "a/b/c path",
+            "https://example.com/a/b/ and https://t.co/7FNeYnXAJQ",
+            "x*y*z and 1+2+3 and a_b_c and 2*3 = 6",
+            "an open / and a lone * or _",
+            "path/to/file.txt",
+            "* not a pair",
+            "no markers at all",
+        ] {
+            assert_eq!(escape_org_emphasis(input), input, "{input}");
+        }
+    }
+
+    #[test]
+    fn org_emphasis_escaping_is_idempotent() {
+        let once = escape_org_emphasis("标准/Agent/网关 and *do* and /x/");
+        assert_eq!(escape_org_emphasis(&once), once);
+    }
+
+    #[test]
+    fn rendered_text_keeps_emphasis_lookalikes_literal_but_not_code_or_real_emphasis() {
+        let output = parse_html_to_org(
+            "<html><head><title>T</title></head><body><article>\
+             <p>标准/Agent/网关/sandbox 就是基本盘了 https://t.co/7FNeYnXAJQ</p>\
+             <p>use <code>/usr/bin/</code> and /usr/bin/ here, and <em>real</em> emphasis</p>\
+             </article></body></html>",
+            DefuddleOptions::default(),
+        )
+        .unwrap();
+        assert!(output
+            .org
+            .contains("标准/\u{200b}Agent/网关/sandbox 就是基本盘了 https://t.co/7FNeYnXAJQ"));
+        assert!(output.org.contains("~/usr/bin/~"), "code is untouched");
+        assert!(output.org.contains("and /\u{200b}usr/bin/ here"));
+        assert!(output.org.contains("/real/"), "real emphasis is untouched");
+    }
+
+    #[test]
+    fn description_and_headline_escape_emphasis_lookalikes_too() {
+        let metadata = Metadata {
+            title: "Why /this/ works".to_string(),
+            description: "But they *do* want one".to_string(),
+            ..Metadata::default()
+        };
+        let org = build_org_document(&metadata, "Body", 1);
+        assert!(org.starts_with("* Why /\u{200b}this/ works\n"));
+        assert!(org.contains(":DESCRIPTION: But they *\u{200b}do* want one\n"));
     }
 }

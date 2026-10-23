@@ -1446,7 +1446,7 @@ fn selected_upstream_fixtures_smoke() {
         FixtureCase {
             fixture: "general--wikipedia-ipa-pronunciation",
             contains: &[
-                "An *example* (/ɪɡˈzæmpəl/) is a short illustrative instance",
+                "An *example* (/\u{200b}ɪɡˈzæmpəl/) is a short illustrative instance",
                 "Mathematicians often distinguish between examples and counterexamples.",
                 "software engineering",
             ],

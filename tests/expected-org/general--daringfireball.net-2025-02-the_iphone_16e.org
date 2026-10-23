@@ -5,7 +5,7 @@
 :PUBLISHED: 2025-02-26T00:00:00+00:00
 :SITE: Daring Fireball
 :DOMAIN: daringfireball.net-2025-02-the_iphone_16e
-:DESCRIPTION: The iPhone 16e is an iPhone for people who don’t want to think much about their phone. But they *do* want an iPhone, not just any “whatever” phone. A just plain iPhone, with a good screen, good enough (and simple) camera, and great battery life.
+:DESCRIPTION: The iPhone 16e is an iPhone for people who don’t want to think much about their phone. But they *​do* want an iPhone, not just any “whatever” phone. A just plain iPhone, with a good screen, good enough (and simple) camera, and great battery life.
 :IMAGE: https://daringfireball.net/graphics/df-wide-card.png
 :LANGUAGE: en
 :WORD_COUNT: 1954

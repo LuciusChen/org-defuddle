@@ -7,7 +7,7 @@
 :WORD_COUNT: 218
 :END:
 
-An *example* (/ɪɡˈzæmpəl/) is a short illustrative instance used to demonstrate a concept, rule, or pattern. Examples appear throughout written and spoken language as a way to anchor an abstract idea in something concrete. A good example is vivid, specific, and relevant to the point being made.
+An *example* (/​ɪɡˈzæmpəl/) is a short illustrative instance used to demonstrate a concept, rule, or pattern. Examples appear throughout written and spoken language as a way to anchor an abstract idea in something concrete. A good example is vivid, specific, and relevant to the point being made.
 
 In teaching and exposition, examples play a central role. They bridge the gap between a general principle and its application, allowing the reader to check whether a claim holds water. A single well-chosen example can do more work than many paragraphs of abstract argument. Conversely, a poorly chosen example can mislead or distract from the underlying point.
 
