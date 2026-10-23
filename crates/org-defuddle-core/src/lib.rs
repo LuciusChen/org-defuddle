@@ -19934,9 +19934,12 @@ fn remove_pre_content_author_date_metadata(
         if is_substantive_content_start(&node) {
             break;
         }
-        if count_preceding_words(main, &node) <= 25
-            && is_pre_content_author_date_metadata_node(&node)
-        {
+        // Words before a node never decrease in document order, and nothing is
+        // detached before the first match, so no later node can qualify.
+        if count_preceding_words(main, &node) > 25 {
+            break;
+        }
+        if is_pre_content_author_date_metadata_node(&node) {
             let target = highest_same_text_wrapper(&node, main);
             detach_content_pattern(debug_removals, "author date metadata", &target);
             removed = true;
@@ -43476,6 +43479,86 @@ let value = \`tick\`;
         .unwrap();
         assert_eq!(tracked.org, debug.org);
         assert_eq!(tracked.word_count, debug.word_count);
+    }
+    fn reference_nearby_words(
+        boundary: &NodeRef,
+        node: &NodeRef,
+        siblings: fn(&NodeRef) -> Vec<NodeRef>,
+    ) -> usize {
+        let mut total = 0usize;
+        let mut current = node.clone();
+        loop {
+            for sibling in siblings(&current) {
+                total += count_words(&sibling.text_contents());
+                if total > 90 {
+                    return total;
+                }
+            }
+            let Some(parent) = current.parent() else {
+                return total;
+            };
+            if parent == *boundary {
+                return total;
+            }
+            current = parent;
+        }
+    }
+
+    fn reference_remove_pre_content_author_date_metadata(main: &NodeRef) {
+        let candidates: Vec<NodeRef> = main
+            .descendants()
+            .filter(|node| node.as_element().is_some())
+            .collect();
+        let mut removed = false;
+        for node in candidates {
+            if removed || node.parent().is_none() || is_heading_node(&node) {
+                continue;
+            }
+            if is_substantive_content_start(&node) {
+                break;
+            }
+            if reference_nearby_words(main, &node, |n| n.preceding_siblings().collect()) <= 25
+                && is_pre_content_author_date_metadata_node(&node)
+            {
+                let target = highest_same_text_wrapper(&node, main);
+                target.detach();
+                removed = true;
+            }
+        }
+    }
+
+    #[test]
+    fn author_date_metadata_removal_matches_the_unbounded_scan() {
+        let filler = "word ".repeat(30);
+        for html in [
+            "<body><main><h1>Title</h1><div>By Jane Doe, March 3, 2024</div><p>Body text goes here and is long enough to count as the real content of this article page.</p></main></body>".to_string(),
+            format!("<body><main><h1>Title</h1><div>{filler}</div><div>By Jane Doe, March 3, 2024</div><p>Body</p></main></body>"),
+            "<body><main><div><span>By Jane Doe</span> <span>March 3, 2024</span></div><div>By John Roe, May 5, 2023</div></main></body>".to_string(),
+            "<body><main><p>No metadata here at all.</p></main></body>".to_string(),
+            // ten words precede the byline: below the 25-word cutoff, above 5
+            "<body><main><div>one two three four five six seven eight nine ten</div><div>By Jane Doe, March 3, 2024</div></main></body>".to_string(),
+        ] {
+            let expected_doc = html_fragment(&html);
+            let expected_main = select_first_node(&expected_doc, "main").unwrap();
+            reference_remove_pre_content_author_date_metadata(&expected_main);
+
+            let actual_doc = html_fragment(&html);
+            let actual_main = select_first_node(&actual_doc, "main").unwrap();
+            remove_pre_content_author_date_metadata(&actual_main, &mut None);
+
+            assert_eq!(
+                serialize_node(&actual_doc).unwrap(),
+                serialize_node(&expected_doc).unwrap(),
+                "{html}"
+            );
+        }
+
+        let ten_words = html_fragment(
+            "<body><main><div>one two three four five six seven eight nine ten</div><div>By Jane Doe, March 3, 2024</div></main></body>",
+        );
+        let main = select_first_node(&ten_words, "main").unwrap();
+        remove_pre_content_author_date_metadata(&main, &mut None);
+        assert!(!serialize_node(&ten_words).unwrap().contains("Jane Doe"));
     }
     #[test]
     fn only_a_tracking_pass_records_stage_effects() {
