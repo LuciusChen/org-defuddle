@@ -153,9 +153,9 @@ Org has no backslash escape for emphasis markers, so text such as ~/Agent/~,
 ~*do*~ or ~(/ɪɡˈzæmpəl/)~ would be rendered as italic or bold with the markers
 hidden. When an opening ~*~, ~/~, ~_~, ~+~, ~=~ or ~~~ in page text would be
 closed by a later marker of the same kind, org-defuddle puts a zero-width space
-(U+200B) after it, as the Org manual suggests. This applies to body text, the
-headline and the ~:DESCRIPTION:~ property; code, URLs and real emphasis are left
-alone. The rules follow ~org-emphasis-regexp-components~ with non-ASCII
+(U+200B) after it, as the Org manual suggests. This applies to body text and
+the headline; code, URLs, real emphasis and property values such as
+~:DESCRIPTION:~ are left alone, so ~org-entry-get~ returns the original string. The rules follow ~org-emphasis-regexp-components~ with non-ASCII
 characters allowed next to the markers, which is how many people configure Org
 for CJK text, so the output is safe with that setting and with the default one.
 

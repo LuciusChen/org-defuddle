@@ -27225,11 +27225,7 @@ fn build_org_document(metadata: &Metadata, body: &str, word_count: usize) -> Str
     push_property(&mut out, "PUBLISHED", &metadata.published);
     push_property(&mut out, "SITE", &metadata.site);
     push_property(&mut out, "DOMAIN", &metadata.domain);
-    push_property(
-        &mut out,
-        "DESCRIPTION",
-        &escape_org_emphasis(&metadata.description),
-    );
+    push_property(&mut out, "DESCRIPTION", &metadata.description);
     push_property(&mut out, "IMAGE", &metadata.image);
     push_property(&mut out, "LANGUAGE", &metadata.language);
     push_property(&mut out, "WORD_COUNT", &word_count.to_string());
@@ -43221,7 +43217,7 @@ let value = \`tick\`;
     }
 
     #[test]
-    fn description_and_headline_escape_emphasis_lookalikes_too() {
+    fn headline_escapes_emphasis_lookalikes_but_property_values_stay_exact() {
         let metadata = Metadata {
             title: "Why /this/ works".to_string(),
             description: "But they *do* want one".to_string(),
@@ -43229,6 +43225,6 @@ let value = \`tick\`;
         };
         let org = build_org_document(&metadata, "Body", 1);
         assert!(org.starts_with("* Why /\u{200b}this/ works\n"));
-        assert!(org.contains(":DESCRIPTION: But they *\u{200b}do* want one\n"));
+        assert!(org.contains(":DESCRIPTION: But they *do* want one\n"));
     }
 }
