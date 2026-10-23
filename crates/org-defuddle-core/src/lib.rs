@@ -1,11 +1,13 @@
 mod partial_selectors;
 
 use kuchiki::traits::*;
-use kuchiki::{ElementData, NodeData, NodeRef};
+use kuchiki::{ElementData, NodeData, NodeDataRef, NodeRef, Selectors};
 use regex::{Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::LazyLock as Lazy;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -924,7 +926,13 @@ pub fn parse_html_to_org(
     options: DefuddleOptions,
 ) -> Result<DefuddleOutput, DefuddleError> {
     let parse_start = Instant::now();
-    let mut result = parse_html_to_org_once(html, options.clone())?;
+    // A content selector skips every retry below, so there is nothing to decide.
+    let mut effects = if options.content_selector.is_some() {
+        StageEffects::default()
+    } else {
+        StageEffects::tracking()
+    };
+    let mut result = parse_html_to_org_once(html, options.clone(), &mut effects)?;
     let markdown_enabled = options.markdown || options.separate_markdown;
     if options.content_selector.is_some() {
         attach_content_markdown(&mut result, markdown_enabled);
@@ -933,21 +941,26 @@ pub fn parse_html_to_org(
         return Ok(result);
     }
 
-    if result.word_count < 200 && options.remove_partial_selectors {
+    if result.word_count < 200
+        && options.remove_partial_selectors
+        && !effects.partial_retry_is_noop()
+    {
         let mut retry_options = options.clone();
         retry_options.remove_partial_selectors = false;
-        let retry = parse_html_to_org_once(html, retry_options)?;
+        let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
         if retry.word_count > result.word_count * 2 {
             result = retry;
         }
     }
 
     if result.word_count < 50 && options.remove_hidden_elements {
-        let mut retry_options = options.clone();
-        retry_options.remove_hidden_elements = false;
-        let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > result.word_count * 2 {
-            result = retry;
+        if !effects.hidden_retry_is_noop() {
+            let mut retry_options = options.clone();
+            retry_options.remove_hidden_elements = false;
+            let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
+            if retry.word_count > result.word_count * 2 {
+                result = retry;
+            }
         }
 
         if let Some(hidden_selector) = find_largest_hidden_content_selector(html) {
@@ -955,7 +968,7 @@ pub fn parse_html_to_org(
             retry_options.remove_hidden_elements = false;
             retry_options.remove_partial_selectors = false;
             retry_options.content_selector = Some(hidden_selector);
-            let retry = parse_html_to_org_once(html, retry_options)?;
+            let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
             if retry.word_count > result.word_count
                 || (retry.word_count > std::cmp::max(20, result.word_count * 7 / 10)
                     && retry.html.len() < result.html.len())
@@ -965,12 +978,12 @@ pub fn parse_html_to_org(
         }
     }
 
-    if result.word_count < 50 {
+    if result.word_count < 50 && !effects.cleanup_retry_is_noop() {
         let mut retry_options = options.clone();
         retry_options.remove_low_scoring = false;
         retry_options.remove_partial_selectors = false;
         retry_options.remove_content_patterns = false;
-        let retry = parse_html_to_org_once(html, retry_options)?;
+        let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
         if retry.word_count > result.word_count {
             result = retry;
         }
@@ -1037,9 +1050,77 @@ fn is_largest_hidden_content_candidate(node: &NodeRef) -> bool {
             .any(|token| matches!(token, "hidden" | "invisible"))
 }
 
+/// Documents larger than this skip stage tracking, so their retries run as usual.
+const STAGE_TRACKING_MAX_HTML_BYTES: usize = 64 * 1024;
+
+/// Whether the optional cleanup stages changed the DOM during one pass.
+///
+/// A retry that only disables stages that changed nothing would repeat the
+/// first pass exactly, so the caller can skip it. When a pass is not tracked
+/// (extractor output, debug or profile mode, large input) every stage counts as
+/// changed.
+#[derive(Default)]
+struct StageEffects {
+    /// Only the first pass is tracked; retries never read the result.
+    track: bool,
+    tracked: bool,
+    hidden: bool,
+    partial: bool,
+    low_scoring: bool,
+    content_patterns: bool,
+}
+
+impl StageEffects {
+    fn tracking() -> Self {
+        Self {
+            track: true,
+            ..Self::default()
+        }
+    }
+
+    fn partial_retry_is_noop(&self) -> bool {
+        self.tracked && !self.partial
+    }
+
+    fn hidden_retry_is_noop(&self) -> bool {
+        self.tracked && !self.hidden
+    }
+
+    fn cleanup_retry_is_noop(&self) -> bool {
+        self.tracked && !self.low_scoring && !self.partial && !self.content_patterns
+    }
+}
+
+/// Runs `stage` and reports whether it changed the serialized document or
+/// main content. Always reports a change when `track` is false.
+fn stage_changed_dom(
+    track: bool,
+    document: &NodeRef,
+    main: &NodeRef,
+    stage: impl FnOnce(),
+) -> bool {
+    if !track {
+        stage();
+        return true;
+    }
+    let before = dom_snapshot(document, main);
+    stage();
+    before.is_none() || before != dom_snapshot(document, main)
+}
+
+fn dom_snapshot(document: &NodeRef, main: &NodeRef) -> Option<(String, Option<String>)> {
+    let main_html = if main == document {
+        None
+    } else {
+        Some(serialize_node(main).ok()?)
+    };
+    Some((serialize_node(document).ok()?, main_html))
+}
+
 fn parse_html_to_org_once(
     html: &str,
     options: DefuddleOptions,
+    effects: &mut StageEffects,
 ) -> Result<DefuddleOutput, DefuddleError> {
     let mut profile = upstream_profile(options.profile, options.standardize, options.debug);
     let step_start = Instant::now();
@@ -1181,6 +1262,11 @@ fn parse_html_to_org_once(
     let github_document = meta_content(&document, "name", "expected-hostname")
         .is_some_and(|host| host.eq_ignore_ascii_case("github.com"));
     let mut debug_removals = Vec::new();
+    // The snapshots would otherwise be counted in the per-step profile timings.
+    let track_stages = effects.track
+        && !options.debug
+        && !options.profile
+        && html.len() <= STAGE_TRACKING_MAX_HTML_BYTES;
 
     let step_start = Instant::now();
     flatten_serialized_shadow_roots(&document);
@@ -1228,7 +1314,9 @@ fn parse_html_to_org_once(
 
     if options.remove_hidden_elements {
         let step_start = Instant::now();
-        remove_hidden_elements(&document, options.debug.then_some(&mut debug_removals));
+        effects.hidden = stage_changed_dom(track_stages, &document, &main, || {
+            remove_hidden_elements(&document, options.debug.then_some(&mut debug_removals));
+        });
         record_profile(&mut profile, "removeHiddenElements", step_start);
     }
     let relative_base_url = document_base_url(&document, &metadata.url);
@@ -1266,11 +1354,13 @@ fn parse_html_to_org_once(
             remove_comment_widgets_by_selector(&main, &mut selector_debug);
         }
         if options.remove_partial_selectors {
-            remove_partial_noise(
-                &document,
-                Some(&main),
-                options.debug.then_some(&mut debug_removals),
-            );
+            effects.partial = stage_changed_dom(track_stages, &document, &main, || {
+                remove_partial_noise(
+                    &document,
+                    Some(&main),
+                    options.debug.then_some(&mut debug_removals),
+                );
+            });
         }
         record_profile(&mut profile, "removeBySelector", step_start);
     }
@@ -1290,7 +1380,9 @@ fn parse_html_to_org_once(
     if options.remove_content_patterns {
         let mut no_content_pattern_debug = None;
         let step_start = Instant::now();
-        remove_eyebrow_label(&document, &mut no_content_pattern_debug);
+        effects.content_patterns = stage_changed_dom(track_stages, &document, &main, || {
+            remove_eyebrow_label(&document, &mut no_content_pattern_debug);
+        });
         record_profile(&mut profile, "removeEyebrowLabel", step_start);
     }
     if options.standardize {
@@ -1322,22 +1414,28 @@ fn parse_html_to_org_once(
     };
     if options.remove_low_scoring {
         let step_start = Instant::now();
-        remove_low_scoring_blocks(
-            &document,
-            &main,
-            options.debug.then_some(&mut debug_removals),
-        );
+        effects.low_scoring = stage_changed_dom(track_stages, &document, &main, || {
+            remove_low_scoring_blocks(
+                &document,
+                &main,
+                options.debug.then_some(&mut debug_removals),
+            );
+        });
         record_profile(&mut profile, "removeLowScoring", step_start);
     }
     if options.remove_content_patterns {
         let step_start = Instant::now();
-        remove_content_patterns(
-            &main,
-            &metadata,
-            options.debug.then_some(&mut debug_removals),
-        );
+        let patterns_changed = stage_changed_dom(track_stages, &document, &main, || {
+            remove_content_patterns(
+                &main,
+                &metadata,
+                options.debug.then_some(&mut debug_removals),
+            );
+        });
+        effects.content_patterns |= patterns_changed;
         record_profile(&mut profile, "removeByContentPattern", step_start);
     }
+    effects.tracked = track_stages;
     if options.standardize {
         let step_start = Instant::now();
         remove_orphan_headings(&main);
@@ -21967,8 +22065,7 @@ fn arxiv_reference_label_from_title(title: &str) -> Option<String> {
 }
 
 fn select_first_node(node: &NodeRef, selector: &str) -> Option<NodeRef> {
-    node.select(selector)
-        .ok()?
+    select_elements(node, selector)
         .next()
         .map(|matched| matched.as_node().clone())
 }
@@ -29385,26 +29482,29 @@ fn is_code_block_chrome_node(node: &NodeRef) -> bool {
     let Some(element) = node.as_element() else {
         return false;
     };
+    if !ancestor_contains_code_block(node) {
+        return false;
+    }
+
     let tag = element.name.local.as_ref();
     let attrs = element_attr_string(element).to_ascii_lowercase();
     let text = normalize_ws(&node.text_contents());
     let text_lc = text.to_ascii_lowercase();
     if tag == "button"
-        && ancestor_contains_code_block(node)
         && (is_code_chrome_attr_text(&attrs)
             || matches!(text_lc.as_str(), "copy" | "run" | "run code"))
     {
         return true;
     }
 
-    if ancestor_contains_code_block(node) && is_code_chrome_attr_text(&attrs) {
+    if is_code_chrome_attr_text(&attrs) {
         return true;
     }
-    if ancestor_contains_code_block(node) && is_code_tab_selector_node(node, &attrs) {
+    if is_code_tab_selector_node(node, &attrs) {
         return true;
     }
 
-    if !ancestor_contains_code_block(node) || count_selector(node, "pre, code, .cm-content") > 0 {
+    if contains_code_content(node) {
         return false;
     }
     if text.is_empty() || count_words(&text) > 3 {
@@ -29447,7 +29547,7 @@ fn is_code_chrome_attr_text(attrs: &str) -> bool {
 }
 
 fn is_code_tab_selector_node(node: &NodeRef, attrs: &str) -> bool {
-    if count_selector(node, "pre, code, .cm-content") > 0 {
+    if contains_code_content(node) {
         return false;
     }
     attrs
@@ -29456,28 +29556,97 @@ fn is_code_tab_selector_node(node: &NodeRef, attrs: &str) -> bool {
 }
 
 fn ancestor_contains_code_block(node: &NodeRef) -> bool {
-    let mut current = node.parent();
-    for _ in 0..4 {
-        let Some(parent) = current else {
-            return false;
-        };
-        if count_selector(&parent, "pre, code, .cm-content") > 0 {
+    // Same result as scanning each of the four nearest ancestors' subtrees, but
+    // working outwards so a nearby match stops early and no node is visited twice.
+    let mut scanned: Option<NodeRef> = None;
+    for ancestor in node.ancestors().take(4) {
+        if ancestor.as_element().is_some_and(is_code_content_element) {
             return true;
         }
-        current = parent.parent();
+        for child in ancestor.children() {
+            if scanned.as_ref() == Some(&child) {
+                continue;
+            }
+            if contains_code_content(&child) {
+                return true;
+            }
+        }
+        scanned = Some(ancestor);
     }
     false
 }
 
+/// Equivalent to `count_selector(node, "pre, code, .cm-content") > 0`.
+fn contains_code_content(node: &NodeRef) -> bool {
+    node.inclusive_descendants()
+        .filter_map(|n| {
+            n.as_element()
+                .map(|element| is_code_content_element(element))
+        })
+        .any(|matched| matched)
+}
+
+fn is_code_content_element(element: &ElementData) -> bool {
+    if matches!(element.name.local.as_ref(), "pre" | "code") {
+        return true;
+    }
+    element
+        .attributes
+        .borrow()
+        .get("class")
+        .is_some_and(|class| {
+            class
+                .split([' ', '\t', '\n', '\r', '\x0C'])
+                .any(|token| token == "cm-content")
+        })
+}
+
+/// Well above the number of selector literals in this file, so they never evict
+/// each other; selectors built from page content or caller options are bounded
+/// by clearing the cache when it fills.
+const SELECTOR_CACHE_LIMIT: usize = 1024;
+
+thread_local! {
+    static SELECTOR_CACHE: RefCell<HashMap<String, Option<Rc<Selectors>>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn compiled_selector(selector: &str) -> Option<Rc<Selectors>> {
+    SELECTOR_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(compiled) = cache.get(selector) {
+            return compiled.clone();
+        }
+        let compiled = Selectors::compile(selector).ok().map(Rc::new);
+        if cache.len() >= SELECTOR_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(selector.to_owned(), compiled.clone());
+        compiled
+    })
+}
+
+/// Same matches as `node.select(selector)`, without re-parsing the selector
+/// on every call. An invalid selector matches nothing.
+fn select_elements(
+    node: &NodeRef,
+    selector: &str,
+) -> impl Iterator<Item = NodeDataRef<ElementData>> {
+    let compiled = compiled_selector(selector);
+    compiled
+        .is_some()
+        .then(|| node.inclusive_descendants().elements())
+        .into_iter()
+        .flatten()
+        .filter(move |element| compiled.as_ref().is_some_and(|c| c.matches(element)))
+}
+
 fn count_selector(node: &NodeRef, selector: &str) -> usize {
-    node.select(selector).ok().map(Iterator::count).unwrap_or(0)
+    select_elements(node, selector).count()
 }
 
 fn selector_text_len(node: &NodeRef, selector: &str) -> usize {
-    node.select(selector)
-        .ok()
-        .into_iter()
-        .flatten()
+    select_elements(node, selector)
         .map(|n| n.text_contents().chars().count())
         .sum()
 }
@@ -43092,5 +43261,263 @@ let value = \`tick\`;
             .org
             .contains("See how our platform can help your team"));
         assert!(!output.org.contains("Tips, tutorials"));
+    }
+    fn html_fragment(html: &str) -> NodeRef {
+        kuchiki::parse_html().one(html)
+    }
+
+    fn outer_html(matches: impl Iterator<Item = NodeDataRef<ElementData>>) -> Vec<String> {
+        matches
+            .map(|element| serialize_node(element.as_node()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn cached_selectors_match_uncached_select() {
+        let document = html_fragment(
+            r#"<body><div class="a b" data-x="1"><p>one</p><span><a href="/x">x</a></span></div>
+               <pre>code</pre><div class="cm-content">cm</div><p>two</p></body>"#,
+        );
+        for selector in [
+            "pre, code, .cm-content",
+            "a[href]",
+            "p",
+            "div > span",
+            ".a.b",
+            "[data-x]",
+            "*",
+        ] {
+            let expected = outer_html(document.select(selector).unwrap());
+            assert!(!expected.is_empty(), "{selector} should match something");
+            assert_eq!(
+                outer_html(select_elements(&document, selector)),
+                expected,
+                "{selector}"
+            );
+            assert_eq!(count_selector(&document, selector), expected.len());
+        }
+        assert!(document.select("p[").is_err());
+        assert_eq!(count_selector(&document, "p["), 0);
+        assert!(select_first_node(&document, "p[").is_none());
+    }
+
+    #[test]
+    fn selector_helpers_include_the_node_itself() {
+        let document = html_fragment("<body><pre>code</pre></body>");
+        let pre = select_first_node(&document, "pre").unwrap();
+        assert_eq!(count_selector(&pre, "pre"), 1);
+        assert!(contains_code_content(&pre));
+    }
+
+    #[test]
+    fn contains_code_content_matches_the_selector() {
+        for (html, expected) in [
+            ("<body><div><pre>x</pre></div></body>", true),
+            ("<body><div><code>x</code></div></body>", true),
+            (r#"<body><div class="a cm-content b">x</div></body>"#, true),
+            ("<body><div class=\"a\tcm-content\">x</div></body>", true),
+            (r#"<body><div class="cm-content2">x</div></body>"#, false),
+            (r#"<body><div class="CM-CONTENT">x</div></body>"#, false),
+            ("<body><div>plain</div></body>", false),
+        ] {
+            let body = select_first_node(&html_fragment(html), "body").unwrap();
+            assert_eq!(contains_code_content(&body), expected, "{html}");
+            assert_eq!(
+                body.select("pre, code, .cm-content").unwrap().count() > 0,
+                expected,
+                "{html}"
+            );
+        }
+    }
+
+    fn reference_ancestor_contains_code_block(node: &NodeRef) -> bool {
+        let mut current = node.parent();
+        for _ in 0..4 {
+            let Some(parent) = current else {
+                return false;
+            };
+            if parent
+                .select("pre, code, .cm-content")
+                .map(|mut matches| matches.next().is_some())
+                .unwrap_or(false)
+            {
+                return true;
+            }
+            current = parent.parent();
+        }
+        false
+    }
+
+    #[test]
+    fn ancestor_code_block_scan_stops_at_four_levels() {
+        for (html, expected) in [
+            // pre is a child of the third ancestor
+            ("<div id=z><div id=a><div id=b><div id=c><span id=t>x</span></div><pre>p</pre></div></div></div>", true),
+            // pre is a child of the fourth ancestor (c, b, a, z)
+            ("<div id=z><div id=a><div id=b><div id=c><span id=t>x</span></div></div></div><pre>p</pre></div>", true),
+            // pre is a child of the fifth ancestor (body)
+            ("<div id=z><div id=a><div id=b><div id=c><span id=t>x</span></div></div></div></div><pre>p</pre>", false),
+            // the target's own subtree is not scanned unless a parent contains it
+            ("<div id=a><span id=t><code>x</code></span></div>", true),
+            ("<span id=t><code>x</code></span>", true),
+            // no code anywhere
+            ("<div id=a><span id=t>x</span></div>", false),
+        ] {
+            let document = html_fragment(html);
+            let target = select_first_node(&document, "#t").unwrap();
+            assert_eq!(ancestor_contains_code_block(&target), expected, "{html}");
+            assert_eq!(
+                reference_ancestor_contains_code_block(&target),
+                expected,
+                "{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn stage_changed_dom_reports_real_changes_only() {
+        let document =
+            html_fragment("<body><article><p>keep</p><aside>drop</aside></article></body>");
+        let main = select_first_node(&document, "article").unwrap();
+
+        assert!(!stage_changed_dom(true, &document, &main, || {}));
+        assert!(stage_changed_dom(false, &document, &main, || {}));
+        assert!(stage_changed_dom(true, &document, &main, || {
+            select_first_node(&document, "aside").unwrap().detach();
+        }));
+        assert!(!stage_changed_dom(true, &document, &main, || {}));
+    }
+
+    fn filler_paragraphs(words: usize) -> String {
+        format!("<p>{}</p>", "word ".repeat(words))
+    }
+
+    #[test]
+    fn untouched_small_page_makes_every_retry_redundant() {
+        let html = format!(
+            "<html><head><title>T</title></head><body><article>{}</article></body></html>",
+            filler_paragraphs(20)
+        );
+        let mut effects = StageEffects::tracking();
+        parse_html_to_org_once(&html, DefuddleOptions::default(), &mut effects).unwrap();
+
+        assert!(effects.tracked);
+        assert!(effects.partial_retry_is_noop());
+        assert!(effects.hidden_retry_is_noop());
+        assert!(effects.cleanup_retry_is_noop());
+    }
+
+    #[test]
+    fn hidden_content_removal_is_visible_to_the_retry_check() {
+        let html = format!(
+            r#"<html><body><article>{}<div style="display:none">secret hidden words</div></article></body></html>"#,
+            filler_paragraphs(20)
+        );
+        let mut effects = StageEffects::tracking();
+        let output =
+            parse_html_to_org_once(&html, DefuddleOptions::default(), &mut effects).unwrap();
+
+        assert!(!output.org.contains("secret hidden words"));
+        assert!(effects.tracked);
+        assert!(!effects.hidden_retry_is_noop());
+    }
+
+    #[test]
+    fn stage_tracking_is_off_for_debug_profile_and_large_inputs() {
+        let small = format!(
+            "<html><body><article>{}</article></body></html>",
+            filler_paragraphs(20)
+        );
+        let mut effects = StageEffects::tracking();
+        let debug = DefuddleOptions {
+            debug: true,
+            ..DefuddleOptions::default()
+        };
+        parse_html_to_org_once(&small, debug, &mut effects).unwrap();
+        assert!(!effects.tracked);
+        assert!(!effects.partial_retry_is_noop());
+        assert!(!effects.cleanup_retry_is_noop());
+
+        let mut effects = StageEffects::tracking();
+        let profile = DefuddleOptions {
+            profile: true,
+            ..DefuddleOptions::default()
+        };
+        let output = parse_html_to_org_once(&small, profile, &mut effects).unwrap();
+        assert!(output.profile.is_some());
+        assert!(!effects.tracked);
+        assert!(!effects.hidden_retry_is_noop());
+
+        let large = format!(
+            "<html><body><article>{}</article><!-- {} --></body></html>",
+            filler_paragraphs(20),
+            "x".repeat(STAGE_TRACKING_MAX_HTML_BYTES)
+        );
+        let mut effects = StageEffects::tracking();
+        parse_html_to_org_once(&large, DefuddleOptions::default(), &mut effects).unwrap();
+        assert!(!effects.tracked);
+        assert!(!effects.hidden_retry_is_noop());
+    }
+
+    #[test]
+    fn skipping_redundant_retries_does_not_change_the_output() {
+        let html = format!(
+            "<html><head><title>T</title></head><body><article>{}</article></body></html>",
+            filler_paragraphs(8)
+        );
+        let tracked = parse_html_to_org(&html, DefuddleOptions::default()).unwrap();
+        let debug = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                debug: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(tracked.org, debug.org);
+        assert_eq!(tracked.word_count, debug.word_count);
+    }
+    #[test]
+    fn only_a_tracking_pass_records_stage_effects() {
+        let html = format!(
+            "<html><body><article>{}</article></body></html>",
+            filler_paragraphs(20)
+        );
+        let mut retry_effects = StageEffects::default();
+        parse_html_to_org_once(&html, DefuddleOptions::default(), &mut retry_effects).unwrap();
+        assert!(!retry_effects.tracked);
+        assert!(!retry_effects.cleanup_retry_is_noop());
+    }
+
+    #[test]
+    fn selector_cache_stays_bounded_and_correct() {
+        let document = html_fragment("<body><p id=target class=c>x</p></body>");
+        for i in 0..SELECTOR_CACHE_LIMIT * 2 + 7 {
+            let selector = format!("p.c-{i}, #target");
+            assert_eq!(count_selector(&document, &selector), 1, "{selector}");
+            assert!(SELECTOR_CACHE.with(|cache| cache.borrow().len()) <= SELECTOR_CACHE_LIMIT);
+        }
+        assert_eq!(count_selector(&document, "p.c"), 1);
+        assert_eq!(count_selector(&document, "p.missing"), 0);
+    }
+
+    #[test]
+    fn ancestor_scan_prefers_a_nearby_match_over_a_large_unrelated_subtree() {
+        let filler = "<span>filler</span>".repeat(50);
+        for (html, expected) in [
+            // nearby code, large unrelated sibling subtrees further out
+            (format!("<div id=z><div class=blob>{filler}</div><div id=a><pre>c</pre><p id=t>x</p></div><div class=blob>{filler}</div></div>"), true),
+            // code only in a distant sibling subtree of the fourth ancestor
+            (format!("<div id=z><div id=a><div id=b><div id=c><p id=t>x</p></div></div></div><div class=blob>{filler}</div><code>c</code></div>"), true),
+            // code beyond the fourth ancestor
+            (format!("<div id=y><div id=z><div id=a><div id=b><div id=c><p id=t>x</p></div></div></div></div><div class=blob>{filler}</div><code>c</code></div>"), false),
+            // the code element is an ancestor itself
+            ("<code><b><i id=t>x</i></b></code>".to_string(), true),
+        ] {
+            let document = html_fragment(&html);
+            let target = select_first_node(&document, "#t").unwrap();
+            assert_eq!(ancestor_contains_code_block(&target), expected, "{html}");
+            assert_eq!(reference_ancestor_contains_code_block(&target), expected, "{html}");
+        }
     }
 }
