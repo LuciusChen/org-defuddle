@@ -1,11 +1,14 @@
 mod partial_selectors;
 
+use kuchiki::iter::NodeEdge;
 use kuchiki::traits::*;
-use kuchiki::{ElementData, NodeData, NodeRef};
+use kuchiki::{ElementData, NodeData, NodeDataRef, NodeRef, Selectors};
 use regex::{Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::LazyLock as Lazy;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -924,7 +927,13 @@ pub fn parse_html_to_org(
     options: DefuddleOptions,
 ) -> Result<DefuddleOutput, DefuddleError> {
     let parse_start = Instant::now();
-    let mut result = parse_html_to_org_once(html, options.clone())?;
+    // A content selector skips every retry below, so there is nothing to decide.
+    let mut effects = if options.content_selector.is_some() {
+        StageEffects::default()
+    } else {
+        StageEffects::tracking()
+    };
+    let mut result = parse_html_to_org_once(html, options.clone(), &mut effects)?;
     let markdown_enabled = options.markdown || options.separate_markdown;
     if options.content_selector.is_some() {
         attach_content_markdown(&mut result, markdown_enabled);
@@ -933,21 +942,26 @@ pub fn parse_html_to_org(
         return Ok(result);
     }
 
-    if result.word_count < 200 && options.remove_partial_selectors {
+    if result.word_count < 200
+        && options.remove_partial_selectors
+        && !effects.partial_retry_is_noop()
+    {
         let mut retry_options = options.clone();
         retry_options.remove_partial_selectors = false;
-        let retry = parse_html_to_org_once(html, retry_options)?;
+        let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
         if retry.word_count > result.word_count * 2 {
             result = retry;
         }
     }
 
     if result.word_count < 50 && options.remove_hidden_elements {
-        let mut retry_options = options.clone();
-        retry_options.remove_hidden_elements = false;
-        let retry = parse_html_to_org_once(html, retry_options)?;
-        if retry.word_count > result.word_count * 2 {
-            result = retry;
+        if !effects.hidden_retry_is_noop() {
+            let mut retry_options = options.clone();
+            retry_options.remove_hidden_elements = false;
+            let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
+            if retry.word_count > result.word_count * 2 {
+                result = retry;
+            }
         }
 
         if let Some(hidden_selector) = find_largest_hidden_content_selector(html) {
@@ -955,7 +969,7 @@ pub fn parse_html_to_org(
             retry_options.remove_hidden_elements = false;
             retry_options.remove_partial_selectors = false;
             retry_options.content_selector = Some(hidden_selector);
-            let retry = parse_html_to_org_once(html, retry_options)?;
+            let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
             if retry.word_count > result.word_count
                 || (retry.word_count > std::cmp::max(20, result.word_count * 7 / 10)
                     && retry.html.len() < result.html.len())
@@ -965,12 +979,12 @@ pub fn parse_html_to_org(
         }
     }
 
-    if result.word_count < 50 {
+    if result.word_count < 50 && !effects.cleanup_retry_is_noop() {
         let mut retry_options = options.clone();
         retry_options.remove_low_scoring = false;
         retry_options.remove_partial_selectors = false;
         retry_options.remove_content_patterns = false;
-        let retry = parse_html_to_org_once(html, retry_options)?;
+        let retry = parse_html_to_org_once(html, retry_options, &mut StageEffects::default())?;
         if retry.word_count > result.word_count {
             result = retry;
         }
@@ -1037,9 +1051,77 @@ fn is_largest_hidden_content_candidate(node: &NodeRef) -> bool {
             .any(|token| matches!(token, "hidden" | "invisible"))
 }
 
+/// Documents larger than this skip stage tracking, so their retries run as usual.
+const STAGE_TRACKING_MAX_HTML_BYTES: usize = 64 * 1024;
+
+/// Whether the optional cleanup stages changed the DOM during one pass.
+///
+/// A retry that only disables stages that changed nothing would repeat the
+/// first pass exactly, so the caller can skip it. When a pass is not tracked
+/// (extractor output, debug or profile mode, large input) every stage counts as
+/// changed.
+#[derive(Default)]
+struct StageEffects {
+    /// Only the first pass is tracked; retries never read the result.
+    track: bool,
+    tracked: bool,
+    hidden: bool,
+    partial: bool,
+    low_scoring: bool,
+    content_patterns: bool,
+}
+
+impl StageEffects {
+    fn tracking() -> Self {
+        Self {
+            track: true,
+            ..Self::default()
+        }
+    }
+
+    fn partial_retry_is_noop(&self) -> bool {
+        self.tracked && !self.partial
+    }
+
+    fn hidden_retry_is_noop(&self) -> bool {
+        self.tracked && !self.hidden
+    }
+
+    fn cleanup_retry_is_noop(&self) -> bool {
+        self.tracked && !self.low_scoring && !self.partial && !self.content_patterns
+    }
+}
+
+/// Runs `stage` and reports whether it changed the serialized document or
+/// main content. Always reports a change when `track` is false.
+fn stage_changed_dom(
+    track: bool,
+    document: &NodeRef,
+    main: &NodeRef,
+    stage: impl FnOnce(),
+) -> bool {
+    if !track {
+        stage();
+        return true;
+    }
+    let before = dom_snapshot(document, main);
+    stage();
+    before.is_none() || before != dom_snapshot(document, main)
+}
+
+fn dom_snapshot(document: &NodeRef, main: &NodeRef) -> Option<(String, Option<String>)> {
+    let main_html = if main == document {
+        None
+    } else {
+        Some(serialize_node(main).ok()?)
+    };
+    Some((serialize_node(document).ok()?, main_html))
+}
+
 fn parse_html_to_org_once(
     html: &str,
     options: DefuddleOptions,
+    effects: &mut StageEffects,
 ) -> Result<DefuddleOutput, DefuddleError> {
     let mut profile = upstream_profile(options.profile, options.standardize, options.debug);
     let step_start = Instant::now();
@@ -1181,6 +1263,11 @@ fn parse_html_to_org_once(
     let github_document = meta_content(&document, "name", "expected-hostname")
         .is_some_and(|host| host.eq_ignore_ascii_case("github.com"));
     let mut debug_removals = Vec::new();
+    // The snapshots would otherwise be counted in the per-step profile timings.
+    let track_stages = effects.track
+        && !options.debug
+        && !options.profile
+        && html.len() <= STAGE_TRACKING_MAX_HTML_BYTES;
 
     let step_start = Instant::now();
     flatten_serialized_shadow_roots(&document);
@@ -1228,7 +1315,9 @@ fn parse_html_to_org_once(
 
     if options.remove_hidden_elements {
         let step_start = Instant::now();
-        remove_hidden_elements(&document, options.debug.then_some(&mut debug_removals));
+        effects.hidden = stage_changed_dom(track_stages, &document, &main, || {
+            remove_hidden_elements(&document, options.debug.then_some(&mut debug_removals));
+        });
         record_profile(&mut profile, "removeHiddenElements", step_start);
     }
     let relative_base_url = document_base_url(&document, &metadata.url);
@@ -1266,11 +1355,13 @@ fn parse_html_to_org_once(
             remove_comment_widgets_by_selector(&main, &mut selector_debug);
         }
         if options.remove_partial_selectors {
-            remove_partial_noise(
-                &document,
-                Some(&main),
-                options.debug.then_some(&mut debug_removals),
-            );
+            effects.partial = stage_changed_dom(track_stages, &document, &main, || {
+                remove_partial_noise(
+                    &document,
+                    Some(&main),
+                    options.debug.then_some(&mut debug_removals),
+                );
+            });
         }
         record_profile(&mut profile, "removeBySelector", step_start);
     }
@@ -1290,7 +1381,9 @@ fn parse_html_to_org_once(
     if options.remove_content_patterns {
         let mut no_content_pattern_debug = None;
         let step_start = Instant::now();
-        remove_eyebrow_label(&document, &mut no_content_pattern_debug);
+        effects.content_patterns = stage_changed_dom(track_stages, &document, &main, || {
+            remove_eyebrow_label(&document, &mut no_content_pattern_debug);
+        });
         record_profile(&mut profile, "removeEyebrowLabel", step_start);
     }
     if options.standardize {
@@ -1322,22 +1415,28 @@ fn parse_html_to_org_once(
     };
     if options.remove_low_scoring {
         let step_start = Instant::now();
-        remove_low_scoring_blocks(
-            &document,
-            &main,
-            options.debug.then_some(&mut debug_removals),
-        );
+        effects.low_scoring = stage_changed_dom(track_stages, &document, &main, || {
+            remove_low_scoring_blocks(
+                &document,
+                &main,
+                options.debug.then_some(&mut debug_removals),
+            );
+        });
         record_profile(&mut profile, "removeLowScoring", step_start);
     }
     if options.remove_content_patterns {
         let step_start = Instant::now();
-        remove_content_patterns(
-            &main,
-            &metadata,
-            options.debug.then_some(&mut debug_removals),
-        );
+        let patterns_changed = stage_changed_dom(track_stages, &document, &main, || {
+            remove_content_patterns(
+                &main,
+                &metadata,
+                options.debug.then_some(&mut debug_removals),
+            );
+        });
+        effects.content_patterns |= patterns_changed;
         record_profile(&mut profile, "removeByContentPattern", step_start);
     }
+    effects.tracked = track_stages;
     if options.standardize {
         let step_start = Instant::now();
         remove_orphan_headings(&main);
@@ -15714,15 +15813,17 @@ fn remove_low_scoring_blocks(
     else {
         return;
     };
+    let code = CodeIndex::around(document);
     let nodes = matches
         .filter_map(|matched| {
             let node = matched.as_node();
-            if low_scoring_should_skip(node, main) || is_low_scoring_likely_content(node) {
+            if low_scoring_should_skip(node, main) || is_low_scoring_likely_content(node, &code) {
                 return None;
             }
             (score_non_content_block(node) < 0).then(|| node.clone())
         })
         .collect::<Vec<_>>();
+    code.assert_current();
 
     for node in nodes {
         if node.parent().is_some() {
@@ -15755,7 +15856,7 @@ fn low_scoring_should_skip(node: &NodeRef, main: &NodeRef) -> bool {
     false
 }
 
-fn is_low_scoring_likely_content(node: &NodeRef) -> bool {
+fn is_low_scoring_likely_content(node: &NodeRef, code: &CodeIndex) -> bool {
     let Some(element) = node.as_element() else {
         return false;
     };
@@ -15781,7 +15882,7 @@ fn is_low_scoring_likely_content(node: &NodeRef) -> bool {
     }
 
     let text = normalize_ws(&node.text_contents());
-    let words = count_node_words(node);
+    let words = count_node_words(node, code);
     if is_non_content_heading_wrapper(node, &text) {
         return false;
     }
@@ -19836,9 +19937,12 @@ fn remove_pre_content_author_date_metadata(
         if is_substantive_content_start(&node) {
             break;
         }
-        if count_preceding_words(main, &node) <= 25
-            && is_pre_content_author_date_metadata_node(&node)
-        {
+        // Words before a node never decrease in document order, and nothing is
+        // detached before the first match, so no later node can qualify.
+        if count_preceding_words(main, &node) > 25 {
+            break;
+        }
+        if is_pre_content_author_date_metadata_node(&node) {
             let target = highest_same_text_wrapper(&node, main);
             detach_content_pattern(debug_removals, "author date metadata", &target);
             removed = true;
@@ -21967,8 +22071,7 @@ fn arxiv_reference_label_from_title(title: &str) -> Option<String> {
 }
 
 fn select_first_node(node: &NodeRef, selector: &str) -> Option<NodeRef> {
-    node.select(selector)
-        .ok()?
+    select_elements(node, selector)
         .next()
         .map(|matched| matched.as_node().clone())
 }
@@ -23784,9 +23887,10 @@ fn html_node_to_org_with_render_options(
     footnotes: &FootnoteState,
     render_options: RenderOptions,
 ) -> String {
-    let mut renderer = OrgRenderer::new(footnotes, render_options);
+    let mut renderer = OrgRenderer::around(node, footnotes, render_options);
     renderer.render_node(node, false);
     renderer.render_footnote_definitions();
+    renderer.code.assert_current();
     cleanup_org(&renderer.out)
 }
 
@@ -23799,17 +23903,19 @@ fn html_node_to_org_fragment_with_render_options(
     footnotes: &FootnoteState,
     render_options: RenderOptions,
 ) -> String {
-    let mut renderer = OrgRenderer::new(footnotes, render_options);
+    let mut renderer = OrgRenderer::around(node, footnotes, render_options);
     renderer.render_node(node, false);
+    renderer.code.assert_current();
     cleanup_org(&renderer.out)
 }
 
 fn html_children_to_org_with_footnotes(node: &NodeRef, footnotes: &FootnoteState) -> String {
-    let mut renderer = OrgRenderer::new(footnotes, RenderOptions::default());
+    let mut renderer = OrgRenderer::around(node, footnotes, RenderOptions::default());
     for child in node.children() {
         renderer.render_node(&child, false);
     }
     renderer.render_footnote_definitions();
+    renderer.code.assert_current();
     cleanup_org(&renderer.out)
 }
 
@@ -24882,6 +24988,7 @@ struct OrgRenderer<'a> {
     footnotes: &'a FootnoteState,
     options: RenderOptions,
     rendering_footnote_defs: bool,
+    code: Rc<CodeIndex>,
 }
 
 impl<'a> OrgRenderer<'a> {
@@ -24893,6 +25000,22 @@ impl<'a> OrgRenderer<'a> {
             footnotes,
             options,
             rendering_footnote_defs: false,
+            code: Rc::new(CodeIndex::default()),
+        }
+    }
+
+    /// A renderer for `node` and its descendants, with the code index for them.
+    fn around(node: &NodeRef, footnotes: &'a FootnoteState, options: RenderOptions) -> Self {
+        Self {
+            code: Rc::new(CodeIndex::around(node)),
+            ..Self::new(footnotes, options)
+        }
+    }
+
+    fn nested(&self) -> OrgRenderer<'a> {
+        OrgRenderer {
+            code: Rc::clone(&self.code),
+            ..OrgRenderer::new(self.footnotes, self.options)
         }
     }
 
@@ -25309,7 +25432,7 @@ impl<'a> OrgRenderer<'a> {
     fn render_quote(&mut self, node: &NodeRef) {
         self.ensure_blank_line();
         self.out.push_str("#+begin_quote\n");
-        let mut nested = OrgRenderer::new(self.footnotes, self.options);
+        let mut nested = self.nested();
         for child in node.children() {
             nested.render_node(&child, false);
         }
@@ -25330,7 +25453,7 @@ impl<'a> OrgRenderer<'a> {
         }
         self.out.push('\n');
 
-        let mut nested = OrgRenderer::new(self.footnotes, self.options);
+        let mut nested = self.nested();
         match callout.content_node {
             Some(content) => {
                 for child in content.children() {
@@ -25540,7 +25663,7 @@ impl<'a> OrgRenderer<'a> {
     }
 
     fn render_inline_children(&self, node: &NodeRef) -> String {
-        let mut nested = OrgRenderer::new(self.footnotes, self.options);
+        let mut nested = self.nested();
         nested.rendering_footnote_defs = self.rendering_footnote_defs;
         for child in node.children() {
             nested.render_node(&child, true);
@@ -25640,7 +25763,7 @@ impl<'a> OrgRenderer<'a> {
         }
         self.rendering_footnote_defs = true;
         for entry in &self.footnotes.entries {
-            let mut nested = OrgRenderer::new(self.footnotes, self.options);
+            let mut nested = self.nested();
             nested.rendering_footnote_defs = true;
             for node in &entry.content_nodes {
                 render_footnote_content_node(&mut nested, node);
@@ -25672,7 +25795,7 @@ impl<'a> OrgRenderer<'a> {
         if self.rendering_footnote_defs && self.footnotes.noise_nodes.contains(&key) {
             return true;
         }
-        is_code_block_chrome_node(node)
+        is_code_block_chrome_node(node, &self.code)
             || is_non_content_button_node(node)
             || is_arxiv_footnote_mark_node(node)
     }
@@ -29377,34 +29500,37 @@ fn infer_code_language_from_text(text: &str) -> Option<String> {
     None
 }
 
-fn is_code_block_chrome_node(node: &NodeRef) -> bool {
+fn is_code_block_chrome_node(node: &NodeRef, code: &CodeIndex) -> bool {
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    // Cheap and false for most nodes; the math check walks every ancestor.
+    if !code.ancestor_has_code(node) {
+        return false;
+    }
     if is_math_node(node) || is_inside_math_tree(node) {
         return false;
     }
 
-    let Some(element) = node.as_element() else {
-        return false;
-    };
     let tag = element.name.local.as_ref();
     let attrs = element_attr_string(element).to_ascii_lowercase();
     let text = normalize_ws(&node.text_contents());
     let text_lc = text.to_ascii_lowercase();
     if tag == "button"
-        && ancestor_contains_code_block(node)
         && (is_code_chrome_attr_text(&attrs)
             || matches!(text_lc.as_str(), "copy" | "run" | "run code"))
     {
         return true;
     }
 
-    if ancestor_contains_code_block(node) && is_code_chrome_attr_text(&attrs) {
+    if is_code_chrome_attr_text(&attrs) {
         return true;
     }
-    if ancestor_contains_code_block(node) && is_code_tab_selector_node(node, &attrs) {
+    if is_code_tab_selector_node(node, &attrs, code) {
         return true;
     }
 
-    if !ancestor_contains_code_block(node) || count_selector(node, "pre, code, .cm-content") > 0 {
+    if code.subtree_has_code(node) {
         return false;
     }
     if text.is_empty() || count_words(&text) > 3 {
@@ -29446,8 +29572,8 @@ fn is_code_chrome_attr_text(attrs: &str) -> bool {
         || attrs.contains("code-header")
 }
 
-fn is_code_tab_selector_node(node: &NodeRef, attrs: &str) -> bool {
-    if count_selector(node, "pre, code, .cm-content") > 0 {
+fn is_code_tab_selector_node(node: &NodeRef, attrs: &str, code: &CodeIndex) -> bool {
+    if code.subtree_has_code(node) {
         return false;
     }
     attrs
@@ -29455,29 +29581,183 @@ fn is_code_tab_selector_node(node: &NodeRef, attrs: &str) -> bool {
         .any(|part| matches!(part, "listbox" | "option" | "tablist" | "tab"))
 }
 
+/// Which elements near a rendered node hold a `pre`, `code` or `.cm-content`
+/// element in their subtree, worked out once so that asking about each
+/// element does not rescan its ancestors.
+///
+/// The index covers the subtree of the fourth ancestor of the node it is
+/// built around. The ancestor check looks at most four levels up, so that is
+/// all the node and its descendants can ask about, and a fragment of a large
+/// page does not pay for the whole page. Anything outside is answered by
+/// scanning, so the default (empty) index is always correct, only slower.
+///
+/// The index describes the tree as it was when built: keep it only for a
+/// read-only phase.
+#[derive(Default)]
+struct CodeIndex {
+    top: Option<NodeRef>,
+    flags: HashMap<usize, bool>,
+}
+
+impl CodeIndex {
+    fn around(node: &NodeRef) -> Self {
+        let top = node
+            .ancestors()
+            .take(4)
+            .last()
+            .unwrap_or_else(|| node.clone());
+        Self {
+            flags: code_subtree_flags(&top),
+            top: Some(top),
+        }
+    }
+
+    /// Whether the subtree of `node`, itself included, holds code content.
+    fn subtree_has_code(&self, node: &NodeRef) -> bool {
+        self.flags
+            .get(&node_key(node))
+            .copied()
+            .unwrap_or_else(|| contains_code_content(node))
+    }
+
+    /// Whether the subtree of one of the four nearest ancestors holds code.
+    fn ancestor_has_code(&self, node: &NodeRef) -> bool {
+        for ancestor in node.ancestors().take(4) {
+            match self.flags.get(&node_key(&ancestor)) {
+                Some(true) => return true,
+                Some(false) => {}
+                None => return ancestor_contains_code_block(node),
+            }
+        }
+        false
+    }
+
+    fn assert_current(&self) {
+        debug_assert!(
+            self.top
+                .as_ref()
+                .map_or(true, |top| self.flags == code_subtree_flags(top)),
+            "the tree changed while its code index was in use"
+        );
+    }
+}
+
+fn code_subtree_flags(root: &NodeRef) -> HashMap<usize, bool> {
+    let mut flags = HashMap::new();
+    let mut open: Vec<bool> = Vec::new();
+    for edge in root.traverse_inclusive() {
+        match edge {
+            NodeEdge::Start(node) => match node.data() {
+                NodeData::Element(element) => open.push(is_code_content_element(element)),
+                NodeData::Document(_) => open.push(false),
+                _ => {}
+            },
+            NodeEdge::End(node) => {
+                if matches!(node.data(), NodeData::Element(_) | NodeData::Document(_)) {
+                    let has_code = open.pop().unwrap_or(false);
+                    flags.insert(node_key(&node), has_code);
+                    if let Some(parent) = open.last_mut() {
+                        *parent |= has_code;
+                    }
+                }
+            }
+        }
+    }
+    flags
+}
+
 fn ancestor_contains_code_block(node: &NodeRef) -> bool {
-    let mut current = node.parent();
-    for _ in 0..4 {
-        let Some(parent) = current else {
-            return false;
-        };
-        if count_selector(&parent, "pre, code, .cm-content") > 0 {
+    // Same result as scanning each of the four nearest ancestors' subtrees, but
+    // working outwards so a nearby match stops early and no node is visited twice.
+    let mut scanned: Option<NodeRef> = None;
+    for ancestor in node.ancestors().take(4) {
+        if ancestor.as_element().is_some_and(is_code_content_element) {
             return true;
         }
-        current = parent.parent();
+        for child in ancestor.children() {
+            if scanned.as_ref() == Some(&child) {
+                continue;
+            }
+            if contains_code_content(&child) {
+                return true;
+            }
+        }
+        scanned = Some(ancestor);
     }
     false
 }
 
+/// Equivalent to `count_selector(node, "pre, code, .cm-content") > 0`.
+fn contains_code_content(node: &NodeRef) -> bool {
+    node.inclusive_descendants()
+        .filter_map(|n| {
+            n.as_element()
+                .map(|element| is_code_content_element(element))
+        })
+        .any(|matched| matched)
+}
+
+fn is_code_content_element(element: &ElementData) -> bool {
+    if matches!(element.name.local.as_ref(), "pre" | "code") {
+        return true;
+    }
+    element
+        .attributes
+        .borrow()
+        .get("class")
+        .is_some_and(|class| {
+            class
+                .split([' ', '\t', '\n', '\r', '\x0C'])
+                .any(|token| token == "cm-content")
+        })
+}
+
+/// Well above the number of selector literals in this file, so they never evict
+/// each other; selectors built from page content or caller options are bounded
+/// by clearing the cache when it fills.
+const SELECTOR_CACHE_LIMIT: usize = 1024;
+
+thread_local! {
+    static SELECTOR_CACHE: RefCell<HashMap<String, Option<Rc<Selectors>>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn compiled_selector(selector: &str) -> Option<Rc<Selectors>> {
+    SELECTOR_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(compiled) = cache.get(selector) {
+            return compiled.clone();
+        }
+        let compiled = Selectors::compile(selector).ok().map(Rc::new);
+        if cache.len() >= SELECTOR_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(selector.to_owned(), compiled.clone());
+        compiled
+    })
+}
+
+/// Same matches as `node.select(selector)`, without re-parsing the selector
+/// on every call. An invalid selector matches nothing.
+fn select_elements(
+    node: &NodeRef,
+    selector: &str,
+) -> impl Iterator<Item = NodeDataRef<ElementData>> {
+    let compiled = compiled_selector(selector);
+    compiled
+        .is_some()
+        .then(|| node.inclusive_descendants().elements())
+        .into_iter()
+        .flatten()
+        .filter(move |element| compiled.as_ref().is_some_and(|c| c.matches(element)))
+}
+
 fn count_selector(node: &NodeRef, selector: &str) -> usize {
-    node.select(selector).ok().map(Iterator::count).unwrap_or(0)
+    select_elements(node, selector).count()
 }
 
 fn selector_text_len(node: &NodeRef, selector: &str) -> usize {
-    node.select(selector)
-        .ok()
-        .into_iter()
-        .flatten()
+    select_elements(node, selector)
         .map(|n| n.text_contents().chars().count())
         .sum()
 }
@@ -30177,13 +30457,13 @@ fn contains_layout_table(node: &NodeRef) -> bool {
         .any(|table| is_layout_table(&table))
 }
 
-fn count_node_words(node: &NodeRef) -> usize {
-    fn append_text(node: &NodeRef, text: &mut String) {
+fn count_node_words(node: &NodeRef, code: &CodeIndex) -> usize {
+    fn append_text(node: &NodeRef, text: &mut String, code: &CodeIndex) {
         match node.data() {
             NodeData::Text(value) => text.push_str(&value.borrow()),
             NodeData::Element(element) => {
                 let tag = element.name.local.as_ref();
-                if is_code_block_chrome_node(node) {
+                if is_code_block_chrome_node(node, code) {
                     return;
                 }
                 if tag == "pre" || is_code_block_container(node, element) {
@@ -30194,20 +30474,20 @@ fn count_node_words(node: &NodeRef) -> usize {
                 }
                 text.push(' ');
                 for child in node.children() {
-                    append_text(&child, text);
+                    append_text(&child, text, code);
                 }
                 text.push(' ');
             }
             _ => {
                 for child in node.children() {
-                    append_text(&child, text);
+                    append_text(&child, text, code);
                 }
             }
         }
     }
 
     let mut text = String::new();
-    append_text(node, &mut text);
+    append_text(node, &mut text, code);
     count_words(&text)
 }
 
@@ -40798,7 +41078,7 @@ let value = \`tick\`;
         assert_eq!(count_html_words("<p>a&lt;b &#169; &copy;</p>"), 1);
         let document = kuchiki::parse_html()
             .one("<article><p>one <code><span>two</span></code></p><p>three</p></article>");
-        assert_eq!(count_node_words(&document), 3);
+        assert_eq!(count_node_words(&document, &CodeIndex::default()), 3);
     }
 
     #[test]
@@ -43226,5 +43506,513 @@ let value = \`tick\`;
         let org = build_org_document(&metadata, "Body", 1);
         assert!(org.starts_with("* Why /\u{200b}this/ works\n"));
         assert!(org.contains(":DESCRIPTION: But they *do* want one\n"));
+    }
+    fn html_fragment(html: &str) -> NodeRef {
+        kuchiki::parse_html().one(html)
+    }
+
+    fn outer_html(matches: impl Iterator<Item = NodeDataRef<ElementData>>) -> Vec<String> {
+        matches
+            .map(|element| serialize_node(element.as_node()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn cached_selectors_match_uncached_select() {
+        let document = html_fragment(
+            r#"<body><div class="a b" data-x="1"><p>one</p><span><a href="/x">x</a></span></div>
+               <pre>code</pre><div class="cm-content">cm</div><p>two</p></body>"#,
+        );
+        for selector in [
+            "pre, code, .cm-content",
+            "a[href]",
+            "p",
+            "div > span",
+            ".a.b",
+            "[data-x]",
+            "*",
+        ] {
+            let expected = outer_html(document.select(selector).unwrap());
+            assert!(!expected.is_empty(), "{selector} should match something");
+            assert_eq!(
+                outer_html(select_elements(&document, selector)),
+                expected,
+                "{selector}"
+            );
+            assert_eq!(count_selector(&document, selector), expected.len());
+        }
+        assert!(document.select("p[").is_err());
+        assert_eq!(count_selector(&document, "p["), 0);
+        assert!(select_first_node(&document, "p[").is_none());
+    }
+
+    #[test]
+    fn selector_helpers_include_the_node_itself() {
+        let document = html_fragment("<body><pre>code</pre></body>");
+        let pre = select_first_node(&document, "pre").unwrap();
+        assert_eq!(count_selector(&pre, "pre"), 1);
+        assert!(contains_code_content(&pre));
+    }
+
+    #[test]
+    fn contains_code_content_matches_the_selector() {
+        for (html, expected) in [
+            ("<body><div><pre>x</pre></div></body>", true),
+            ("<body><div><code>x</code></div></body>", true),
+            (r#"<body><div class="a cm-content b">x</div></body>"#, true),
+            ("<body><div class=\"a\tcm-content\">x</div></body>", true),
+            (r#"<body><div class="cm-content2">x</div></body>"#, false),
+            (r#"<body><div class="CM-CONTENT">x</div></body>"#, false),
+            ("<body><div>plain</div></body>", false),
+        ] {
+            let body = select_first_node(&html_fragment(html), "body").unwrap();
+            assert_eq!(contains_code_content(&body), expected, "{html}");
+            assert_eq!(
+                body.select("pre, code, .cm-content").unwrap().count() > 0,
+                expected,
+                "{html}"
+            );
+        }
+    }
+
+    fn reference_ancestor_contains_code_block(node: &NodeRef) -> bool {
+        let mut current = node.parent();
+        for _ in 0..4 {
+            let Some(parent) = current else {
+                return false;
+            };
+            if parent
+                .select("pre, code, .cm-content")
+                .map(|mut matches| matches.next().is_some())
+                .unwrap_or(false)
+            {
+                return true;
+            }
+            current = parent.parent();
+        }
+        false
+    }
+
+    #[test]
+    fn ancestor_code_block_scan_stops_at_four_levels() {
+        for (html, expected) in [
+            // pre is a child of the third ancestor
+            ("<div id=z><div id=a><div id=b><div id=c><span id=t>x</span></div><pre>p</pre></div></div></div>", true),
+            // pre is a child of the fourth ancestor (c, b, a, z)
+            ("<div id=z><div id=a><div id=b><div id=c><span id=t>x</span></div></div></div><pre>p</pre></div>", true),
+            // pre is a child of the fifth ancestor (body)
+            ("<div id=z><div id=a><div id=b><div id=c><span id=t>x</span></div></div></div></div><pre>p</pre>", false),
+            // the target's own subtree is not scanned unless a parent contains it
+            ("<div id=a><span id=t><code>x</code></span></div>", true),
+            ("<span id=t><code>x</code></span>", true),
+            // no code anywhere
+            ("<div id=a><span id=t>x</span></div>", false),
+        ] {
+            let document = html_fragment(html);
+            let target = select_first_node(&document, "#t").unwrap();
+            assert_eq!(ancestor_contains_code_block(&target), expected, "{html}");
+            assert_eq!(
+                reference_ancestor_contains_code_block(&target),
+                expected,
+                "{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn stage_changed_dom_reports_real_changes_only() {
+        let document =
+            html_fragment("<body><article><p>keep</p><aside>drop</aside></article></body>");
+        let main = select_first_node(&document, "article").unwrap();
+
+        assert!(!stage_changed_dom(true, &document, &main, || {}));
+        assert!(stage_changed_dom(false, &document, &main, || {}));
+        assert!(stage_changed_dom(true, &document, &main, || {
+            select_first_node(&document, "aside").unwrap().detach();
+        }));
+        assert!(!stage_changed_dom(true, &document, &main, || {}));
+    }
+
+    fn filler_paragraphs(words: usize) -> String {
+        format!("<p>{}</p>", "word ".repeat(words))
+    }
+
+    #[test]
+    fn untouched_small_page_makes_every_retry_redundant() {
+        let html = format!(
+            "<html><head><title>T</title></head><body><article>{}</article></body></html>",
+            filler_paragraphs(20)
+        );
+        let mut effects = StageEffects::tracking();
+        parse_html_to_org_once(&html, DefuddleOptions::default(), &mut effects).unwrap();
+
+        assert!(effects.tracked);
+        assert!(effects.partial_retry_is_noop());
+        assert!(effects.hidden_retry_is_noop());
+        assert!(effects.cleanup_retry_is_noop());
+    }
+
+    #[test]
+    fn hidden_content_removal_is_visible_to_the_retry_check() {
+        let html = format!(
+            r#"<html><body><article>{}<div style="display:none">secret hidden words</div></article></body></html>"#,
+            filler_paragraphs(20)
+        );
+        let mut effects = StageEffects::tracking();
+        let output =
+            parse_html_to_org_once(&html, DefuddleOptions::default(), &mut effects).unwrap();
+
+        assert!(!output.org.contains("secret hidden words"));
+        assert!(effects.tracked);
+        assert!(!effects.hidden_retry_is_noop());
+    }
+
+    #[test]
+    fn stage_tracking_is_off_for_debug_profile_and_large_inputs() {
+        let small = format!(
+            "<html><body><article>{}</article></body></html>",
+            filler_paragraphs(20)
+        );
+        let mut effects = StageEffects::tracking();
+        let debug = DefuddleOptions {
+            debug: true,
+            ..DefuddleOptions::default()
+        };
+        parse_html_to_org_once(&small, debug, &mut effects).unwrap();
+        assert!(!effects.tracked);
+        assert!(!effects.partial_retry_is_noop());
+        assert!(!effects.cleanup_retry_is_noop());
+
+        let mut effects = StageEffects::tracking();
+        let profile = DefuddleOptions {
+            profile: true,
+            ..DefuddleOptions::default()
+        };
+        let output = parse_html_to_org_once(&small, profile, &mut effects).unwrap();
+        assert!(output.profile.is_some());
+        assert!(!effects.tracked);
+        assert!(!effects.hidden_retry_is_noop());
+
+        let large = format!(
+            "<html><body><article>{}</article><!-- {} --></body></html>",
+            filler_paragraphs(20),
+            "x".repeat(STAGE_TRACKING_MAX_HTML_BYTES)
+        );
+        let mut effects = StageEffects::tracking();
+        parse_html_to_org_once(&large, DefuddleOptions::default(), &mut effects).unwrap();
+        assert!(!effects.tracked);
+        assert!(!effects.hidden_retry_is_noop());
+    }
+
+    #[test]
+    fn skipping_redundant_retries_does_not_change_the_output() {
+        let html = format!(
+            "<html><head><title>T</title></head><body><article>{}</article></body></html>",
+            filler_paragraphs(8)
+        );
+        let tracked = parse_html_to_org(&html, DefuddleOptions::default()).unwrap();
+        let debug = parse_html_to_org(
+            &html,
+            DefuddleOptions {
+                debug: true,
+                ..DefuddleOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(tracked.org, debug.org);
+        assert_eq!(tracked.word_count, debug.word_count);
+    }
+    fn reference_nearby_words(
+        boundary: &NodeRef,
+        node: &NodeRef,
+        siblings: fn(&NodeRef) -> Vec<NodeRef>,
+    ) -> usize {
+        let mut total = 0usize;
+        let mut current = node.clone();
+        loop {
+            for sibling in siblings(&current) {
+                total += count_words(&sibling.text_contents());
+                if total > 90 {
+                    return total;
+                }
+            }
+            let Some(parent) = current.parent() else {
+                return total;
+            };
+            if parent == *boundary {
+                return total;
+            }
+            current = parent;
+        }
+    }
+
+    fn reference_remove_pre_content_author_date_metadata(main: &NodeRef) {
+        let candidates: Vec<NodeRef> = main
+            .descendants()
+            .filter(|node| node.as_element().is_some())
+            .collect();
+        let mut removed = false;
+        for node in candidates {
+            if removed || node.parent().is_none() || is_heading_node(&node) {
+                continue;
+            }
+            if is_substantive_content_start(&node) {
+                break;
+            }
+            if reference_nearby_words(main, &node, |n| n.preceding_siblings().collect()) <= 25
+                && is_pre_content_author_date_metadata_node(&node)
+            {
+                let target = highest_same_text_wrapper(&node, main);
+                target.detach();
+                removed = true;
+            }
+        }
+    }
+
+    #[test]
+    fn author_date_metadata_removal_matches_the_unbounded_scan() {
+        let filler = "word ".repeat(30);
+        for html in [
+            "<body><main><h1>Title</h1><div>By Jane Doe, March 3, 2024</div><p>Body text goes here and is long enough to count as the real content of this article page.</p></main></body>".to_string(),
+            format!("<body><main><h1>Title</h1><div>{filler}</div><div>By Jane Doe, March 3, 2024</div><p>Body</p></main></body>"),
+            "<body><main><div><span>By Jane Doe</span> <span>March 3, 2024</span></div><div>By John Roe, May 5, 2023</div></main></body>".to_string(),
+            "<body><main><p>No metadata here at all.</p></main></body>".to_string(),
+            // ten words precede the byline: below the 25-word cutoff, above 5
+            "<body><main><div>one two three four five six seven eight nine ten</div><div>By Jane Doe, March 3, 2024</div></main></body>".to_string(),
+        ] {
+            let expected_doc = html_fragment(&html);
+            let expected_main = select_first_node(&expected_doc, "main").unwrap();
+            reference_remove_pre_content_author_date_metadata(&expected_main);
+
+            let actual_doc = html_fragment(&html);
+            let actual_main = select_first_node(&actual_doc, "main").unwrap();
+            remove_pre_content_author_date_metadata(&actual_main, &mut None);
+
+            assert_eq!(
+                serialize_node(&actual_doc).unwrap(),
+                serialize_node(&expected_doc).unwrap(),
+                "{html}"
+            );
+        }
+
+        let ten_words = html_fragment(
+            "<body><main><div>one two three four five six seven eight nine ten</div><div>By Jane Doe, March 3, 2024</div></main></body>",
+        );
+        let main = select_first_node(&ten_words, "main").unwrap();
+        remove_pre_content_author_date_metadata(&main, &mut None);
+        assert!(!serialize_node(&ten_words).unwrap().contains("Jane Doe"));
+    }
+    #[test]
+    fn only_a_tracking_pass_records_stage_effects() {
+        let html = format!(
+            "<html><body><article>{}</article></body></html>",
+            filler_paragraphs(20)
+        );
+        let mut retry_effects = StageEffects::default();
+        parse_html_to_org_once(&html, DefuddleOptions::default(), &mut retry_effects).unwrap();
+        assert!(!retry_effects.tracked);
+        assert!(!retry_effects.cleanup_retry_is_noop());
+    }
+
+    #[test]
+    fn selector_cache_stays_bounded_and_correct() {
+        let document = html_fragment("<body><p id=target class=c>x</p></body>");
+        for i in 0..SELECTOR_CACHE_LIMIT * 2 + 7 {
+            let selector = format!("p.c-{i}, #target");
+            assert_eq!(count_selector(&document, &selector), 1, "{selector}");
+            assert!(SELECTOR_CACHE.with(|cache| cache.borrow().len()) <= SELECTOR_CACHE_LIMIT);
+        }
+        assert_eq!(count_selector(&document, "p.c"), 1);
+        assert_eq!(count_selector(&document, "p.missing"), 0);
+    }
+
+    #[test]
+    fn ancestor_scan_prefers_a_nearby_match_over_a_large_unrelated_subtree() {
+        let filler = "<span>filler</span>".repeat(50);
+        for (html, expected) in [
+            // nearby code, large unrelated sibling subtrees further out
+            (format!("<div id=z><div class=blob>{filler}</div><div id=a><pre>c</pre><p id=t>x</p></div><div class=blob>{filler}</div></div>"), true),
+            // code only in a distant sibling subtree of the fourth ancestor
+            (format!("<div id=z><div id=a><div id=b><div id=c><p id=t>x</p></div></div></div><div class=blob>{filler}</div><code>c</code></div>"), true),
+            // code beyond the fourth ancestor
+            (format!("<div id=y><div id=z><div id=a><div id=b><div id=c><p id=t>x</p></div></div></div></div><div class=blob>{filler}</div><code>c</code></div>"), false),
+            // the code element is an ancestor itself
+            ("<code><b><i id=t>x</i></b></code>".to_string(), true),
+        ] {
+            let document = html_fragment(&html);
+            let target = select_first_node(&document, "#t").unwrap();
+            assert_eq!(ancestor_contains_code_block(&target), expected, "{html}");
+            assert_eq!(reference_ancestor_contains_code_block(&target), expected, "{html}");
+        }
+    }
+    const CODE_MEMO_PAGE: &str = r#"<html><body><article>
+        <p id=plain>plain <b>text</b></p>
+        <div class=wrap><button class=copy-button>Copy</button><pre><code>fn main() {}</code></pre></div>
+        <div class=wrap><span class="toolbar">bash</span><div class="cm-content">x</div></div>
+        <div class=math><math><mi>x</mi></math><span>y</span></div>
+        <div class=wrap><pre><math><mi>z</mi></math></pre><span id=inside>tag</span></div>
+        <section><p>one</p><p>two</p></section>
+        <div><div><div><div><div><p id=far>far from any code</p></div></div></div></div></div>
+    </article></body></html>"#;
+
+    #[test]
+    fn code_index_covers_the_document_and_every_element() {
+        let document = html_fragment(CODE_MEMO_PAGE);
+        let index = CodeIndex::around(&document);
+        for node in document.inclusive_descendants() {
+            let expected = match node.data() {
+                NodeData::Element(_) | NodeData::Document(_) => Some(contains_code_content(&node)),
+                _ => None,
+            };
+            assert_eq!(index.flags.get(&node_key(&node)).copied(), expected);
+        }
+        assert_eq!(index.flags.get(&node_key(&document)), Some(&true));
+    }
+
+    #[test]
+    fn indexed_code_queries_match_scanning_for_every_element() {
+        let document = html_fragment(CODE_MEMO_PAGE);
+        let index = CodeIndex::around(&document);
+        let scanning = CodeIndex::default();
+        let mut with_code = 0;
+        let mut without_code = 0;
+        for node in document.descendants().filter(|n| n.as_element().is_some()) {
+            let expected = reference_ancestor_contains_code_block(&node);
+            assert_eq!(index.ancestor_has_code(&node), expected);
+            assert_eq!(scanning.ancestor_has_code(&node), expected);
+            assert_eq!(
+                index.subtree_has_code(&node),
+                scanning.subtree_has_code(&node)
+            );
+            if expected {
+                with_code += 1;
+            } else {
+                without_code += 1;
+            }
+        }
+        assert!(with_code > 0 && without_code > 0);
+    }
+
+    #[test]
+    fn code_index_for_a_fragment_covers_only_its_ancestor_window() {
+        let filler = "<p>filler</p>".repeat(30);
+        let html = format!(
+            "<html><body><main>{filler}<div id=a><div id=b><div id=c><div id=d><p id=t>x <b id=u>y</b></p></div></div></div></div>{filler}</main></body></html>"
+        );
+        let document = html_fragment(&html);
+        let message = select_first_node(&document, "#t").unwrap();
+        let index = CodeIndex::around(&message);
+        let covered = |selector: &str| {
+            let node = select_first_node(&document, selector).unwrap();
+            index.flags.contains_key(&node_key(&node))
+        };
+        for selector in ["#t", "#u", "#d", "#c", "#b", "#a"] {
+            assert!(covered(selector), "{selector}");
+        }
+        assert!(!covered("main"), "the fifth ancestor is outside");
+        assert!(!covered("main > p"), "siblings of the window are outside");
+
+        // Elements of the fragment get the same answers as by scanning.
+        let scanning = CodeIndex::default();
+        for node in message
+            .inclusive_descendants()
+            .filter(|n| n.as_element().is_some())
+        {
+            assert_eq!(
+                index.ancestor_has_code(&node),
+                scanning.ancestor_has_code(&node)
+            );
+        }
+    }
+
+    #[test]
+    fn code_index_answers_nodes_outside_its_window_by_scanning() {
+        let document = html_fragment(CODE_MEMO_PAGE);
+        let other = html_fragment("<html><body><div><pre>c</pre><p id=t>x</p></div></body></html>");
+        let target = select_first_node(&other, "#t").unwrap();
+        let index = CodeIndex::around(&document);
+        assert!(!index.flags.contains_key(&node_key(&target)));
+        assert!(index.ancestor_has_code(&target));
+        assert!(index.subtree_has_code(&select_first_node(&other, "div").unwrap()));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "code index")]
+    fn debug_builds_detect_a_tree_changed_under_the_index() {
+        let document = html_fragment(CODE_MEMO_PAGE);
+        let index = CodeIndex::around(&document);
+        for pre in document.select("pre").unwrap().collect::<Vec<_>>() {
+            pre.as_node().detach();
+        }
+        index.assert_current();
+    }
+
+    fn reference_is_code_block_chrome_node(node: &NodeRef) -> bool {
+        if is_math_node(node) || is_inside_math_tree(node) {
+            return false;
+        }
+        let Some(element) = node.as_element() else {
+            return false;
+        };
+        if !reference_ancestor_contains_code_block(node) {
+            return false;
+        }
+        let tag = element.name.local.as_ref();
+        let attrs = element_attr_string(element).to_ascii_lowercase();
+        let text = normalize_ws(&node.text_contents());
+        let text_lc = text.to_ascii_lowercase();
+        if tag == "button"
+            && (is_code_chrome_attr_text(&attrs)
+                || matches!(text_lc.as_str(), "copy" | "run" | "run code"))
+        {
+            return true;
+        }
+        if is_code_chrome_attr_text(&attrs) {
+            return true;
+        }
+        if node
+            .select("pre, code, .cm-content")
+            .map(|mut m| m.next().is_none())
+            .unwrap_or(true)
+            && attrs
+                .split_whitespace()
+                .any(|part| matches!(part, "listbox" | "option" | "tablist" | "tab"))
+        {
+            return true;
+        }
+        if node
+            .select("pre, code, .cm-content")
+            .map(|mut m| m.next().is_some())
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        if text.is_empty() || count_words(&text) > 3 {
+            return false;
+        }
+        text_lc.contains("copy")
+            || text_lc
+                .split_whitespace()
+                .any(|token| code_language_from_token(token).is_some())
+    }
+
+    #[test]
+    fn checking_for_code_before_math_does_not_change_the_chrome_decision() {
+        let document = html_fragment(CODE_MEMO_PAGE);
+        let mut chrome = 0;
+        for node in document.descendants() {
+            let expected = reference_is_code_block_chrome_node(&node);
+            assert_eq!(
+                is_code_block_chrome_node(&node, &CodeIndex::around(&document)),
+                expected
+            );
+            assert_eq!(
+                is_code_block_chrome_node(&node, &CodeIndex::default()),
+                expected
+            );
+            chrome += expected as usize;
+        }
+        assert!(chrome >= 2, "the page should exercise the true branch");
     }
 }
