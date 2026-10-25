@@ -16480,9 +16480,13 @@ fn remove_obsolete_embed_elements(document: &NodeRef) {
 }
 
 fn strip_unsafe_elements(document: &NodeRef) {
-    let Ok(matches) =
-        document.select("script, style, noscript, template, frame, frameset, object, embed, applet, base, svg script")
-    else {
+    // The SMIL elements can rewrite an already sanitized href. SVG element names
+    // are case sensitive, so the camel-cased spellings are listed as well.
+    let Ok(matches) = document.select(
+        "script, style, noscript, template, frame, frameset, object, embed, applet, base, \
+         svg script, animate, set, animatemotion, animatetransform, animatecolor, discard, \
+         animateMotion, animateTransform, animateColor",
+    ) else {
         return;
     };
     let nodes = matches
@@ -23925,6 +23929,9 @@ fn html_fragment_to_markdown(html: &str) -> String {
     }
 
     let document = kuchiki::parse_html().one(html);
+    // The caller's HTML is normally clean already; do not rely on it, since the
+    // HTML kept in the Markdown is written out as it stands.
+    sanitize_output_content(&document);
     let mut renderer = MarkdownRenderer::new();
     if let Ok(body) = document.select_first("body") {
         for child in body.as_node().children() {
@@ -44167,5 +44174,42 @@ let value = \`tick\`;
             "{markdown:?}"
         );
         assert!(!markdown.contains("&#10;"), "{markdown:?}");
+    }
+    #[test]
+    fn markdown_conversion_cleans_unsafe_html_without_help_from_the_caller() {
+        let hostile = [
+            complex_table(r#"<a href="javascript:alert(1)">x</a>"#),
+            complex_table(r#"<img src="data:text/html,&lt;script&gt;alert(1)&lt;/script&gt;">"#),
+            complex_table(
+                r#"<iframe src="javascript:alert(1)"></iframe><iframe srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;"></iframe>"#,
+            ),
+            complex_table("<script>alert(1)</script>x"),
+            complex_table(r#"<span onclick="alert(1)">x</span>"#),
+            r#"<p>Text</p><svg onload="alert(1)"><a href="javascript:alert(1)"><text>x</text></a><a xlink:href="javascript:alert(1)"><text>y</text></a><animate attributeName="href" to="javascript:alert(1)"></animate><animateMotion href="javascript:alert(1)"></animateMotion></svg>"#.to_string(),
+            r#"<p>Text</p><iframe src="javascript:alert(1)"></iframe><iframe srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;"></iframe><iframe src="data:image/svg+xml,&lt;svg onload=alert(1)&gt;"></iframe>"#.to_string(),
+            r#"<p>Text</p><video src="x" onerror="alert(1)"></video>"#.to_string(),
+            r#"<p>Text<sup onclick="alert(1)">1</sup></p>"#.to_string(),
+        ];
+        for html in hostile {
+            let markdown = html_fragment_to_markdown(&html);
+            for needle in [
+                "onload",
+                "onclick",
+                "onerror",
+                "javascript:",
+                "srcdoc",
+                "<script",
+                "<animate",
+                "data:text/html",
+                "data:image/svg",
+            ] {
+                assert!(
+                    !markdown
+                        .to_ascii_lowercase()
+                        .contains(&needle.to_ascii_lowercase()),
+                    "{needle} survived in {markdown:?} (from {html})"
+                );
+            }
+        }
     }
 }
