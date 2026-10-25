@@ -3,7 +3,7 @@
 ~org-defuddle~ is intended to be a Rust rewrite of [[https://github.com/kepano/defuddle][kepano/defuddle]] with an
 Emacs dynamic module frontend that inserts extracted readable content into Org.
 
-The current reference snapshot is upstream commit ~556d74e~ (0.19.5 plus the latest YouTube fixes), pinned in
+The current reference snapshot is upstream commit ~97b20c7~ (0.19.6), pinned in
 ~tests/upstream-revision~. The long-term goal is feature parity with defuddle's extraction pipeline: metadata, schema.org fallback, DOM cleanup, scoring, site-specific
 extractors, media handling, footnotes, math/code normalization, and Org content
 conversion.

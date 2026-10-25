@@ -24290,9 +24290,7 @@ impl MarkdownRenderer {
     }
 
     fn render_raw_block_html(&mut self, node: &NodeRef) {
-        let Ok(html) = serialize_node(node) else {
-            return;
-        };
+        let html = markdown_inert_html(node, &|_| true);
         let html = html.trim();
         if html.is_empty() {
             return;
@@ -24303,9 +24301,7 @@ impl MarkdownRenderer {
     }
 
     fn render_raw_inline_html(&mut self, node: &NodeRef) {
-        let Ok(html) = serialize_node(node) else {
-            return;
-        };
+        let html = markdown_inert_html(node, &|_| true);
         let html = html.trim();
         if html.is_empty() {
             return;
@@ -24808,60 +24804,107 @@ fn markdown_table_has_spans(node: &NodeRef) -> bool {
 }
 
 fn markdown_clean_table_html(node: &NodeRef) -> String {
-    let html = markdown_clean_html_node(node);
-    html.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-}
-
-fn markdown_clean_html_node(node: &NodeRef) -> String {
-    match node.data() {
-        NodeData::Text(text) => escape_html_text(&text.borrow()),
-        NodeData::Element(element) => {
-            let tag = element.name.local.as_ref();
-            let mut html = String::new();
-            html.push('<');
-            html.push_str(tag);
-            html.push_str(&markdown_clean_html_attrs(element));
-            html.push('>');
-            if markdown_void_html_tag(tag) {
-                return html;
-            }
-            for child in node.children() {
-                html.push_str(&markdown_clean_html_node(&child));
-            }
-            html.push_str("</");
-            html.push_str(tag);
-            html.push('>');
-            html
-        }
-        _ => node
-            .children()
-            .map(|child| markdown_clean_html_node(&child))
-            .collect::<String>(),
-    }
-}
-
-fn markdown_clean_html_attrs(element: &ElementData) -> String {
     const ALLOWED: &[&str] = &[
         "src", "href", "style", "align", "width", "height", "rowspan", "colspan", "bgcolor",
         "scope", "valign", "headers",
     ];
+    markdown_inert_html(node, &|name| {
+        ALLOWED.contains(&name.to_ascii_lowercase().as_str())
+    })
+}
 
-    let attrs = element.attributes.borrow();
-    let mut rendered = Vec::new();
-    for (name, value) in attrs.map.iter() {
-        let local = name.local.as_ref().to_ascii_lowercase();
-        if ALLOWED.contains(&local.as_str()) {
-            rendered.push(format!(
-                r#" {}="{}""#,
-                local,
-                escape_html_attr(&value.value)
-            ));
+/// Characters that would let text kept in raw HTML act as Markdown, or end the
+/// HTML block it sits in. Writing them as numeric references keeps the text
+/// literal for any Markdown renderer.
+const MARKDOWN_UNSAFE_CHARS: &[char] = &['\n', '\r', '&', '<', '>', '"', '\'', '`', '\\', '[', ']'];
+
+fn encode_markdown_unsafe(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if MARKDOWN_UNSAFE_CHARS.contains(&c) {
+            out.push_str(&format!("&#{};", c as u32));
+        } else {
+            out.push(c);
         }
     }
-    rendered.sort();
-    rendered.concat()
+    out
+}
+
+/// Serializes `node` as HTML that stays inert inside Markdown: text and
+/// attribute values are written with `encode_markdown_unsafe`, names that
+/// Markdown could read as something else are dropped, `xmp` and `plaintext`
+/// become `pre`, and `noembed` and `noframes` are left out. `keep_attribute`
+/// chooses which attributes survive.
+fn markdown_inert_html(node: &NodeRef, keep_attribute: &dyn Fn(&str) -> bool) -> String {
+    fn is_tag_name(name: &str) -> bool {
+        name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    }
+    fn is_attribute_name(name: &str) -> bool {
+        name.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == ':')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+    }
+
+    match node.data() {
+        NodeData::Text(text) => {
+            let text = text.borrow();
+            // Whitespace between table parts is never rendered.
+            let between_table_parts = text.trim().is_empty()
+                && node.parent().is_some_and(|parent| {
+                    matches!(
+                        tag_name(&parent).as_deref(),
+                        Some("table" | "thead" | "tbody" | "tfoot" | "tr" | "colgroup")
+                    )
+                });
+            if between_table_parts {
+                String::new()
+            } else {
+                encode_markdown_unsafe(&text)
+            }
+        }
+        NodeData::Element(element) => {
+            let local = element.name.local.as_ref();
+            if matches!(local.to_ascii_lowercase().as_str(), "noembed" | "noframes") {
+                return String::new();
+            }
+            let children = node
+                .children()
+                .map(|child| markdown_inert_html(&child, keep_attribute))
+                .collect::<String>();
+            let name = match local.to_ascii_lowercase().as_str() {
+                "xmp" | "plaintext" => "pre",
+                _ => local,
+            };
+            if !is_tag_name(name) {
+                return children;
+            }
+            let mut attributes = Vec::new();
+            for (attribute, value) in element.attributes.borrow().map.iter() {
+                let name = match &value.prefix {
+                    Some(prefix) if !prefix.is_empty() => format!("{}:{}", prefix, attribute.local),
+                    _ => attribute.local.to_string(),
+                };
+                if is_attribute_name(&name) && keep_attribute(&name) {
+                    attributes.push(format!(
+                        " {}=\"{}\"",
+                        name,
+                        encode_markdown_unsafe(&value.value)
+                    ));
+                }
+            }
+            let attributes = attributes.concat();
+            if markdown_void_html_tag(&name.to_ascii_lowercase()) {
+                format!("<{name}{attributes}>")
+            } else {
+                format!("<{name}{attributes}>{children}</{name}>")
+            }
+        }
+        _ => String::new(),
+    }
 }
 
 fn markdown_void_html_tag(tag: &str) -> bool {
@@ -44014,5 +44057,115 @@ let value = \`tick\`;
             chrome += expected as usize;
         }
         assert!(chrome >= 2, "the page should exercise the true branch");
+    }
+    fn complex_table(cell: &str) -> String {
+        format!(
+            r#"<table><tr><td colspan="2">{cell}</td></tr><tr><td>A</td><td>B</td></tr></table>"#
+        )
+    }
+
+    #[test]
+    fn markdown_syntax_in_kept_html_is_encoded() {
+        let markdown =
+            html_fragment_to_markdown("<p>Text<sup>[click](javascript:alert(1))</sup></p>");
+        assert!(
+            markdown.contains("<sup>&#91;click&#93;(javascript:alert(1))</sup>"),
+            "{markdown}"
+        );
+        assert!(!markdown.contains("[click]"), "{markdown}");
+
+        let markdown = html_fragment_to_markdown(
+            "<p>Text<sup title=\"a\n\n[click](javascript:alert(1))\">1</sup></p>",
+        );
+        assert!(
+            markdown.contains(r#"title="a&#10;&#10;&#91;click&#93;(javascript:alert(1))""#),
+            "{markdown:?}"
+        );
+        assert!(!markdown.contains("\n\n["), "{markdown:?}");
+
+        let markdown = html_fragment_to_markdown(
+            "<p>Text<sup>`<span title=\"`&lt;img src=x onerror=alert(1)&gt;\">x</span></sup></p>",
+        );
+        assert!(!markdown.contains('`'), "{markdown}");
+        assert!(!markdown.contains("<img"), "{markdown}");
+    }
+
+    #[test]
+    fn literal_text_in_a_complex_table_is_not_turned_into_html() {
+        let markdown = html_fragment_to_markdown(&complex_table(
+            "&lt;img src=x onerror=alert(1)&gt; &amp;lt;literal&amp;gt; A &amp; B",
+        ));
+        assert!(
+            markdown
+                .contains("&#60;img src=x onerror=alert(1)&#62; &#38;lt;literal&#38;gt; A &#38; B"),
+            "{markdown}"
+        );
+        assert!(!markdown.contains("<img"), "{markdown}");
+    }
+
+    #[test]
+    fn raw_text_elements_in_a_complex_table_show_their_content_as_text() {
+        let markdown = html_fragment_to_markdown(&complex_table(
+            "<xmp>A & B <b>literal</b></xmp><noembed>hidden</noembed>",
+        ));
+        assert!(
+            markdown.contains("<pre>A &#38; B &#60;b&#62;literal&#60;/b&#62;</pre>"),
+            "{markdown}"
+        );
+        assert!(!markdown.contains("hidden"), "{markdown}");
+        assert!(!markdown.contains("<xmp"), "{markdown}");
+    }
+
+    #[test]
+    fn invalid_attribute_names_are_dropped_and_safe_attributes_kept() {
+        let markdown = html_fragment_to_markdown(
+            "<p>Text<sup x[y]=\"[click](javascript:alert(1))\" title=\"ok\">1</sup></p>",
+        );
+        assert!(
+            markdown.contains(r#"<sup title="ok">1</sup>"#),
+            "{markdown}"
+        );
+        assert!(!markdown.contains("x[y]"), "{markdown}");
+
+        let markdown = html_fragment_to_markdown(&complex_table(
+            r#"<a href="https://example.com/a">Link</a><img src="data:image/png;base64,AAAA">"#,
+        ));
+        assert!(
+            markdown.contains(r#"href="https://example.com/a""#),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains(r#"src="data:image/png;base64,AAAA""#),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn kept_svg_keeps_its_attribute_names_and_namespace() {
+        let markdown = html_fragment_to_markdown(
+            r#"<p>Text</p><svg viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>"#,
+        );
+        assert!(markdown.contains(r#"viewBox="0 0 10 10""#), "{markdown}");
+        assert!(
+            markdown.contains(r#"preserveAspectRatio="xMidYMid meet""#),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains(r#" xmlns="http://www.w3.org/2000/svg""#),
+            "{markdown}"
+        );
+        assert!(!markdown.contains(":xmlns"), "{markdown}");
+    }
+
+    #[test]
+    fn whitespace_between_table_parts_does_not_fill_the_output_with_references() {
+        let markdown = html_fragment_to_markdown(
+            "<table>\n<tbody>\n<tr>\n<td rowspan=\"2\">a</td>\n<td>b</td>\n</tr>\n<tr>\n<td>c</td>\n</tr>\n</tbody>\n</table>",
+        );
+        assert!(
+            markdown.contains("<td rowspan=\"2\">a</td><td>b</td>"),
+            "{markdown:?}"
+        );
+        assert!(!markdown.contains("&#10;"), "{markdown:?}");
     }
 }
