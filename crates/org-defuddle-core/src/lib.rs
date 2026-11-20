@@ -22880,16 +22880,13 @@ fn markdown_math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo>
         node,
     );
 
-    if let Some(latex) =
-        select_first_text_raw(node, "annotation[encoding=\"application/x-tex\"]").or(alt)
-    {
+    if let Some(latex) = select_first_text_raw(node, "annotation[encoding=\"application/x-tex\"]") {
         return MathInfo::new(latex, is_block);
     }
-    if let Some(latex) = data_latex
-        .as_ref()
-        .filter(|latex| LATEX_MARKER_RE.is_match(latex))
-    {
-        return MathInfo::new(latex.clone(), is_block);
+    for latex in [&data_latex, &alt].into_iter().flatten() {
+        if trustworthy_markdown_latex(node, latex) {
+            return MathInfo::new(latex.clone(), is_block);
+        }
     }
     if let Some(latex) = has_mathml_element_children(node)
         .then(|| mathml_to_latex(node))
@@ -22898,8 +22895,26 @@ fn markdown_math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo>
         return MathInfo::new(latex, is_block);
     }
     data_latex
+        .or(alt)
         .or_else(|| Some(node.text_contents()))
         .and_then(|latex| MathInfo::new(latex, is_block))
+}
+
+fn trustworthy_markdown_latex(node: &NodeRef, latex: &str) -> bool {
+    static RENDERED_PROSE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"[a-zA-Z]{3,}-[a-zA-Z]{2,}").unwrap());
+    if latex.trim().is_empty() {
+        return false;
+    }
+    if !has_mathml_element_children(node)
+        || LATEX_MARKER_RE.is_match(latex)
+        || latex.contains(['$', '&'])
+        || latex.contains("\\\\")
+    {
+        return true;
+    }
+    count_selector(node, "menclose, mfrac, mmultiscripts, mover, mroot, msqrt, msub, msubsup, msup, mtable, mtd, mtr, munder, munderover") == 0
+        && !RENDERED_PROSE.is_match(latex)
 }
 
 fn is_math_script_type(type_attr: &str) -> bool {
@@ -24813,7 +24828,13 @@ impl MarkdownRenderer {
                 }
             }
         }
-        self.out = join_markdown(before, &self.out);
+        self.out = if has_ancestor_tag(node, &["code"]) {
+            let mut combined = before;
+            combined.push_str(&self.out);
+            combined
+        } else {
+            join_markdown(before, &self.out)
+        };
     }
 
     fn render_element(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
@@ -25297,12 +25318,16 @@ impl MarkdownRenderer {
     }
 
     fn render_math(&mut self, node: &NodeRef, math: MathInfo) {
-        static HTML_TAG: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(?i)<([!?/]|[a-z][a-z0-9-]*(?:\s|/|>))").unwrap());
+        static INLINE_MARKUP: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(?i)<([!?/]|[a-z][a-z0-9-]*[\s/>]|[a-z][a-z0-9+.-]*:)").unwrap()
+        });
+        static BLOCK_MARKUP: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(?i)<([!?/]|[a-z][a-z0-9-]*(?:[\s/>]|$)|[a-z][a-z0-9+.-]*:)").unwrap()
+        });
         static LINK: Lazy<Regex> = Lazy::new(|| Regex::new(r"\]([(:\[])").unwrap());
         static LITERAL: Lazy<Regex> = Lazy::new(|| {
             Regex::new(
-                r"\\(?:text[a-z]*|mbox|hbox|vbox|verb|url|href|operatorname|tag|label|ref|eqref)\b",
+                r"(?i)\\(?:text[a-z]*|mbox|hbox|vbox|verb|url|href|operatorname|tag|label|ref|eqref)(?:[^a-z]|$)",
             )
             .unwrap()
         });
@@ -25314,7 +25339,12 @@ impl MarkdownRenderer {
                         .parent()
                         .is_some_and(|parent| tag_name(&parent).as_deref() == Some("p"))
                     && is_standalone_node_in_block(node)));
-        let safe = HTML_TAG.replace_all(&math.latex, "< $1");
+        let markup = if block {
+            &*BLOCK_MARKUP
+        } else {
+            &*INLINE_MARKUP
+        };
+        let safe = markup.replace_all(&math.latex, "< $1");
         let safe = LINK.replace_all(&safe, "] $1");
         if safe != math.latex && LITERAL.is_match(&math.latex) {
             self.out.push_str(&if block {
@@ -25343,11 +25373,11 @@ impl MarkdownRenderer {
     }
 
     fn render_inline_code_text(&mut self, text: &str) {
-        let text = cleanup_inline(text);
-        if text.is_empty() {
-            return;
+        let text = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
+        let text = text.trim();
+        if !text.is_empty() {
+            self.out.push_str(&markdown_code_span(text));
         }
-        self.out.push_str(&markdown_code_span(&text));
     }
 
     fn render_table(&mut self, node: &NodeRef) {
@@ -25455,7 +25485,11 @@ impl MarkdownRenderer {
         for child in node.children() {
             nested.render_node(&child, true);
         }
-        cleanup_markdown(&nested.out).trim().to_string()
+        if tag_name(node).as_deref() == Some("code") || has_ancestor_tag(node, &["code"]) {
+            nested.out.trim().to_string()
+        } else {
+            cleanup_markdown(&nested.out).trim().to_string()
+        }
     }
 
     fn render_block_children_to_string(&self, node: &NodeRef) -> String {
@@ -25520,14 +25554,7 @@ fn markdown_fenced_code(text: &str, language: Option<&str>) -> String {
     if text.is_empty() {
         return String::new();
     }
-    let fence = "`".repeat(
-        text.split(|ch| ch != '`')
-            .map(str::len)
-            .max()
-            .unwrap_or(0)
-            .max(2)
-            + 1,
-    );
+    let fence = "`".repeat((longest_backtick_run(text) + 1).max(3));
     let language = language
         .unwrap_or("")
         .split_whitespace()
@@ -31705,11 +31732,17 @@ fn escape_markdown_url(url: &str) -> String {
 }
 
 fn markdown_code_span(text: &str) -> String {
-    if text.contains('`') {
-        format!("`` {text} ``")
+    let fence = "`".repeat(longest_backtick_run(text) + 1);
+    let padding = if text.starts_with('`') || text.ends_with('`') {
+        " "
     } else {
-        format!("`{text}`")
-    }
+        ""
+    };
+    format!("{fence}{padding}{text}{padding}{fence}")
+}
+
+fn longest_backtick_run(text: &str) -> usize {
+    text.split(|ch| ch != '`').map(str::len).max().unwrap_or(0)
 }
 
 fn markdown_table_cell(text: &str) -> String {
