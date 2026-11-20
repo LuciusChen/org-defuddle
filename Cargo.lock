@@ -443,6 +443,7 @@ name = "org-defuddle-core"
 version = "0.1.4"
 dependencies = [
  "kuchiki",
+ "percent-encoding",
  "pulldown-cmark",
  "regex",
  "roxmltree",

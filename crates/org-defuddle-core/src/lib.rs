@@ -24845,9 +24845,9 @@ impl MarkdownRenderer {
         if markdown_footnote_backref(element) {
             return;
         }
-        if let Some(reference) = markdown_footnote_reference(element) {
+        if let Some(reference) = markdown_footnote_reference(node, element) {
             self.out.push_str("[^");
-            self.out.push_str(&reference);
+            self.out.push_str(&markdown_footnote_id(&reference));
             self.out.push(']');
             return;
         }
@@ -25023,7 +25023,7 @@ impl MarkdownRenderer {
             .and_then(best_srcset_url)
             .or_else(|| image_attrs.get("src").map(str::to_string))
             .unwrap_or_default();
-        let alt = image_attrs.get("alt").unwrap_or("").to_string();
+        let alt = escape_markdown_inline_text(image_attrs.get("alt").unwrap_or_default());
         drop(image_attrs);
         if is_dangerous_url(&src) {
             self.render_figure_children(node);
@@ -25031,11 +25031,14 @@ impl MarkdownRenderer {
         }
 
         self.ensure_blank_line();
-        self.out.push_str("![");
-        self.out.push_str(&alt);
-        self.out.push_str("](");
-        self.out.push_str(&src);
-        self.out.push(')');
+        if src.is_empty() {
+            self.out.push_str(&alt);
+        } else {
+            self.out.push_str(&format!(
+                "![{alt}]({})",
+                markdown_link_destination(&src, None)
+            ));
+        }
 
         if let Some(figcaption) = select_first_node(node, "figcaption") {
             let caption = self.render_figure_caption(&figcaption);
@@ -25056,18 +25059,12 @@ impl MarkdownRenderer {
     }
 
     fn render_figure_caption(&self, node: &NodeRef) -> String {
-        let tag = select_first_text(node, ".ltx_tag_figure").unwrap_or_default();
         let mut nested = self.nested();
         nested.force_inline_math = true;
         for child in node.children() {
             nested.render_node(&child, true);
         }
-        let caption = cleanup_markdown(&nested.out).trim().to_string();
-        match (tag.is_empty(), caption.is_empty()) {
-            (true, _) => caption,
-            (_, true) => tag,
-            (false, false) => format!("{tag} {caption}"),
-        }
+        cleanup_markdown(&nested.out).trim().to_string()
     }
 
     fn render_iframe(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
@@ -25108,7 +25105,8 @@ impl MarkdownRenderer {
         self.out.push_str(&callout.fold);
         if !callout.title.is_empty() {
             self.out.push(' ');
-            self.out.push_str(&callout.title);
+            self.out
+                .push_str(&escape_markdown_inline_text(&callout.title));
         }
         self.out.push('\n');
 
@@ -25234,7 +25232,7 @@ impl MarkdownRenderer {
         let title = attrs.get("title");
         if let Some(src) = src.filter(|src| !src.trim().is_empty() && !is_dangerous_url(src)) {
             self.out.push_str("![");
-            self.out.push_str(&escape_markdown_link_text(alt.trim()));
+            self.out.push_str(&escape_markdown_inline_text(alt.trim()));
             self.out.push_str("](");
             self.out
                 .push_str(&markdown_link_destination(src.trim(), title));
@@ -25276,7 +25274,7 @@ impl MarkdownRenderer {
             };
             let content = self.render_footnote_definition_content(&child, &id);
             self.out.push_str("[^");
-            self.out.push_str(&id.to_ascii_lowercase());
+            self.out.push_str(&markdown_footnote_id(&id));
             self.out.push_str("]: ");
             self.out.push_str(content.trim());
             self.out.push_str("\n\n");
@@ -25332,7 +25330,7 @@ impl MarkdownRenderer {
             .unwrap()
         });
         let block = !self.force_inline_math
-            && !has_ancestor_tag(node, &["table"])
+            && (tag_name(node).as_deref() == Some("table") || !has_ancestor_tag(node, &["table"]))
             && (math.is_block
                 || (node.as_element().is_some()
                     && node
@@ -25374,25 +25372,15 @@ impl MarkdownRenderer {
 
     fn render_inline_code_text(&mut self, text: &str) {
         let text = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
-        let text = text.trim();
         if !text.is_empty() {
-            self.out.push_str(&markdown_code_span(text));
+            self.out.push_str(&markdown_code_span(&text));
         }
     }
 
     fn render_table(&mut self, node: &NodeRef) {
         if let Some(equations) = markdown_equation_table_math(node) {
             for equation in equations {
-                self.ensure_blank_line();
-                if equation.is_block {
-                    self.out.push_str("$$\n");
-                    self.out.push_str(&equation.latex);
-                    self.out.push_str("\n$$\n\n");
-                } else {
-                    self.out.push('$');
-                    self.out.push_str(&equation.latex);
-                    self.out.push_str("$\n\n");
-                }
+                self.render_math(node, equation);
             }
             return;
         }
@@ -25485,7 +25473,9 @@ impl MarkdownRenderer {
         for child in node.children() {
             nested.render_node(&child, true);
         }
-        if tag_name(node).as_deref() == Some("code") || has_ancestor_tag(node, &["code"]) {
+        if tag_name(node).as_deref() == Some("code") {
+            nested.out
+        } else if has_ancestor_tag(node, &["code"]) {
             nested.out.trim().to_string()
         } else {
             cleanup_markdown(&nested.out).trim().to_string()
@@ -25808,17 +25798,48 @@ fn markdown_footnote_backref(element: &ElementData) -> bool {
             .any(|part| part == "footnote-backref")
 }
 
-fn markdown_footnote_reference(element: &ElementData) -> Option<String> {
+fn markdown_footnote_reference(node: &NodeRef, element: &ElementData) -> Option<String> {
+    static REPEATED_REFERENCE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d+$").unwrap());
     if element.name.local.as_ref() != "sup" {
         return None;
     }
     let attrs = element.attributes.borrow();
-    let id = attrs.get("id")?;
-    let rest = id.strip_prefix("fnref:")?;
-    rest.split('-')
-        .next()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    let reference = attrs.get("id")?.strip_prefix("fnref:")?.to_string();
+    if reference.is_empty() {
+        return None;
+    }
+    drop(attrs);
+    if let Some(linked) = select_attr(node, "a[href^=\"#fn:\"]", "href") {
+        let target = linked.strip_prefix("#fn:").unwrap();
+        if !target.is_empty() {
+            return Some(
+                percent_encoding::percent_decode_str(target)
+                    .decode_utf8()
+                    .map(|decoded| decoded.into_owned())
+                    .unwrap_or_else(|_| target.to_string()),
+            );
+        }
+    }
+    let root = node.ancestors().last().unwrap_or_else(|| node.clone());
+    Some(
+        if find_node_by_id(&root, &format!("fn:{reference}")).is_some() {
+            reference
+        } else {
+            REPEATED_REFERENCE.replace(&reference, "").into_owned()
+        },
+    )
+}
+
+fn markdown_footnote_id(id: &str) -> String {
+    let mut out = String::new();
+    for unit in id.to_lowercase().encode_utf16() {
+        if matches!(unit, 0x61..=0x7a | 0x30..=0x39 | 0x2d | 0x5f) {
+            out.push(char::from_u32(unit as u32).unwrap());
+        } else {
+            out.push_str(&format!("%{unit:04x}"));
+        }
+    }
+    out
 }
 
 fn markdown_is_footnotes_list(node: &NodeRef) -> bool {
@@ -31660,9 +31681,7 @@ fn escape_table_cell(text: &str) -> String {
     text.replace('|', "\\vert{}")
 }
 
-fn escape_markdown_text(text: &str) -> String {
-    static TAG_LIKE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"<(/?[A-Za-z][A-Za-z0-9-]*(?:\s|/?>))").unwrap());
+fn escape_markdown_syntax(text: &str) -> String {
     static LEADING_EQUALS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(=+)").unwrap());
     static LEADING_HEADING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(#{1,6}) ").unwrap());
     static LEADING_ORDERED_LIST_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)\. ").unwrap());
@@ -31691,49 +31710,71 @@ fn escape_markdown_text(text: &str) -> String {
     escaped = LEADING_ORDERED_LIST_RE
         .replace(&escaped, r"$1\. ")
         .into_owned();
-    TAG_LIKE_RE.replace_all(&escaped, r"\<$1").into_owned()
+    escaped
 }
 
-fn escape_markdown_link_text(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('\n', " ")
+fn escape_markdown_text(text: &str) -> String {
+    static TAG_LIKE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"<(/?[A-Za-z][A-Za-z0-9-]*(?:\s|/?>))").unwrap());
+    static PARTIAL_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"<([^<>\s]*)$").unwrap());
+    static AUTOLINK: Lazy<Regex> = Lazy::new(|| Regex::new(r"<([^<>\s]+)>").unwrap());
+    let escaped = escape_markdown_syntax(text);
+    let escaped = TAG_LIKE.replace_all(&escaped, r"\<$1");
+    let escaped = PARTIAL_TAG.replace(&escaped, r"\<$1");
+    AUTOLINK
+        .replace_all(&escaped, |captures: &regex::Captures<'_>| {
+            if is_dangerous_url_with_inline_images(&captures[1], false) {
+                format!("\\{}", &captures[0])
+            } else {
+                captures[0].to_string()
+            }
+        })
+        .into_owned()
+}
+
+fn escape_entity_like(text: &str) -> String {
+    static ENTITY: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"&(#(?:[0-9]+|[xX][0-9a-fA-F]+);|[a-zA-Z][a-zA-Z0-9]*;)").unwrap()
+    });
+    ENTITY.replace_all(text, "&amp;$1").into_owned()
+}
+
+fn escape_markdown_inline_text(text: &str) -> String {
+    static NEWLINES: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\r\n]+").unwrap());
+    let text = NEWLINES.replace_all(text, " ");
+    escape_entity_like(&escape_markdown_syntax(&text)).replace('<', "\\<")
 }
 
 fn markdown_link_destination(url: &str, title: Option<&str>) -> String {
-    let destination = if url.chars().any(char::is_whitespace) {
-        format!("<{}>", escape_markdown_angle_destination(url))
+    let mut destination = String::new();
+    for ch in escape_entity_like(url).chars() {
+        match ch {
+            '\\' => destination.push_str("\\\\"),
+            '<' | '>' | '\x00'..='\x1f' | '\x7f' => {
+                destination.push_str(&format!("%{:02X}", ch as u32))
+            }
+            _ => destination.push(ch),
+        }
+    }
+    if destination.chars().any(char::is_whitespace) {
+        destination = format!("<{destination}>");
     } else {
-        escape_markdown_url(url)
-    };
-    let Some(title) = title.map(str::trim).filter(|title| !title.is_empty()) else {
-        return destination;
-    };
-    format!("{destination} \"{}\"", escape_markdown_title(title))
-}
-
-fn escape_markdown_angle_destination(url: &str) -> String {
-    url.replace('>', "%3E").replace('\n', " ")
-}
-
-fn escape_markdown_title(title: &str) -> String {
-    title
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', " ")
-}
-
-fn escape_markdown_url(url: &str) -> String {
-    url.replace('\\', "\\\\")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
-        .replace(' ', "%20")
+        destination = destination.replace('(', "\\(").replace(')', "\\)");
+    }
+    if let Some(title) = title.filter(|title| !title.is_empty()) {
+        static NEWLINES: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\r\n]+").unwrap());
+        let title = escape_html_attr(&NEWLINES.replace_all(title, " ")).replace('\\', "\\\\");
+        destination.push_str(&format!(" \"{title}\""));
+    }
+    destination
 }
 
 fn markdown_code_span(text: &str) -> String {
     let fence = "`".repeat(longest_backtick_run(text) + 1);
-    let padding = if text.starts_with('`') || text.ends_with('`') {
+    let padding = if text.starts_with('`')
+        || text.ends_with('`')
+        || (text.starts_with(' ') && text.ends_with(' ') && text.chars().any(|ch| ch != ' '))
+    {
         " "
     } else {
         ""
@@ -41287,6 +41328,15 @@ line break text.">
         );
         assert!(link_with_parentheses.contains("[Open page](https://example.com/page\\(1\\))"));
 
+        let malformed_destination = html_fragment_to_markdown(
+            r#"<img src="https://example.com/a.png) &lt;img src=x onerror=alert(1)&gt;" alt="photo">"#,
+        );
+        assert!(
+            malformed_destination.contains("%3Cimg"),
+            "{malformed_destination}"
+        );
+        assert!(!malformed_destination.contains("<img src=x"));
+
         let image_after_exclamation = html_fragment_to_markdown(
             r#"<article><p>Yey!<img src="https://example.com/img.png" alt="IMG"></p></article>"#,
         );
@@ -41702,9 +41752,10 @@ line break text.">
         assert!(!figure.contains("Ignored figure title"));
         assert!(!figure.contains("https://example.com/full"));
         assert!(!figure.contains("https://example.com/second.jpg"));
-        assert!(figure.contains(
-            "Figure 2. Figure 2. Loss $L=x^2$ from [source](https://example.com/source)."
-        ));
+        assert!(
+            figure.contains("Figure 2. Loss $L=x^2$ from [source](https://example.com/source).")
+        );
+        assert_eq!(figure.matches("Figure 2.").count(), 1);
         assert!(!figure.contains("$$"));
 
         let content_wrapper = html_fragment_to_markdown(
