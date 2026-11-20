@@ -1,0 +1,75 @@
+* Harbor Mornings
+:PROPERTIES:
+:URL: https://www.example.com/article/harbor-gallery
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 150
+:END:
+
+The harbor wakes slowly. Fishing boats leave before dawn, gulls circle the pier, and the cafe on the corner opens its shutters at six. We spent a week there photographing the morning light.
+
+[[https://www.example.com/uploads/harbor-dawn.jpg][Harbor]]
+
+Harbor at dawn
+
+[[https://www.example.com/uploads/boats-leaving.jpg][Boats]]
+
+Boats leaving
+
+[[https://www.example.com/uploads/gulls-pier.jpg][Gulls]]
+
+Gulls on the pier
+
+A morning at the harbor
+
+Each morning brought a different sky, from heavy fog to clear gold, and the boats came back with the tide before noon.
+
+[[https://www.example.com/uploads/fog-1.jpg]]
+
+[[https://www.example.com/uploads/fog-2.jpg]]
+
+[[https://www.example.com/uploads/fog-3.jpg]]
+
+Three foggy mornings
+
+On the last day the fog lifted early, and the fishing boats were back at the pier by ten.
+
+[[https://www.example.com/uploads/tide-low.jpg][Low tide]]
+
+[[https://www.example.com/uploads/tide-high.jpg][High tide]]
+
+The tide over one afternoon
+
+The cafe on the corner kept a wall of photos from every season.
+
+[[https://www.example.com/uploads/cafe-summer.jpg][Summer]]
+
+[[https://www.example.com/uploads/cafe-winter.jpg][Winter]]
+
+The cafe in summer and winter
+
+[[https://www.example.com/uploads/pier-north.jpg][Harbor Mornings]]
+
+[[https://www.example.com/uploads/pier-south.jpg][Harbor Mornings]]
+
+Both ends of the pier
+
+[[https://www.example.com/_next/image?url=%2Fuploads%2Fferry-deck.jpg&w=640&q=75]]
+
+[[https://www.example.com/_next/image?url=%2Fuploads%2Fferry-wake.jpg&w=640&q=75]]
+
+The ferry home
+
+[[https://www.example.com/media/b41e9c/1920.jpg?width=620][The ferry leaving the harbor]]
+
+[[https://www.example.com/uploads/lighthouse-day.jpg][The lighthouse by day]]
+
+[[https://www.example.com/uploads/lighthouse-night.jpg]]
+
+The lighthouse by day and night
+
+[[https://www.example.com/wiki/File:Harbor_map.svg][https://www.example.com/uploads/harbor-map.png]]
+
+The harbor and its two piers
+
+We left on the evening ferry, with the lights of the harbor fading behind us.

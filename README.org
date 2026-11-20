@@ -3,7 +3,7 @@
 ~org-defuddle~ is intended to be a Rust rewrite of [[https://github.com/kepano/defuddle][kepano/defuddle]] with an
 Emacs dynamic module frontend that inserts extracted readable content into Org.
 
-The current reference snapshot is upstream commit ~319cc98~ (0.19.9), pinned in
+The current reference snapshot is upstream commit ~bffa914~ (0.19.12), pinned in
 ~tests/upstream-revision~. The long-term goal is feature parity with defuddle's extraction pipeline: metadata, schema.org fallback, DOM cleanup, scoring, site-specific
 extractors, media handling, footnotes, math/code normalization, and Org content
 conversion.
@@ -351,20 +351,23 @@ instead. The ~fetch~ subcommand exposes the underlying HTTP transport.
 
 * Upstream Alignment
 
-Org is the primary output. The reference is Defuddle 0.19.9, pinned by
+Gallery figures retain their images, captions, and image links. Markdown tables
+keep linked captions and use ~<br>~ between lines within a cell.
+
+Org is the primary output. The reference is Defuddle 0.19.12, pinned by
 ~tests/upstream-revision~. Passing its fixture corpus establishes behavior for
 those inputs; it does not establish complete feature parity on live sites.
 
 | Area | Coverage at the pinned baseline | Remaining difference |
 |------+---------------------------------+----------------------|
-| Canonical Org body | All 246 upstream final HTML fragments render to the same Org as Rust extraction | Pages and browser states outside the corpus are not covered |
-| Main metadata | All 246 expected titles, authors, sites, and publication dates match | Other response fields need separate comparison |
+| Canonical Org body | All 248 upstream final HTML fragments render to the same Org as Rust extraction | Pages and browser states outside the corpus are not covered |
+| Main metadata | All 248 expected titles, authors, sites, and publication dates match | Other response fields need separate comparison |
 | JSON response | Upstream field names, schema.org data, meta tags, extractor identity and variables are exposed | Description, domain, image, language, favicon, extractor identity and custom variables are not fully identical |
 | HTML cleanup and scoring | Selector tables, content patterns, schema text recovery, media, code, math, footnotes, tables, SSR and serialized shadow DOM are implemented | Intermediate HTML is not an exact parity contract |
 | Site extractors | Rust paths exist for all 26 registered upstream extractor classes | Existence is not proof of complete behavior or live API reliability |
 | URL/API extraction | CLI and Emacs orchestrate C2, X/Twitter, YouTube, Bilibili and Reddit | Specialized API paths do not support all generic HTML options; live service availability is not guaranteed |
-| Word count | All 246 ~wordCount~ results match the upstream reference | Inputs outside the corpus require separate verification |
-| Markdown | All 246 outputs match upstream semantics through an independent CommonMark parser | HTML attribute order and insignificant serialization whitespace may differ |
+| Word count | All 248 ~wordCount~ results match the upstream reference | Inputs outside the corpus require separate verification |
+| Markdown | All 248 outputs match upstream semantics through an independent CommonMark parser | HTML attribute order and insignificant serialization whitespace may differ |
 | Debug/profile | Generic pipeline stages and selected removal records are exposed | Removal/error details and timings are not identical |
 | Browser execution | Serialized DOM, inline player data and fetched API payloads are supported | No JavaScript execution, computed external CSS, transcript-panel clicks or dynamic DOM waits |
 
@@ -375,7 +378,7 @@ Grok, Gmail, YouTube, and Bilibili. GNU Debbugs extraction and Org note backends
 are additional org-defuddle features. JavaScript package entry points and live
 browser DOM APIs are platform-specific upstream surfaces rather than Rust APIs.
 
-A broader offline comparison of the 246 fixtures found 14 description
+An offline comparison of the 246 fixtures in 0.19.9 found 14 description
 mismatches, 4 image mismatches, and 1 language mismatch. Favicon defaults and
 JSON-LD graph/meta-tag serialization have been corrected; favicon differences
 remain on seven site-extractor responses and five relative-URL normalization
