@@ -517,28 +517,87 @@ fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
         ("`edge``", "`edge``"),
         ("a\tb", "a\tb"),
         ("a\u{a0}b", "a\u{a0}b"),
+        ("<span>  a  </span>", "  a  "),
+        ("a<span>  b  </span>c", "a  b  c"),
+        ("<span><span> a </span></span>", " a "),
+        ("<span> a </span><span> b </span>", " a  b "),
+        ("<span>\ta\t</span>", "\ta\t"),
+        ("<em>  a  </em>", "*  a  *"),
     ] {
-        let output = parse_html_to_org(
-            &format!("<article><p>Use <code>{source}</code> here.</p></article>"),
-            DefuddleOptions {
-                content_selector: Some("article".into()),
-                separate_markdown: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let mut rendered = String::new();
-        pulldown_cmark::html::push_html(
-            &mut rendered,
-            pulldown_cmark::Parser::new(&output.content_markdown),
+        for standardize in [false, true] {
+            let output = parse_html_to_org(
+                &format!("<article><p>Use <code>{source}</code> here.</p></article>"),
+                DefuddleOptions {
+                    content_selector: Some("article".into()),
+                    standardize,
+                    separate_markdown: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut rendered = String::new();
+            pulldown_cmark::html::push_html(
+                &mut rendered,
+                pulldown_cmark::Parser::new(&output.content_markdown),
+            );
+            let document = kuchiki::parse_html().one(rendered);
+            assert_eq!(
+                document.select_first("code").unwrap().text_contents(),
+                expected,
+                "source={source:?}, standardize={standardize}, Markdown={:?}",
+                output.content_markdown
+            );
+        }
+    }
+}
+
+#[test]
+fn markdown_equation_rows_keep_separate_formulas_and_literal_code() {
+    for (first, second, literal) in [
+        ("a", "b", false),
+        (r"\text{[a](b)}", r"\text{[c](d)}", true),
+    ] {
+        let html = format!(
+            r#"<article><p>Before.</p><table class="ltx_equation"><tr class="ltx_eqn_inline"><td><math><annotation encoding="application/x-tex">{first}</annotation></math></td></tr><tr class="ltx_eqn_inline"><td><math><annotation encoding="application/x-tex">{second}</annotation></math></td></tr></table><p>After.</p></article>"#
         );
-        let document = kuchiki::parse_html().one(rendered);
-        assert_eq!(
-            document.select_first("code").unwrap().text_contents(),
-            expected,
-            "source={source:?}, Markdown={:?}",
-            output.content_markdown
-        );
+        for standardize in [false, true] {
+            let output = parse_html_to_org(
+                &html,
+                DefuddleOptions {
+                    content_selector: Some("article".into()),
+                    standardize,
+                    separate_markdown: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut rendered = String::new();
+            pulldown_cmark::html::push_html(
+                &mut rendered,
+                pulldown_cmark::Parser::new_ext(
+                    &output.content_markdown,
+                    pulldown_cmark::Options::ENABLE_MATH,
+                ),
+            );
+            let document = kuchiki::parse_html().one(rendered);
+            let paragraphs = document
+                .select("p")
+                .unwrap()
+                .map(|node| node.text_contents())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                paragraphs,
+                ["Before.", first, second, "After."],
+                "{}",
+                output.content_markdown
+            );
+            let formulas = document
+                .select(if literal { "code" } else { ".math" })
+                .unwrap()
+                .map(|node| node.text_contents())
+                .collect::<Vec<_>>();
+            assert_eq!(formulas, [first, second], "{}", output.content_markdown);
+        }
     }
 }
 
@@ -620,18 +679,54 @@ fn markdown_keeps_simple_explicit_latex_before_mathml_and_alttext() {
 fn markdown_output_fields_do_not_reactivate_encoded_html() {
     let payload = "&lt;img src=x onerror=alert(1)&gt;";
     let snippets = [
-        format!("<figure><img src='https://example.com/photo.png' alt='x)\n\n{payload}\n\n![y](z)'><figcaption>Caption</figcaption></figure>"),
-        format!(r#"<div class="admonition"><p class="admonition-title">{payload}</p><p>Body.</p></div>"#),
-        format!(r#"<figure><img src="https://example.com/photo.png"><figcaption><span class="ltx_tag_figure">{payload}</span>Caption</figcaption></figure>"#),
-        format!("<p>Reference <sup id=\"fnref:x]\n\n{payload}\n\n[^y\">1</sup></p>"),
-        format!("<div id=\"footnotes\"><ol><li id=\"fn:x]\n\n{payload}\n\n[^y\">Note</li></ol></div>"),
-        format!(r#"<table class="ltx_equation"><tr><td><math><annotation encoding="application/x-tex">{payload}</annotation></math></td></tr></table>"#),
-        "<p>&lt;javascript:alert(1)&gt; &lt;javascript:alert(1)<span>&gt;</span></p>".into(),
-        "<p>&lt;img<span> src=x onerror=alert(1)&gt;</span></p>".into(),
-        "<p>&lt;<span>img src=x onerror=alert(1)&gt;</span></p>".into(),
+        (
+            format!("<figure><img src='https://example.com/photo.png' alt='x)\n\n{payload}\n\n![y](z)'><figcaption>Caption</figcaption></figure>"),
+            "Caption",
+            Some("x) <img src=x onerror=alert(1)> ![y](z)"),
+        ),
+        (
+            format!(r#"<div class="admonition"><p class="admonition-title">{payload}</p><p>Body.</p></div>"#),
+            "<img src=x onerror=alert(1)>",
+            None,
+        ),
+        (
+            format!(r#"<figure><img src="https://example.com/photo.png"><figcaption><span class="ltx_tag_figure">{payload}</span>Caption</figcaption></figure>"#),
+            "<img src=x onerror=alert(1)>",
+            None,
+        ),
+        (
+            format!("<p>Reference <sup id=\"fnref:x]\n\n{payload}\n\n[^y\">1</sup></p>"),
+            "onerror%003dalert%00281%0029",
+            None,
+        ),
+        (
+            format!("<div id=\"footnotes\"><ol><li id=\"fn:x]\n\n{payload}\n\n[^y\">Note</li></ol></div>"),
+            "Note",
+            None,
+        ),
+        (
+            format!(r#"<table class="ltx_equation"><tr><td><math><annotation encoding="application/x-tex">{payload}</annotation></math></td></tr></table>"#),
+            "< img src=x onerror=alert(1)>",
+            None,
+        ),
+        (
+            "<p>&lt;javascript:alert(1)&gt; &lt;javascript:alert(1)<span>&gt;</span></p>".into(),
+            "<javascript:alert(1)> <javascript:alert(1)>",
+            None,
+        ),
+        (
+            "<p>&lt;img<span> src=x onerror=alert(1)&gt;</span></p>".into(),
+            "<img src=x onerror=alert(1)>",
+            None,
+        ),
+        (
+            "<p>&lt;<span>img src=x onerror=alert(1)&gt;</span></p>".into(),
+            "<img src=x onerror=alert(1)>",
+            None,
+        ),
     ];
     for standardize in [false, true] {
-        for snippet in &snippets {
+        for (snippet, expected_text, expected_alt) in &snippets {
             let output = parse_html_to_org(
                 &format!("<article>{snippet}</article>"),
                 DefuddleOptions {
@@ -645,9 +740,26 @@ fn markdown_output_fields_do_not_reactivate_encoded_html() {
             let mut rendered = String::new();
             pulldown_cmark::html::push_html(
                 &mut rendered,
-                pulldown_cmark::Parser::new(&output.content_markdown),
+                pulldown_cmark::Parser::new_ext(
+                    &output.content_markdown,
+                    pulldown_cmark::Options::ENABLE_FOOTNOTES,
+                ),
             );
             let document = kuchiki::parse_html().one(rendered);
+            let visible_text = document
+                .text_contents()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                visible_text.contains(expected_text),
+                "Lost literal content: {}",
+                output.content_markdown
+            );
+            if let Some(expected_alt) = expected_alt {
+                let image = document.select_first("img").unwrap();
+                assert_eq!(image.attributes.borrow().get("alt"), Some(*expected_alt));
+            }
             assert_eq!(
                 document
                     .select("[onerror], [onload], script, style, iframe[srcdoc]")
@@ -680,6 +792,36 @@ fn markdown_footnote_names_keep_hyphens_and_decode_link_targets() {
             "%03b1%d83d%de00",
         ),
         ("note-3", "#fn:note%20a%2Bb", "note a+b", "note%0020a%002bb"),
+        (
+            "note%20name%ZZ",
+            "#fn:note%20name%ZZ",
+            "note%20name%ZZ",
+            "note%002520name%0025zz",
+        ),
+        (
+            "note%20name%",
+            "#fn:note%20name%",
+            "note%20name%",
+            "note%002520name%0025",
+        ),
+        (
+            "note%20name%2",
+            "#fn:note%20name%2",
+            "note%20name%2",
+            "note%002520name%00252",
+        ),
+        (
+            "note%20name%C3",
+            "#fn:note%20name%C3",
+            "note%20name%C3",
+            "note%002520name%0025c3",
+        ),
+        (
+            "literal-percent",
+            "#fn:note%2520name",
+            "note%20name",
+            "note%002520name",
+        ),
     ] {
         let output = parse_html_to_org(&format!(r##"<article><p>Text<sup id="fnref:{reference}"><a href="{href}">1</a></sup>.</p><div id="footnotes"><ol><li id="fn:{definition}">Note body.</li></ol></div></article>"##), DefuddleOptions {
             content_selector: Some("article".into()), standardize: false, separate_markdown: true, ..Default::default()

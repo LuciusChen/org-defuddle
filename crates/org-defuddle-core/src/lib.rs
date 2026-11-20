@@ -24793,6 +24793,7 @@ impl MarkdownRenderer {
 
     fn render_node(&mut self, node: &NodeRef, inline: bool) {
         let before = std::mem::take(&mut self.out);
+        let inside_code = has_ancestor_tag(node, &["code"]);
         match node.data() {
             NodeData::Text(text) => self.push_plain_text(node, &text.borrow()),
             NodeData::Element(element) => {
@@ -24800,6 +24801,7 @@ impl MarkdownRenderer {
                 let tag = element.name.local.as_ref();
                 if !markdown_block_tag(tag)
                     && !matches!(tag, "code" | "pre")
+                    && !inside_code
                     && !self.out.is_empty()
                 {
                     let text = node.text_contents();
@@ -24828,7 +24830,7 @@ impl MarkdownRenderer {
                 }
             }
         }
-        self.out = if has_ancestor_tag(node, &["code"]) {
+        self.out = if inside_code {
             let mut combined = before;
             combined.push_str(&self.out);
             combined
@@ -25380,7 +25382,9 @@ impl MarkdownRenderer {
     fn render_table(&mut self, node: &NodeRef) {
         if let Some(equations) = markdown_equation_table_math(node) {
             for equation in equations {
+                self.ensure_blank_line();
                 self.render_math(node, equation);
+                self.ensure_blank_line();
             }
             return;
         }
@@ -25473,10 +25477,8 @@ impl MarkdownRenderer {
         for child in node.children() {
             nested.render_node(&child, true);
         }
-        if tag_name(node).as_deref() == Some("code") {
+        if tag_name(node).as_deref() == Some("code") || has_ancestor_tag(node, &["code"]) {
             nested.out
-        } else if has_ancestor_tag(node, &["code"]) {
-            nested.out.trim().to_string()
         } else {
             cleanup_markdown(&nested.out).trim().to_string()
         }
@@ -25812,6 +25814,18 @@ fn markdown_footnote_reference(node: &NodeRef, element: &ElementData) -> Option<
     if let Some(linked) = select_attr(node, "a[href^=\"#fn:\"]", "href") {
         let target = linked.strip_prefix("#fn:").unwrap();
         if !target.is_empty() {
+            // Keep the entire fragment literal if any percent escape is malformed.
+            let valid_encoding =
+                target
+                    .as_bytes()
+                    .split(|byte| *byte == b'%')
+                    .skip(1)
+                    .all(|encoded| {
+                        encoded.len() >= 2 && encoded[..2].iter().all(u8::is_ascii_hexdigit)
+                    });
+            if !valid_encoding {
+                return Some(target.to_string());
+            }
             return Some(
                 percent_encoding::percent_decode_str(target)
                     .decode_utf8()
