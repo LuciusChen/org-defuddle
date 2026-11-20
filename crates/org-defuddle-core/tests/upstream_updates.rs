@@ -560,12 +560,20 @@ fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
 #[test]
 fn markdown_keeps_continuation_blocks_inside_footnotes() {
     let code = "<pre><code>first line\n\n  last line</code></pre>";
-    let task = format!(
+    let block_task = format!(
         r#"<ul><li class="task-list-item"><input type="checkbox" checked>{code}</li></ul>"#
     );
-    for (body, code_selector) in [
-        (code, "pre > code"),
-        (task.as_str(), "ul > li > pre > code"),
+    let inline_task =
+        r#"<ul><li class="task-list-item"><input type="checkbox"><code>a``b</code> tail</li></ul>"#;
+    let block_text = "first line\n\n  last line\n";
+    for (body, code_selector, expected_code) in [
+        (code, "pre > code", block_text),
+        (inline_task, "li > input:not([checked]) + code", "a``b"),
+        (
+            block_task.as_str(),
+            "li > input[checked] + pre > code",
+            block_text,
+        ),
     ] {
         let notes = format!(
             r##"<p>Text<sup><a href="#fn:one">1</a></sup><sup><a href="#fn:two">2</a></sup>.</p>
@@ -589,7 +597,8 @@ fn markdown_keeps_continuation_blocks_inside_footnotes() {
                     &mut rendered,
                     pulldown_cmark::Parser::new_ext(
                         &output.content_markdown,
-                        pulldown_cmark::Options::ENABLE_FOOTNOTES,
+                        pulldown_cmark::Options::ENABLE_FOOTNOTES
+                            | pulldown_cmark::Options::ENABLE_TASKLISTS,
                     ),
                 );
                 let document = kuchiki::parse_html().one(rendered);
@@ -597,8 +606,14 @@ fn markdown_keeps_continuation_blocks_inside_footnotes() {
                 let first = definitions.next().unwrap();
                 let first = first.as_node();
                 assert_eq!(
-                    first.select_first(code_selector).unwrap().text_contents(),
-                    "first line\n\n  last line\n"
+                    first
+                        .select_first(code_selector)
+                        .unwrap_or_else(|_| panic!(
+                            "missing {code_selector} in {}",
+                            output.content_markdown
+                        ))
+                        .text_contents(),
+                    expected_code
                 );
                 assert_eq!(
                     first.select_first("p:last-child").unwrap().text_contents(),

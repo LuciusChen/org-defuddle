@@ -390,7 +390,8 @@ preserves prose, code contents and language, math tokens and literal text,
 footnote definitions, tables, and meaningful line breaks. Inline code preserves
 internal and edge whitespace and literal backticks through nested formatting,
 including elements that contain only whitespace. Equation table rows remain
-separate. Lists preserve paragraph breaks and code indentation. Multiline
+separate. Lists preserve paragraph breaks and code indentation. Task items keep
+leading inline code and fenced code blocks with their checkbox. Multiline
 footnotes keep paragraphs, formulas and code inside the definition. Literal math
 stays inert when the Markdown consumer does not support math. Image labels/titles, callout
 titles, footnote identifiers and link destinations are escaped for their
