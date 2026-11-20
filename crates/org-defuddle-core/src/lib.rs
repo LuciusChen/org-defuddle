@@ -25257,14 +25257,13 @@ impl MarkdownRenderer {
         self.out.push_str(&marker);
         let indent = " ".repeat(marker.len());
         if let Some(checked) = markdown_task_list_marker(node) {
-            self.out.push_str(if checked { "[x]" } else { "[ ]" });
+            self.out.push_str(if checked { "[x] " } else { "[ ] " });
             let first_line = content.lines().next().unwrap_or_default();
             // A code span closes on this line. A fenced block opens on its own line.
             if first_line.starts_with("```") && !first_line.trim_start_matches('`').contains('`') {
-                self.out.push('\n');
+                // Marked requires nonblank content after the checkbox.
+                self.out.push_str("<!-- -->\n");
                 self.out.push_str(&indent);
-            } else {
-                self.out.push(' ');
             }
         }
         let continuation = format!("\n{indent}");
@@ -41595,11 +41594,13 @@ line break text.">
               <ul>
                 <li class="task-list-item"><input type="checkbox" checked>Done</li>
                 <li class="task-list-item"><input type="checkbox">Todo</li>
+                <li class="task-list-item"><input type="checkbox" checked><pre><code>example</code></pre></li>
               </ul>
             </article>"#,
         );
         assert!(task_list.contains("- [x] Done"));
         assert!(task_list.contains("- [ ] Todo"));
+        assert!(task_list.contains("- [x] <!-- -->\n  ```\n  example\n  ```"));
     }
 
     #[test]
