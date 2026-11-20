@@ -24795,6 +24795,7 @@ impl MarkdownRenderer {
         let before = std::mem::take(&mut self.out);
         let inside_code = has_ancestor_tag(node, &["code"]);
         match node.data() {
+            NodeData::Text(text) if inside_code => self.out.push_str(&text.borrow()),
             NodeData::Text(text) => self.push_plain_text(node, &text.borrow()),
             NodeData::Element(element) => {
                 self.render_element(node, element, inline);
@@ -24966,7 +24967,7 @@ impl MarkdownRenderer {
             }
             nested.render_node(&child, false);
         }
-        cleanup_markdown(&nested.out).trim().to_string()
+        cleanup_markdown(&nested.out)
     }
 
     fn render_arxiv_enumerate(&mut self, node: &NodeRef) {
@@ -25003,7 +25004,7 @@ impl MarkdownRenderer {
             }
             nested.render_node(&child, false);
         }
-        cleanup_markdown(&nested.out).trim().to_string()
+        cleanup_markdown(&nested.out)
     }
 
     fn render_horizontal_rule(&mut self) {
@@ -25071,7 +25072,7 @@ impl MarkdownRenderer {
         for child in node.children() {
             nested.render_node(&child, true);
         }
-        cleanup_markdown(&nested.out).trim().to_string()
+        cleanup_markdown(&nested.out)
     }
 
     fn render_iframe(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
@@ -25308,7 +25309,6 @@ impl MarkdownRenderer {
             nested.render_node(&child, false);
         }
         cleanup_markdown(&nested.out)
-            .trim()
             .trim_end_matches("↩︎")
             .trim_end_matches('↩')
             .trim()
@@ -25497,7 +25497,7 @@ impl MarkdownRenderer {
         if tag_name(node).as_deref() == Some("code") || has_ancestor_tag(node, &["code"]) {
             nested.out
         } else {
-            cleanup_markdown(&nested.out).trim().to_string()
+            cleanup_markdown(&nested.out)
         }
     }
 
@@ -25506,15 +25506,10 @@ impl MarkdownRenderer {
         for child in node.children() {
             nested.render_node(&child, false);
         }
-        cleanup_markdown(&nested.out).trim().to_string()
+        cleanup_markdown(&nested.out)
     }
 
     fn push_plain_text(&mut self, node: &NodeRef, text: &str) {
-        if has_ancestor_tag(node, &["code"]) {
-            self.out.push_str(text);
-            return;
-        }
-
         let mut last = 0;
         for captures in RAW_LATEX_RE.captures_iter(text) {
             let full = captures.get(0).unwrap();

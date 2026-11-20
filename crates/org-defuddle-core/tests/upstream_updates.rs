@@ -3,6 +3,7 @@ use org_defuddle_core::{
     parse_html_to_org, render_html_fragment_to_org, youtube_inline_caption_info, DefuddleOptions,
     IncludeReplies,
 };
+use pulldown_cmark::{html::push_html, Options, Parser};
 
 #[test]
 fn youtube_inline_json_with_braces_in_title() {
@@ -503,6 +504,12 @@ fn substack_preload_body_is_parsed_before_attaching_its_wrapper() {
     assert!(output.org.contains("Last paragraph."), "{}", output.org);
 }
 
+fn markdown_document(markdown: &str, options: Options) -> kuchiki::NodeRef {
+    let mut html = String::new();
+    push_html(&mut html, Parser::new_ext(markdown, options));
+    kuchiki::parse_html().one(html)
+}
+
 #[test]
 fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
     for (source, expected) in [
@@ -541,12 +548,7 @@ fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
                 },
             )
             .unwrap();
-            let mut rendered = String::new();
-            pulldown_cmark::html::push_html(
-                &mut rendered,
-                pulldown_cmark::Parser::new(&output.content_markdown),
-            );
-            let document = kuchiki::parse_html().one(rendered);
+            let document = markdown_document(&output.content_markdown, Options::empty());
             assert_eq!(
                 document.select_first("code").unwrap().text_contents(),
                 expected,
@@ -592,16 +594,10 @@ fn markdown_keeps_continuation_blocks_inside_footnotes() {
                     },
                 )
                 .unwrap();
-                let mut rendered = String::new();
-                pulldown_cmark::html::push_html(
-                    &mut rendered,
-                    pulldown_cmark::Parser::new_ext(
-                        &output.content_markdown,
-                        pulldown_cmark::Options::ENABLE_FOOTNOTES
-                            | pulldown_cmark::Options::ENABLE_TASKLISTS,
-                    ),
+                let document = markdown_document(
+                    &output.content_markdown,
+                    Options::ENABLE_FOOTNOTES | Options::ENABLE_TASKLISTS,
                 );
-                let document = kuchiki::parse_html().one(rendered);
                 let mut definitions = document.select(".footnote-definition").unwrap();
                 let first = definitions.next().unwrap();
                 let first = first.as_node();
@@ -654,15 +650,7 @@ fn markdown_equation_rows_keep_separate_formulas_and_literal_code() {
                 },
             )
             .unwrap();
-            let mut rendered = String::new();
-            pulldown_cmark::html::push_html(
-                &mut rendered,
-                pulldown_cmark::Parser::new_ext(
-                    &output.content_markdown,
-                    pulldown_cmark::Options::ENABLE_MATH,
-                ),
-            );
-            let document = kuchiki::parse_html().one(rendered);
+            let document = markdown_document(&output.content_markdown, Options::ENABLE_MATH);
             let paragraphs = document
                 .select("p")
                 .unwrap()
@@ -710,12 +698,7 @@ fn markdown_literal_math_does_not_expose_autolinks_without_math_support() {
                 },
             )
             .unwrap();
-            let mut rendered = String::new();
-            pulldown_cmark::html::push_html(
-                &mut rendered,
-                pulldown_cmark::Parser::new(&output.content_markdown),
-            );
-            let document = kuchiki::parse_html().one(rendered);
+            let document = markdown_document(&output.content_markdown, Options::empty());
             assert_eq!(
                 document.select("a").unwrap().count(),
                 0,
@@ -820,15 +803,7 @@ fn markdown_output_fields_do_not_reactivate_encoded_html() {
                 },
             )
             .unwrap();
-            let mut rendered = String::new();
-            pulldown_cmark::html::push_html(
-                &mut rendered,
-                pulldown_cmark::Parser::new_ext(
-                    &output.content_markdown,
-                    pulldown_cmark::Options::ENABLE_FOOTNOTES,
-                ),
-            );
-            let document = kuchiki::parse_html().one(rendered);
+            let document = markdown_document(&output.content_markdown, Options::ENABLE_FOOTNOTES);
             let visible_text = document
                 .text_contents()
                 .split_whitespace()
@@ -939,12 +914,7 @@ fn markdown_image_metadata_stays_literal_and_caption_labels_appear_once() {
         },
     )
     .unwrap();
-    let mut rendered = String::new();
-    pulldown_cmark::html::push_html(
-        &mut rendered,
-        pulldown_cmark::Parser::new(&output.content_markdown),
-    );
-    let document = kuchiki::parse_html().one(rendered);
+    let document = markdown_document(&output.content_markdown, Options::empty());
     assert_eq!(document.select("img").unwrap().count(), 2);
     let image = document.select_first("img").unwrap();
     let attrs = image.attributes.borrow();
