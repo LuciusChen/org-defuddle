@@ -387,7 +387,9 @@ available in JSON responses but not through single-property selection.
 The independent output gate checks exact Org body text, exact ~wordCount~ and
 Markdown semantics in one pass over the pinned corpus. Markdown comparison
 preserves prose, code contents and language, math tokens and literal text,
-footnote definitions, tables, and meaningful line breaks. It ignores HTML
+footnote definitions, tables, and meaningful line breaks. Inline code preserves
+internal whitespace and literal backticks. Literal math stays inert when the
+Markdown consumer does not support math. The comparison ignores HTML
 attribute order, insignificant blank lines around display math, and spacing
 before punctuation and footnote markers. The CommonMark parser is a test-only
 dependency and is compatible with Rust 1.80; it is not part of extraction at

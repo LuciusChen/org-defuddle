@@ -502,3 +502,113 @@ fn substack_preload_body_is_parsed_before_attaching_its_wrapper() {
     assert!(output.org.contains("First paragraph."));
     assert!(output.org.contains("Last paragraph."), "{}", output.org);
 }
+
+#[test]
+fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
+    for (source, expected) in [
+        ("a  b", "a  b"),
+        ("a\n b", "a  b"),
+        ("a\n\n\nb", "a   b"),
+        ("a\n\n\n<em>b</em>", "a   *b*"),
+        ("a `` b ` c", "a `` b ` c"),
+        ("`edge``", "`edge``"),
+        ("a\tb", "a\tb"),
+        ("a\u{a0}b", "a\u{a0}b"),
+    ] {
+        let output = parse_html_to_org(
+            &format!("<article><p>Use <code>{source}</code> here.</p></article>"),
+            DefuddleOptions {
+                content_selector: Some("article".into()),
+                separate_markdown: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut rendered = String::new();
+        pulldown_cmark::html::push_html(
+            &mut rendered,
+            pulldown_cmark::Parser::new(&output.content_markdown),
+        );
+        let document = kuchiki::parse_html().one(rendered);
+        assert_eq!(
+            document.select_first("code").unwrap().text_contents(),
+            expected,
+            "source={source:?}, Markdown={:?}",
+            output.content_markdown
+        );
+    }
+}
+
+#[test]
+fn markdown_literal_math_does_not_expose_autolinks_without_math_support() {
+    for latex in [
+        r"\text{<https://example.com>}",
+        r"\text{<mailto:reader@example.com>}",
+        r"\text{a `` <https://example.com> `` b}",
+    ] {
+        for block in [false, true] {
+            let math = format!(
+                r#"<math data-latex="{}"><mi>x</mi></math>"#,
+                latex.replace('<', "&lt;").replace('>', "&gt;")
+            );
+            let body = if block {
+                format!("<p>{math}</p>")
+            } else {
+                format!("<p>Before {math} after.</p>")
+            };
+            let output = parse_html_to_org(
+                &format!("<article>{body}</article>"),
+                DefuddleOptions {
+                    content_selector: Some("article".into()),
+                    separate_markdown: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut rendered = String::new();
+            pulldown_cmark::html::push_html(
+                &mut rendered,
+                pulldown_cmark::Parser::new(&output.content_markdown),
+            );
+            let document = kuchiki::parse_html().one(rendered);
+            assert_eq!(
+                document.select("a").unwrap().count(),
+                0,
+                "{}",
+                output.content_markdown
+            );
+            assert_eq!(
+                document
+                    .select_first("code")
+                    .unwrap()
+                    .text_contents()
+                    .trim_end_matches('\n'),
+                latex,
+                "{}",
+                output.content_markdown
+            );
+        }
+    }
+}
+
+#[test]
+fn markdown_keeps_simple_explicit_latex_before_mathml_and_alttext() {
+    for attributes in [r#"data-latex="A, B""#, r#"data-latex="A, B" alttext="C""#] {
+        let output = parse_html_to_org(
+            &format!(
+                "<article><p>Before <math {attributes}><mi>x</mi></math> after.</p></article>"
+            ),
+            DefuddleOptions {
+                content_selector: Some("article".into()),
+                separate_markdown: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            output.content_markdown.contains("$A, B$"),
+            "{}",
+            output.content_markdown
+        );
+    }
+}
