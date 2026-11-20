@@ -507,6 +507,9 @@ fn substack_preload_body_is_parsed_before_attaching_its_wrapper() {
 fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
     for (source, expected) in [
         ("a  b", "a  b"),
+        ("  a  ", "  a  "),
+        ("   ", "   "),
+        ("\ta\t", "\ta\t"),
         ("a\n b", "a  b"),
         ("a\n\n\nb", "a   b"),
         ("a\n\n\n<em>b</em>", "a   *b*"),
@@ -611,4 +614,137 @@ fn markdown_keeps_simple_explicit_latex_before_mathml_and_alttext() {
             output.content_markdown
         );
     }
+}
+
+#[test]
+fn markdown_output_fields_do_not_reactivate_encoded_html() {
+    let payload = "&lt;img src=x onerror=alert(1)&gt;";
+    let snippets = [
+        format!("<figure><img src='https://example.com/photo.png' alt='x)\n\n{payload}\n\n![y](z)'><figcaption>Caption</figcaption></figure>"),
+        format!(r#"<div class="admonition"><p class="admonition-title">{payload}</p><p>Body.</p></div>"#),
+        format!(r#"<figure><img src="https://example.com/photo.png"><figcaption><span class="ltx_tag_figure">{payload}</span>Caption</figcaption></figure>"#),
+        format!("<p>Reference <sup id=\"fnref:x]\n\n{payload}\n\n[^y\">1</sup></p>"),
+        format!("<div id=\"footnotes\"><ol><li id=\"fn:x]\n\n{payload}\n\n[^y\">Note</li></ol></div>"),
+        format!(r#"<table class="ltx_equation"><tr><td><math><annotation encoding="application/x-tex">{payload}</annotation></math></td></tr></table>"#),
+        "<p>&lt;javascript:alert(1)&gt; &lt;javascript:alert(1)<span>&gt;</span></p>".into(),
+        "<p>&lt;img<span> src=x onerror=alert(1)&gt;</span></p>".into(),
+        "<p>&lt;<span>img src=x onerror=alert(1)&gt;</span></p>".into(),
+    ];
+    for standardize in [false, true] {
+        for snippet in &snippets {
+            let output = parse_html_to_org(
+                &format!("<article>{snippet}</article>"),
+                DefuddleOptions {
+                    content_selector: Some("article".into()),
+                    standardize,
+                    separate_markdown: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut rendered = String::new();
+            pulldown_cmark::html::push_html(
+                &mut rendered,
+                pulldown_cmark::Parser::new(&output.content_markdown),
+            );
+            let document = kuchiki::parse_html().one(rendered);
+            assert_eq!(
+                document
+                    .select("[onerror], [onload], script, style, iframe[srcdoc]")
+                    .unwrap()
+                    .count(),
+                0,
+                "{}",
+                output.content_markdown
+            );
+            assert_eq!(
+                document.select("a").unwrap().count(),
+                0,
+                "{}",
+                output.content_markdown
+            );
+        }
+    }
+}
+
+#[test]
+fn markdown_footnote_names_keep_hyphens_and_decode_link_targets() {
+    for (reference, href, definition, expected) in [
+        ("named-note-2", "#fn:named-note", "named-note", "named-note"),
+        ("part-2", "", "part-2", "part-2"),
+        ("part-2", "#fn:", "part-2", "part-2"),
+        (
+            "unicode",
+            "#fn:%CE%B1%F0%9F%98%80",
+            "α😀",
+            "%03b1%d83d%de00",
+        ),
+        ("note-3", "#fn:note%20a%2Bb", "note a+b", "note%0020a%002bb"),
+    ] {
+        let output = parse_html_to_org(&format!(r##"<article><p>Text<sup id="fnref:{reference}"><a href="{href}">1</a></sup>.</p><div id="footnotes"><ol><li id="fn:{definition}">Note body.</li></ol></div></article>"##), DefuddleOptions {
+            content_selector: Some("article".into()), standardize: false, separate_markdown: true, ..Default::default()
+        }).unwrap();
+        assert!(
+            output
+                .content_markdown
+                .contains(&format!("Text[^{expected}]")),
+            "{}",
+            output.content_markdown
+        );
+        assert!(
+            output
+                .content_markdown
+                .contains(&format!("[^{expected}]: Note body.")),
+            "{}",
+            output.content_markdown
+        );
+    }
+}
+
+#[test]
+fn markdown_image_metadata_stays_literal_and_caption_labels_appear_once() {
+    let html = r#"<article><figure><img src="https://example.com/p(1).png?x=1&amp;y=2" alt="A [label] &lt;tag&gt; and \ &amp;lt;b&amp;gt; &amp;copy; A &amp; B"><figcaption><p><span class="ltx_tag_figure">Figure [1]</span> Caption.</p></figcaption></figure><img src="https://example.com/title.png" title="A &quot;title&quot; with \ and &lt;tag&gt;"></article>"#;
+    let output = parse_html_to_org(
+        html,
+        DefuddleOptions {
+            content_selector: Some("article".into()),
+            standardize: false,
+            separate_markdown: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut rendered = String::new();
+    pulldown_cmark::html::push_html(
+        &mut rendered,
+        pulldown_cmark::Parser::new(&output.content_markdown),
+    );
+    let document = kuchiki::parse_html().one(rendered);
+    assert_eq!(document.select("img").unwrap().count(), 2);
+    let image = document.select_first("img").unwrap();
+    let attrs = image.attributes.borrow();
+    assert_eq!(
+        attrs.get("src"),
+        Some("https://example.com/p(1).png?x=1&y=2")
+    );
+    assert_eq!(
+        attrs.get("alt"),
+        Some(r"A [label] <tag> and \ &lt;b&gt; &copy; A & B")
+    );
+    let titled = document.select_first("img[title]").unwrap();
+    assert_eq!(
+        titled.attributes.borrow().get("title"),
+        Some(r#"A "title" with \ and <tag>"#)
+    );
+    assert_eq!(
+        document
+            .select_first("body")
+            .unwrap()
+            .text_contents()
+            .matches("Figure [1]")
+            .count(),
+        1,
+        "{}",
+        output.content_markdown
+    );
 }
