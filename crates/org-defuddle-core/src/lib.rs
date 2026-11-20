@@ -24890,7 +24890,12 @@ impl MarkdownRenderer {
             "ol" if markdown_is_footnotes_list(node) => self.render_footnotes_list(node),
             "ol" if markdown_is_arxiv_enumerate(element) => self.render_arxiv_enumerate(node),
             "ul" | "ol" => {
-                self.ensure_newline();
+                // Only an ordered list starting at 1 can interrupt a paragraph.
+                if tag == "ol" && ordered_list_start(node).is_some_and(|start| start != 1) {
+                    self.ensure_blank_line();
+                } else {
+                    self.ensure_newline();
+                }
                 for child in node.children() {
                     self.render_node(&child, false);
                 }
@@ -25244,24 +25249,23 @@ impl MarkdownRenderer {
 
     fn render_list_item(&mut self, node: &NodeRef) {
         let content = self.render_block_children_to_string(node);
-        let mut fence = None;
-        let lines = content
-            .lines()
-            .filter(|line| {
-                let in_fence = markdown_fence_line(line, &mut fence);
-                !line.is_empty() || in_fence
-            })
-            .collect::<Vec<_>>();
-        let content = lines.join("\n\t");
-        if let Some(number) = markdown_ordered_list_number(node) {
-            self.out.push_str(&format!("{number}. "));
+        let marker = if let Some(number) = markdown_ordered_list_number(node) {
+            format!("{number}. ")
         } else {
-            self.out.push_str("- ");
-        }
+            "- ".to_string()
+        };
+        self.out.push_str(&marker);
+        let indent = " ".repeat(marker.len());
         if let Some(checked) = markdown_task_list_marker(node) {
             self.out.push_str(if checked { "[x] " } else { "[ ] " });
+            // Keep a leading fenced block outside the checkbox paragraph.
+            if content.starts_with("```") {
+                self.out.push_str("\n\n");
+                self.out.push_str(&indent);
+            }
         }
-        self.out.push_str(content.trim());
+        let continuation = format!("\n{indent}");
+        self.out.push_str(&content.replace('\n', &continuation));
         self.out.push('\n');
     }
 
@@ -25277,8 +25281,18 @@ impl MarkdownRenderer {
             let content = self.render_footnote_definition_content(&child, &id);
             self.out.push_str("[^");
             self.out.push_str(&markdown_footnote_id(&id));
-            self.out.push_str("]: ");
-            self.out.push_str(content.trim());
+            self.out.push_str("]:");
+            if content.contains('\n') {
+                // Separate the block from link-reference syntax without footnote support.
+                self.out.push('\n');
+                for line in content.split('\n') {
+                    self.out.push_str("\n    ");
+                    self.out.push_str(line);
+                }
+            } else {
+                self.out.push(' ');
+                self.out.push_str(&content);
+            }
             self.out.push_str("\n\n");
         }
     }
@@ -25464,7 +25478,8 @@ impl MarkdownRenderer {
 
     fn render_wrapped(&mut self, node: &NodeRef, marker: &str) {
         let inner = self.render_inline_children(node);
-        if inner.is_empty() {
+        if inner.trim().is_empty() {
+            self.out.push_str(&inner);
             return;
         }
         self.out.push_str(marker);
@@ -41558,7 +41573,19 @@ line break text.">
               </ul>
             </article>"#,
         );
-        assert!(nested_ordered.contains("- Parent item\n\t7. Nested item"));
+        assert!(nested_ordered.contains("- Parent item"));
+        let mut rendered = String::new();
+        pulldown_cmark::html::push_html(
+            &mut rendered,
+            pulldown_cmark::Parser::new(&nested_ordered),
+        );
+        let document = kuchiki::parse_html().one(rendered);
+        let nested = document.select_first("ul > li > ol").unwrap();
+        assert_eq!(nested.attributes.borrow().get("start"), Some("7"));
+        assert_eq!(
+            nested.as_node().select_first("li").unwrap().text_contents(),
+            "Nested item"
+        );
 
         let task_list = html_fragment_to_markdown(
             r#"<article>

@@ -63,6 +63,10 @@ extractors, and high-quality Org output.
   differential before regenerating snapshots. The independent output gate also
   compares all word counts and Markdown semantics using a test-only CommonMark
   parser; preserve code, math, footnotes and meaningful line breaks.
+- Four reviewed sections in `tests/expected-markdown-footnotes` correct upstream
+  footnote continuation indentation. The gate replaces only the reference tails
+  and compares actual output unchanged. Review these expectations against upstream
+  HTML; do not regenerate them from Rust output.
 - Prefer tests that drive public paths: Rust core API, dynamic module
   calls, and Elisp wrapper calls.
 - Tests must assert specific metadata and content. A test that would still

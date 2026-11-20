@@ -388,9 +388,11 @@ The independent output gate checks exact Org body text, exact ~wordCount~ and
 Markdown semantics in one pass over the pinned corpus. Markdown comparison
 preserves prose, code contents and language, math tokens and literal text,
 footnote definitions, tables, and meaningful line breaks. Inline code preserves
-internal and edge whitespace and literal backticks, including nested highlighting
-spans. Equation table rows remain separate. Literal math stays inert when the
-Markdown consumer does not support math. Image labels/titles, callout
+internal and edge whitespace and literal backticks through nested formatting,
+including elements that contain only whitespace. Equation table rows remain
+separate. Lists preserve paragraph breaks and code indentation. Multiline
+footnotes keep paragraphs, formulas and code inside the definition. Literal math
+stays inert when the Markdown consumer does not support math. Image labels/titles, callout
 titles, footnote identifiers and link destinations are escaped for their
 Markdown context; footnote names retain hyphens and resolve percent-encoded
 link targets once; malformed percent escapes keep the entire target literal.
@@ -400,6 +402,10 @@ order, insignificant blank lines around display math, and spacing before
 punctuation and footnote markers. The CommonMark parser is a test-only
 dependency and is compatible with Rust 1.80; it is not part of extraction at
 runtime.
+
+Four upstream fixtures have incorrect footnote continuation indentation. The
+gate uses reviewed footnote sections in ~tests/expected-markdown-footnotes/~
+for these cases; article prefixes and all other Markdown still come from upstream.
 
 Compatible Emacs URL options use the CLI for the complete API flow; installations without a CLI retain the
 module and Elisp fetch paths. API results honor Markdown and frontmatter output.

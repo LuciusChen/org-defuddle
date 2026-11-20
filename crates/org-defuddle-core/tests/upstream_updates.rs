@@ -523,6 +523,12 @@ fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
         ("<span> a </span><span> b </span>", " a  b "),
         ("<span>\ta\t</span>", "\ta\t"),
         ("<em>  a  </em>", "*  a  *"),
+        ("<em> </em>", " "),
+        ("a<em>  </em>b", "a  b"),
+        ("<strong>  </strong>", "  "),
+        ("a<strong>\t</strong>b", "a\tb"),
+        ("<strong><em>  </em></strong>", "  "),
+        ("a<del>\u{a0}</del>b", "a\u{a0}b"),
     ] {
         for standardize in [false, true] {
             let output = parse_html_to_org(
@@ -547,6 +553,68 @@ fn markdown_inline_code_preserves_spaces_and_backtick_runs() {
                 "source={source:?}, standardize={standardize}, Markdown={:?}",
                 output.content_markdown
             );
+        }
+    }
+}
+
+#[test]
+fn markdown_keeps_continuation_blocks_inside_footnotes() {
+    let code = "<pre><code>first line\n\n  last line</code></pre>";
+    let task = format!(
+        r#"<ul><li class="task-list-item"><input type="checkbox" checked>{code}</li></ul>"#
+    );
+    for (body, code_selector) in [
+        (code, "pre > code"),
+        (task.as_str(), "ul > li > pre > code"),
+    ] {
+        let notes = format!(
+            r##"<p>Text<sup><a href="#fn:one">1</a></sup><sup><a href="#fn:two">2</a></sup>.</p>
+                <div id="footnotes"><ol><li id="fn:one">{body}<p>Last paragraph.</p></li>
+                <li id="fn:two"><p>Second note.</p></li></ol></div><p>After notes.</p>"##
+        );
+        for container in [notes.clone(), format!("<ul><li>{notes}</li></ul>")] {
+            for standardize in [false, true] {
+                let output = parse_html_to_org(
+                    &format!("<article>{container}</article>"),
+                    DefuddleOptions {
+                        content_selector: Some("article".into()),
+                        standardize,
+                        separate_markdown: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let mut rendered = String::new();
+                pulldown_cmark::html::push_html(
+                    &mut rendered,
+                    pulldown_cmark::Parser::new_ext(
+                        &output.content_markdown,
+                        pulldown_cmark::Options::ENABLE_FOOTNOTES,
+                    ),
+                );
+                let document = kuchiki::parse_html().one(rendered);
+                let mut definitions = document.select(".footnote-definition").unwrap();
+                let first = definitions.next().unwrap();
+                let first = first.as_node();
+                assert_eq!(
+                    first.select_first(code_selector).unwrap().text_contents(),
+                    "first line\n\n  last line\n"
+                );
+                assert_eq!(
+                    first.select_first("p:last-child").unwrap().text_contents(),
+                    "Last paragraph."
+                );
+                assert!(definitions
+                    .next()
+                    .unwrap()
+                    .text_contents()
+                    .contains("Second note."));
+                assert!(definitions.next().is_none());
+                assert!(document
+                    .select("body > p, body > ul > li > p")
+                    .unwrap()
+                    .any(|p| p.text_contents() == "After notes."));
+            }
         }
     }
 }
