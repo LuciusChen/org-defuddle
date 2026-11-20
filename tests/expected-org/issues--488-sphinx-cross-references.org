@@ -1,0 +1,13 @@
+* Tasks
+:PROPERTIES:
+:URL: https://488-sphinx-cross-references/
+:SITE: 488-sphinx-cross-references
+:DOMAIN: 488-sphinx-cross-references
+:WORD_COUNT: 36
+:END:
+
+Coroutines are scheduled as tasks on the running event loop. Each task wraps a coroutine and runs it to completion.
+
+The signature matches that of [[#example.create_task][example.create_task()]]. See [[#scheduling][Scheduling]] for details.
+
+Tasks can also be cancelled.

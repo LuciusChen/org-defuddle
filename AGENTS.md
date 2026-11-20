@@ -60,7 +60,9 @@ extractors, and high-quality Org output.
   `/private/tmp/defuddle-elisp-source` may be used as a local default.
   Check out the commit pinned in `tests/upstream-revision`, which is also read
   by the release workflow. When updating it, run the independent exact Org
-  differential before regenerating snapshots.
+  differential before regenerating snapshots. The independent output gate also
+  compares all word counts and Markdown semantics using a test-only CommonMark
+  parser; preserve code, math, footnotes and meaningful line breaks.
 - Prefer tests that drive public paths: Rust core API, dynamic module
   calls, and Elisp wrapper calls.
 - Tests must assert specific metadata and content. A test that would still

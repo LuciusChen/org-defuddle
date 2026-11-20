@@ -1,0 +1,16 @@
+* Titre de l'article
+:PROPERTIES:
+:URL: https://464-french-punctuation-spacing/
+:SITE: 464-french-punctuation-spacing
+:DOMAIN: 464-french-punctuation-spacing
+:LANGUAGE: fr-FR
+:WORD_COUNT: 58
+:END:
+
+Le *sujet ?* Une réaction au livre, une lecture sans fard autour du thème principal.
+
+Quelle surprise ! Le texte est court, mais il se lit vite : moins de cent pages ; difficile de s'arrêter.
+
+Avec des espaces insécables ? Oui ! Et des espaces fines ? Aussi !
+
+Une virgule, et un point. restent collés au mot précédent.

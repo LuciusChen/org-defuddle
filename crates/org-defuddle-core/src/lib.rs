@@ -184,9 +184,7 @@ pub struct DefuddleOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct MetaTagItem {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub property: Option<String>,
     pub content: Option<String>,
 }
@@ -400,7 +398,7 @@ struct SteamEvent {
     body_html: String,
 }
 
-struct HackerNewsComment {
+struct Comment {
     depth: usize,
     author: String,
     published: String,
@@ -531,7 +529,7 @@ static METADATA_LABEL_RE: Lazy<Regex> =
 
 static BOILERPLATE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)^(?:this (?:article|story|piece) (?:appeared|was published|originally appeared) in\b|a version of this (?:article|story) (?:appeared|was published) in\b|originally (?:published|appeared) (?:in|on|at)\b|any re-?use permitted\b|\x{00a9}\s*(?:copyright\s+)?\d{4}|comments?$|leave a (?:comment|reply)$|loading\.{3}$|affiliate links\b.*\b(?:earn|commission)|thank you for (?:being part of|joining) our community\b)|\bread our comment policy\b",
+        r"(?i)^(?:this (?:article|story|piece) (?:appeared|was published|originally appeared) in\b|a version of this (?:article|story) (?:appeared|was published) in\b|originally (?:published|appeared) (?:in|on|at)\b|any re-?use permitted\b|\x{00a9}\s*(?:copyright\s+)?\d{4}|comments$|leave a (?:comment|reply)$|loading\.{3}$|affiliate links\b.*\b(?:earn|commission)|thank you for (?:being part of|joining) our community\b)|\bread our comment policy\b",
     )
     .unwrap()
 });
@@ -720,7 +718,7 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     "link",
     ".jwplayer",
     "[class^=\"ad-\"]",
-    "[class$=\"-ad\"]",
+    "[class$=\"-ad\"]:not(.with-ad)",
     "[data-ad-wrapper]",
     "[id^=\"ad-\"]",
     "[id$=\"-ad\"]",
@@ -765,7 +763,6 @@ const EXACT_NOISE_SELECTORS: &[&str] = &[
     ".contributor",
     ".date",
     "#date",
-    "[data-date]",
     ".entry-meta",
     ".entry-utility",
     ".meta",
@@ -934,10 +931,8 @@ pub fn parse_html_to_org(
         StageEffects::tracking()
     };
     let mut result = parse_html_to_org_once(html, options.clone(), &mut effects)?;
-    let markdown_enabled = options.markdown || options.separate_markdown;
-    if options.content_selector.is_some() {
-        attach_content_markdown(&mut result, markdown_enabled);
-        attach_frontmatter(&mut result, options.url.as_deref(), options.frontmatter);
+    if options.content_selector.is_some() || result.extractor_type.is_some() {
+        apply_output_options(&mut result, &options);
         attach_parse_diagnostics(&mut result, parse_start);
         return Ok(result);
     }
@@ -990,8 +985,7 @@ pub fn parse_html_to_org(
         }
     }
 
-    attach_content_markdown(&mut result, markdown_enabled);
-    attach_frontmatter(&mut result, options.url.as_deref(), options.frontmatter);
+    apply_output_options(&mut result, &options);
     attach_parse_diagnostics(&mut result, parse_start);
     Ok(result)
 }
@@ -1533,7 +1527,9 @@ fn parse_html_to_org_once(
         record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
 
         let step_start = Instant::now();
-        remove_empty_lines(&main);
+        remove_empty_lines(&main, &metadata.language);
+        normalize_adjacent_text_nodes(&main);
+        normalize_inline_spacing(&main, &footnotes);
         let elapsed = step_start.elapsed();
         record_profile_elapsed(&mut profile, "removeEmptyLines", elapsed);
         record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
@@ -1659,11 +1655,18 @@ fn attach_frontmatter(output: &mut DefuddleOutput, source_url: Option<&str>, ena
     output.frontmatter = frontmatter;
 }
 
-fn attach_content_markdown(output: &mut DefuddleOutput, enabled: bool) {
-    if !enabled || !output.content_markdown.is_empty() {
-        return;
+/// Apply output-format options to either an HTML extraction or an API result.
+pub fn apply_output_options(output: &mut DefuddleOutput, options: &DefuddleOptions) {
+    if (options.markdown || options.separate_markdown) && output.content_markdown.is_empty() {
+        output.content_markdown = markdown_from_html(
+            &output.html,
+            options.standardize && !options.debug,
+            &output.language,
+        );
     }
-    output.content_markdown = html_fragment_to_markdown(&output.html);
+    if output.frontmatter.is_empty() {
+        attach_frontmatter(output, options.url.as_deref(), options.frontmatter);
+    }
 }
 
 fn build_frontmatter(output: &DefuddleOutput, source_url: Option<&str>) -> String {
@@ -2036,6 +2039,56 @@ pub fn parse_bilibili_api_to_org(
         serde_json::from_str(view_json).map_err(|err| DefuddleError::Json(err.to_string()))?;
     let view = bilibili_view_data(&value)?;
     bilibili_output(view, subtitle_json, provided_url, language_code)
+}
+
+/// A supported API source. URL validation and identifier extraction live in the core.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiSource {
+    C2 { title: String },
+    X { user: String, id: String },
+    Bilibili { bvid: String },
+    Youtube { video_id: String },
+}
+
+pub fn api_source(url: &str) -> Option<ApiSource> {
+    let parsed = Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    if matches!(host.as_str(), "c2.com" | "wiki.c2.com") {
+        return c2_page_title_from_url(Some(url)).map(|title| ApiSource::C2 { title });
+    }
+    if matches!(
+        host.as_str(),
+        "x.com" | "twitter.com" | "mobile.twitter.com"
+    ) {
+        static POST: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"^/([A-Za-z0-9_]{1,15})/(?:status|article)/([0-9]+)(?:/|$)").unwrap()
+        });
+        let post = POST.captures(parsed.path())?;
+        return Some(ApiSource::X {
+            user: post[1].into(),
+            id: post[2].into(),
+        });
+    }
+    if host == "bilibili.com" || host.ends_with(".bilibili.com") {
+        return bilibili_bvid_from_url(Some(url)).map(|bvid| ApiSource::Bilibili { bvid });
+    }
+    if host == "youtu.be"
+        || host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com")
+    {
+        return youtube_video_id(Some(url))
+            .filter(|id| {
+                id.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            })
+            .map(|video_id| ApiSource::Youtube { video_id });
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2563,11 +2616,19 @@ fn c2_is_image_url(url: &str) -> bool {
 
 fn document_favicon(document: &NodeRef, base_url: Option<&str>) -> String {
     first_present(&[
+        meta_content(document, "property", "og:image:favicon"),
         select_attr(document, "link[rel=\"icon\"]", "href"),
         select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
         select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
     ])
     .and_then(|value| absolutize_url(base_url, &value))
+    .or_else(|| {
+        let base = Url::parse(base_url?).ok()?;
+        if !matches!(base.scheme(), "http" | "https") {
+            return None;
+        }
+        base.join("/favicon.ico").ok().map(String::from)
+    })
     .unwrap_or_default()
 }
 
@@ -2698,13 +2759,7 @@ fn extract_metadata(document: &NodeRef, provided_url: Option<&str>) -> Metadata 
         Some(domain.clone()),
     ])
     .unwrap_or_default();
-    let favicon = first_present(&[
-        select_attr(document, "link[rel=\"icon\"]", "href"),
-        select_attr(document, "link[rel=\"shortcut icon\"]", "href"),
-        select_attr(document, "link[rel=\"apple-touch-icon\"]", "href"),
-    ])
-    .and_then(|v| absolutize_url(base_url, &v))
-    .unwrap_or_default();
+    let favicon = document_favicon(document, base_url);
     let image = first_present(&[
         meta_content(document, "property", "og:image"),
         meta_content(document, "name", "twitter:image"),
@@ -3230,7 +3285,8 @@ fn hn_story_with_comments_output(
         .filter(|title| !title.is_empty())
         .or_else(|| clean_hn_title_suffix(&select_text(document, "title").unwrap_or_default()))
         .unwrap_or_else(|| "Hacker News".to_string());
-    let author = select_text(document, "table.fatitem .subtext .hnuser").unwrap_or_default();
+    let author =
+        select_text(document, "table.fatitem .subtext a[href^=\"user?id\"]").unwrap_or_default();
     let published = select_first_node(document, "table.fatitem .subtext .age")
         .and_then(|node| element_attr(&node, "title"))
         .and_then(|title| hn_date_from_title(&title))
@@ -3283,7 +3339,8 @@ fn hn_comment_permalink_output(
     base_url: &str,
 ) -> Result<DefuddleOutput, DefuddleError> {
     let comment = select_first_node(document, "table.fatitem .commtext");
-    let author = select_text(document, "table.fatitem .comhead .hnuser").unwrap_or_default();
+    let author =
+        select_text(document, "table.fatitem .comhead a[href^=\"user?id\"]").unwrap_or_default();
     let published = select_first_node(document, "table.fatitem .comhead .age")
         .and_then(|node| element_attr(&node, "title"))
         .and_then(|title| hn_date_from_title(&title))
@@ -3316,12 +3373,21 @@ fn hn_comment_permalink_output(
     body.push_str(comment_org.trim());
     body.push('\n');
 
+    let html = format!(
+        r#"<article data-defuddle=""><p><strong>{}</strong> · {}</p>{}</article>"#,
+        escape_html_text(&author),
+        escape_html_text(&published),
+        comment
+            .as_ref()
+            .map(serialize_children_html)
+            .unwrap_or_default()
+    );
     hn_output(
         document,
         base_url,
         hn_base_metadata(base_url, title, author, published),
         body,
-        None,
+        Some(html),
     )
 }
 
@@ -3343,6 +3409,7 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
     };
 
     let mut story_count = 0usize;
+    let mut html = String::from("<article data-defuddle=\"\"><ol>");
     for row in rows {
         let row = row.as_node().clone();
         let title_link = select_first_node(&row, ".titleline a");
@@ -3360,27 +3427,67 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
         story_count += 1;
 
         body.push_str(&format!("1. [[{url}][{title}]]"));
+        html.push_str(&format!(
+            r#"<li><a href="{}">{}</a>"#,
+            escape_html_attr(&url),
+            escape_html_text(&title)
+        ));
         if let Some(site) = site.filter(|site| !site.is_empty()) {
             body.push_str(&format!(" ({site})"));
+            html.push_str(&format!(" ({})", escape_html_text(&site)));
         }
         body.push('\n');
         if let Some(subtext) = subtext {
             let metadata = hn_listing_metadata(&subtext, base_url);
             if !metadata.is_empty() {
-                body.push_str(&metadata.join(" · "));
+                body.push_str(
+                    &metadata
+                        .iter()
+                        .map(|(label, url)| {
+                            url.as_ref()
+                                .map(|url| format!("[[{url}][{label}]]"))
+                                .unwrap_or_else(|| label.clone())
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                );
+                let metadata = metadata
+                    .iter()
+                    .map(|(label, url)| {
+                        url.as_ref()
+                            .map(|url| {
+                                format!(
+                                    r#"<a href="{}">{}</a>"#,
+                                    escape_html_attr(url),
+                                    escape_html_text(label)
+                                )
+                            })
+                            .unwrap_or_else(|| escape_html_text(label))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                html.push_str("<br>");
+                html.push_str(&metadata);
                 body.push('\n');
             }
         }
+        html.push_str("</li>");
     }
+    html.push_str("</ol>");
 
     if let Some(more) = select_first_node(document, "a.morelink") {
         if let Some(url) =
             element_attr(&more, "href").and_then(|href| absolutize_url(Some(base_url), &href))
         {
             body.push_str(&format!("\n[[{url}][More]]\n"));
+            html.push_str(&format!(
+                r#"<p><a href="{}">More</a></p>"#,
+                escape_html_attr(&url)
+            ));
         }
     }
 
+    html.push_str("</article>");
     let word_count = count_words(&body).saturating_sub(story_count);
     hn_output_with_word_count(
         document,
@@ -3392,18 +3499,20 @@ fn hn_listing_output(document: &NodeRef, base_url: &str) -> Result<DefuddleOutpu
             String::new(),
         ),
         body,
-        None,
+        Some(html),
         Some(word_count),
     )
 }
 
-fn hn_listing_metadata(subtext: &NodeRef, base_url: &str) -> Vec<String> {
+fn hn_listing_metadata(subtext: &NodeRef, base_url: &str) -> Vec<(String, Option<String>)> {
     let mut parts = Vec::new();
     if let Some(score) = select_text(subtext, ".score").filter(|score| !score.is_empty()) {
-        parts.push(score);
+        parts.push((score, None));
     }
-    if let Some(author) = select_text(subtext, ".hnuser").filter(|author| !author.is_empty()) {
-        parts.push(format!("by {author}"));
+    if let Some(author) =
+        select_text(subtext, "a[href^=\"user?id\"]").filter(|author| !author.is_empty())
+    {
+        parts.push((format!("by {author}"), None));
     }
     if let Ok(links) = subtext.select("a[href]") {
         for link in links {
@@ -3417,7 +3526,7 @@ fn hn_listing_metadata(subtext: &NodeRef, base_url: &str) -> Vec<String> {
                 .get("href")
                 .and_then(|href| absolutize_url(Some(base_url), href))
             {
-                parts.push(format!("[[{url}][{text}]]"));
+                parts.push((text, Some(url)));
                 break;
             }
         }
@@ -3425,7 +3534,7 @@ fn hn_listing_metadata(subtext: &NodeRef, base_url: &str) -> Vec<String> {
     parts
 }
 
-fn hn_comments(document: &NodeRef, base_url: &str) -> Vec<HackerNewsComment> {
+fn hn_comments(document: &NodeRef, base_url: &str) -> Vec<Comment> {
     let Ok(rows) = document.select("table.comment-tree tr.comtr") else {
         return Vec::new();
     };
@@ -3433,8 +3542,8 @@ fn hn_comments(document: &NodeRef, base_url: &str) -> Vec<HackerNewsComment> {
         .collect()
 }
 
-fn hn_comment(row: &NodeRef, base_url: &str) -> Option<HackerNewsComment> {
-    let author = select_text(row, ".comhead .hnuser")?;
+fn hn_comment(row: &NodeRef, base_url: &str) -> Option<Comment> {
+    let author = select_text(row, ".comhead a[href^=\"user?id\"]")?;
     let age = select_first_node(row, ".comhead .age");
     let published = age
         .as_ref()
@@ -3461,7 +3570,7 @@ fn hn_comment(row: &NodeRef, base_url: &str) -> Option<HackerNewsComment> {
         .map(|width| width / 40)
         .unwrap_or(0);
 
-    Some(HackerNewsComment {
+    Some(Comment {
         depth,
         author,
         published,
@@ -3472,7 +3581,7 @@ fn hn_comment(row: &NodeRef, base_url: &str) -> Option<HackerNewsComment> {
     })
 }
 
-fn render_hn_comments(comments: &[HackerNewsComment]) -> String {
+fn render_hn_comments(comments: &[Comment]) -> String {
     let mut out = String::new();
     let mut open_depth = 0usize;
 
@@ -3516,7 +3625,7 @@ fn render_hn_comments(comments: &[HackerNewsComment]) -> String {
     out
 }
 
-fn render_standardized_comments_html(comments: &[HackerNewsComment]) -> String {
+fn render_standardized_comments_html(comments: &[Comment]) -> String {
     let mut out = String::new();
     let mut open_depth = 0usize;
     for comment in comments {
@@ -3529,7 +3638,13 @@ fn render_standardized_comments_html(comments: &[HackerNewsComment]) -> String {
             out.push_str("<blockquote>");
             open_depth += 1;
         }
-        out.push_str(&standardized_comment_html(comment));
+        out.push_str(&standardized_comment_html(
+            &comment.author,
+            &comment.published,
+            &comment.url,
+            &comment.score,
+            &comment.body_html,
+        ));
     }
     while open_depth > 0 {
         out.push_str("</blockquote>");
@@ -3538,31 +3653,37 @@ fn render_standardized_comments_html(comments: &[HackerNewsComment]) -> String {
     out
 }
 
-fn standardized_comment_html(comment: &HackerNewsComment) -> String {
-    let date = if comment.url.is_empty() || is_dangerous_url(&comment.url) {
+fn standardized_comment_html(
+    author: &str,
+    published: &str,
+    url: &str,
+    score: &str,
+    body_html: &str,
+) -> String {
+    let date = if url.is_empty() || is_dangerous_url(url) {
         format!(
             r#"<span class="comment-date">{}</span>"#,
-            escape_html_text(&comment.published)
+            escape_html_text(published)
         )
     } else {
         format!(
             r#"<a href="{}" class="comment-link">{}</a>"#,
-            escape_html_attr(&comment.url),
-            escape_html_text(&comment.published)
+            escape_html_attr(url),
+            escape_html_text(published)
         )
     };
-    let score = if comment.score.is_empty() {
+    let score = if score.is_empty() {
         String::new()
     } else {
         format!(
             r#" · <span class="comment-points">{}</span>"#,
-            escape_html_text(&comment.score)
+            escape_html_text(score)
         )
     };
     format!(
         r#"<div class="comment"><div class="comment-metadata"><span class="comment-author"><strong>{}</strong></span> · {date}{score}</div><div class="comment-content">{}</div></div>"#,
-        escape_html_text(&comment.author),
-        comment.body_html
+        escape_html_text(author),
+        body_html
     )
 }
 
@@ -4231,10 +4352,28 @@ fn standardize_arxiv_equation_tables(root: &NodeRef) {
 
     for (table, blocks) in tables {
         for latex in blocks {
-            let Some(math) = standardized_latex_math_node(&latex, true, latex.clone()) else {
-                continue;
+            let source = table.descendants().find(|node| {
+                tag_name(node).as_deref() == Some("math")
+                    && node
+                        .as_element()
+                        .and_then(|element| math_info(node, element))
+                        .is_some_and(|math| math.latex == latex)
+            });
+            let math = if let Some(source) = source {
+                standardized_mathml_node(
+                    &source,
+                    &MathInfo {
+                        latex,
+                        is_block: true,
+                    },
+                    true,
+                )
+            } else {
+                standardized_latex_math_node(&latex, true, latex.clone())
             };
-            table.insert_before(math);
+            if let Some(math) = math {
+                table.insert_before(math);
+            }
         }
         table.detach();
     }
@@ -4697,6 +4836,42 @@ fn is_latex_structure_command(command: &str) -> bool {
 }
 
 fn standardize_code_blocks(root: &NodeRef) {
+    static PREFORMATTED_STYLE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"white-space\s*:\s*pre").unwrap());
+    // A standalone code element can carry line breaks without a pre wrapper.
+    let codes = root
+        .select("code")
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|node| node.as_node().clone())
+        .collect::<Vec<_>>();
+    for code in codes {
+        if has_ancestor_tag(&code, &["pre", "td", "th"]) {
+            continue;
+        }
+        let styled =
+            element_attr(&code, "style").is_some_and(|style| PREFORMATTED_STYLE.is_match(&style));
+        let standalone = count_selector(&code, "br") > 0
+            && code
+                .parent()
+                .is_some_and(|parent| parent.text_contents().trim() == code.text_contents().trim());
+        if styled || standalone || has_class_token(&code, "block") {
+            if let Some(paragraph) = code
+                .parent()
+                .filter(|parent| tag_name(parent).as_deref() == Some("p"))
+            {
+                if let Some(wrapper) = new_html_element("div") {
+                    copy_standardized_paragraph_attributes(&paragraph, &wrapper);
+                    replace_node_transferring_children(&paragraph, wrapper);
+                }
+            }
+            if let Some(pre) = new_html_element("pre") {
+                code.insert_before(pre.clone());
+                pre.append(code);
+            }
+        }
+    }
     standardize_lean_verso_examples(root);
     let selector = [
         "pre",
@@ -4849,7 +5024,8 @@ fn is_standardizable_code_block_candidate(node: &NodeRef) -> bool {
         return true;
     }
     if tag == "table" {
-        return code_table_blocks(node).is_some();
+        return code_table_blocks(node).is_some()
+            || (has_class_token(node, "highlight") && code_language_in_subtree(node).is_some());
     }
     if is_code_block_container(node, element) {
         return true;
@@ -4898,7 +5074,14 @@ fn standardized_code_replacements(node: &NodeRef) -> Vec<NodeRef> {
             .collect();
     }
 
-    standardized_code_pre_node(&code_block_text(node), code_language_in_subtree(node))
+    let language = code_language_in_subtree(node).or_else(|| {
+        node.ancestors().find_map(|ancestor| {
+            element_attr(&ancestor, "class")?
+                .split_whitespace()
+                .find_map(code_language_from_token)
+        })
+    });
+    standardized_code_pre_node(&code_block_text(node), language)
         .into_iter()
         .collect()
 }
@@ -5352,7 +5535,7 @@ fn linkedin_quoted_date(wrapper: &NodeRef) -> Option<String> {
         .and_then(|captures| captures.get(1).map(|matched| matched.as_str().to_string()))
 }
 
-fn linkedin_comments(article: &NodeRef, base_url: &str) -> Vec<HackerNewsComment> {
+fn linkedin_comments(article: &NodeRef, base_url: &str) -> Vec<Comment> {
     let Ok(matches) = article.select("article.comments-comment-entity") else {
         return Vec::new();
     };
@@ -5379,7 +5562,7 @@ fn linkedin_comments(article: &NodeRef, base_url: &str) -> Vec<HackerNewsComment
     comments
 }
 
-fn linkedin_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<HackerNewsComment> {
+fn linkedin_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<Comment> {
     let author = select_text(comment, ".comments-comment-meta__description-title")?;
     if author.is_empty() {
         return None;
@@ -5406,7 +5589,7 @@ fn linkedin_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<H
     .map(|count| format!("{count} reactions"))
     .unwrap_or_default();
 
-    Some(HackerNewsComment {
+    Some(Comment {
         depth,
         author,
         published,
@@ -5690,7 +5873,7 @@ fn youtube_video_id(url: Option<&str>) -> Option<String> {
     if let Some(segments) = segments {
         if let Some(idx) = segments
             .iter()
-            .position(|part| *part == "shorts" || *part == "embed")
+            .position(|part| *part == "shorts" || *part == "embed" || *part == "live")
         {
             return segments
                 .get(idx + 1)
@@ -6128,22 +6311,10 @@ fn youtube_inline_json(document: &NodeRef, global_name: &str) -> Option<Value> {
         let Some(start) = text[name_index..].find('{').map(|idx| name_index + idx) else {
             continue;
         };
-        let mut depth = 0i32;
-        for (offset, ch) in text[start..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let end = start + offset + ch.len_utf8();
-                        if let Ok(value) = serde_json::from_str::<Value>(&text[start..end]) {
-                            return Some(value);
-                        }
-                        break;
-                    }
-                }
-                _ => {}
-            }
+        if let Some(value) = extract_balanced_js_object(&text, start)
+            .and_then(|json| serde_json::from_str(&json).ok())
+        {
+            return Some(value);
         }
     }
     None
@@ -7531,8 +7702,36 @@ fn substack_output(
     provided_url: Option<&str>,
     include_images: bool,
 ) -> Result<Option<DefuddleOutput>, DefuddleError> {
-    if !is_substack_document(document, provided_url) {
+    let post = if select_first_node(document, ".body.markup").is_none() {
+        substack_preload_post(document)
+    } else {
+        None
+    };
+    if !is_substack_document(document, provided_url) && post.is_none() {
         return Ok(None);
+    }
+    if let Some(body) = post
+        .as_ref()
+        .and_then(|post| post.get("body_html"))
+        .and_then(Value::as_str)
+    {
+        let fragment = kuchiki::parse_html().one(body);
+        if let (Some(body), Some(content), Some(wrapper)) = (
+            select_first_node(document, "body"),
+            select_first_node(&fragment, "body"),
+            new_html_element("div"),
+        ) {
+            wrapper
+                .as_element()
+                .unwrap()
+                .attributes
+                .borrow_mut()
+                .insert("class", "body markup".to_string());
+            for child in content.children().collect::<Vec<_>>() {
+                wrapper.append(child);
+            }
+            body.append(wrapper);
+        }
     }
 
     let Some(kind) = substack_page_kind(document, provided_url) else {
@@ -7540,7 +7739,25 @@ fn substack_output(
     };
     let url = substack_document_url(document, provided_url);
     let base_url = url.as_deref().unwrap_or("https://substack.com/");
-    let metadata = substack_metadata(document, kind, url.as_deref());
+    let mut metadata = substack_metadata(document, kind, url.as_deref());
+    if let Some(post) = post {
+        for (field, value) in [
+            (&mut metadata.title, post.get("title")),
+            (&mut metadata.description, post.get("subtitle")),
+            (&mut metadata.published, post.get("post_date")),
+            (
+                &mut metadata.author,
+                post.pointer("/publishedBylines/0/name"),
+            ),
+        ] {
+            if let Some(value) = value
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                *field = normalize_ws(value);
+            }
+        }
+    }
 
     normalize_images(document);
     sanitize_links(document);
@@ -7575,12 +7792,51 @@ fn substack_output(
         return Ok(None);
     }
 
-    let html = serialize_node(&body_node)?;
+    let mut html = serialize_node(&body_node)?;
+    if matches!(kind, SubstackPageKind::Note)
+        && include_images
+        && substack_is_note_permalink(url.as_deref())
+        && !metadata.image.is_empty()
+        && !body_node
+            .select("img[src]")
+            .unwrap()
+            .any(|img| img.attributes.borrow().get("src") == Some(metadata.image.as_str()))
+    {
+        html.push_str(&format!(
+            r#"<img src="{}">"#,
+            escape_html_attr(&metadata.image)
+        ));
+    }
     let word_count = count_html_words(&html);
 
     Ok(Some(standard_extractor_output(
         metadata, html, &body_org, word_count, "substack",
     )))
+}
+
+fn substack_preload_post(document: &NodeRef) -> Option<Value> {
+    static ASSIGNMENT: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"window\._preloads\s*=\s*JSON\.parse\s*\(").unwrap());
+    let json = select_first_node(document, "script#preloads-json")
+        .and_then(|node| serde_json::from_str::<Value>(&node.text_contents()).ok())
+        .or_else(|| {
+            document.select("script").ok()?.find_map(|script| {
+                let text = script.text_contents();
+                let rest = &text[ASSIGNMENT.find(&text)?.end()..];
+                let encoded = serde_json::Deserializer::from_str(rest)
+                    .into_iter::<String>()
+                    .next()?
+                    .ok()?;
+                serde_json::from_str(&encoded).ok()
+            })
+        })?;
+    let post = json
+        .get("post")
+        .or_else(|| json.pointer("/feedData/initialPost/post"))?;
+    post.get("body_html")?
+        .as_str()
+        .filter(|body| !body.trim().is_empty())?;
+    Some(post.clone())
 }
 
 fn is_substack_document(document: &NodeRef, provided_url: Option<&str>) -> bool {
@@ -7808,6 +8064,7 @@ fn medium_output(
         remove_content_images(&article);
     }
 
+    standardize_code_blocks(&article);
     let footnotes = collect_footnotes(document);
     let body_org = html_node_to_org_with_footnotes(&article, &footnotes);
     if body_org.trim().is_empty() {
@@ -8267,7 +8524,7 @@ fn discourse_post_org(post: &NodeRef) -> String {
         .to_string()
 }
 
-fn discourse_comments(posts: &[NodeRef], base_url: &str) -> Vec<HackerNewsComment> {
+fn discourse_comments(posts: &[NodeRef], base_url: &str) -> Vec<Comment> {
     posts
         .iter()
         .filter_map(|post| {
@@ -8275,7 +8532,7 @@ fn discourse_comments(posts: &[NodeRef], base_url: &str) -> Vec<HackerNewsCommen
             if org.trim().is_empty() {
                 return None;
             }
-            Some(HackerNewsComment {
+            Some(Comment {
                 depth: 0,
                 author: discourse_author(post).unwrap_or_default(),
                 published: discourse_post_date(post),
@@ -8870,7 +9127,7 @@ fn lwn_last_element_child(node: &NodeRef) -> Option<NodeRef> {
     node.children().rfind(|child| child.as_element().is_some())
 }
 
-fn lwn_comments(main: &NodeRef, base_url: &str) -> Vec<HackerNewsComment> {
+fn lwn_comments(main: &NodeRef, base_url: &str) -> Vec<Comment> {
     let Ok(boxes) = main.select("details.CommentBox") else {
         return Vec::new();
     };
@@ -8898,7 +9155,7 @@ fn lwn_comment_depth(comment: &NodeRef, root: &NodeRef) -> usize {
     depth
 }
 
-fn lwn_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<HackerNewsComment> {
+fn lwn_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<Comment> {
     let poster = lwn_direct_summary_child(comment)
         .and_then(|summary| select_first_node(&summary, ".CommentPoster"))?;
     let author = select_text(&poster, "b").unwrap_or_default();
@@ -8911,7 +9168,7 @@ fn lwn_comment(comment: &NodeRef, depth: usize, base_url: &str) -> Option<Hacker
     if author.is_empty() && org.trim().is_empty() {
         return None;
     }
-    Some(HackerNewsComment {
+    Some(Comment {
         depth,
         author,
         published,
@@ -9138,7 +9395,7 @@ fn x_output(
     let url = x_document_url(document, provided_url);
     let base_url = url.as_deref().unwrap_or("https://x.com/");
     let article = select_first_node(document, "[data-testid=\"twitterArticleRichTextView\"]");
-    let tweets = x_tweets(document, base_url);
+    let tweets = x_tweets(document, base_url, include_images);
     if article.is_none() && tweets.is_empty() {
         return Ok(None);
     }
@@ -9163,20 +9420,14 @@ fn x_output(
             x_article_content_html(document, &article, include_images)?,
         )
     } else {
-        (
-            x_timeline_body_org(&tweets, include_replies),
-            serialize_node(document)?,
-        )
+        let html = x_timeline_html(&tweets, include_replies);
+        (render_html_fragment_to_org(&html), html)
     };
     if body_org.trim().is_empty() {
         return Ok(None);
     }
 
-    let word_count = if extractor_name == "xarticle" {
-        count_html_words(&html)
-    } else {
-        x_timeline_word_count(&tweets, include_replies, &body_org)
-    };
+    let word_count = count_html_words(&html);
     Ok(Some(standard_extractor_output(
         metadata,
         html,
@@ -9237,22 +9488,28 @@ fn x_metadata(
     .unwrap_or_else(|| "X".to_string());
     let author = first_present(&[
         article.and_then(|_| url.and_then(x_status_author_from_url)),
+        first_tweet.map(|tweet| tweet.handle.clone()),
         x_itemprop_author(document),
         meta_content(document, "property", "og:title")
             .and_then(|title| x_author_from_page_title(&title)),
         select_text(document, "title").and_then(|title| x_author_from_page_title(&title)),
         url.and_then(x_status_author_from_url),
-        first_tweet.map(|tweet| tweet.handle.clone()),
     ])
     .unwrap_or_default();
     let published = first_present(&[
-        select_attr(
-            document,
-            "article[data-testid=\"tweet\"] time[datetime]",
-            "datetime",
-        ),
-        select_attr(document, "time[datetime]", "datetime"),
-        first_tweet.map(|tweet| tweet.published.clone()),
+        meta_content(document, "property", "article:published_time"),
+        if let Some(tweet) = first_tweet.filter(|_| article.is_none()) {
+            Some(tweet.published.clone())
+        } else {
+            first_present(&[
+                select_attr(
+                    document,
+                    "article[data-testid=\"tweet\"] time[datetime]",
+                    "datetime",
+                ),
+                select_attr(document, "time[datetime]", "datetime"),
+            ])
+        },
     ])
     .unwrap_or_default();
     let domain = url
@@ -9491,18 +9748,106 @@ fn should_flatten_x_draft_child(node: &NodeRef) -> bool {
 
 #[derive(Debug, Clone)]
 struct XTweet {
+    is_thread_continuation: bool,
     display_name: String,
     handle: String,
     published: String,
     url: String,
-    body_org: String,
+    body_html: String,
 }
 
-fn x_tweets(document: &NodeRef, base_url: &str) -> Vec<XTweet> {
-    x_conversation_tweet_nodes(document)
+fn x_tweets(document: &NodeRef, base_url: &str, include_images: bool) -> Vec<XTweet> {
+    if select_first_node(document, "article[data-testid=\"tweet\"]").is_some() {
+        return x_conversation_tweet_nodes(document)
+            .into_iter()
+            .filter_map(|tweet| x_tweet(&tweet, base_url, include_images))
+            .collect();
+    }
+    let posts = document
+        .select("article")
+        .ok()
         .into_iter()
-        .filter_map(|tweet| x_tweet(&tweet, base_url))
+        .flatten()
+        .map(|node| node.as_node().clone())
+        .filter(|node| {
+            !has_ancestor_tag(&node.parent().unwrap_or_else(|| node.clone()), &["article"])
+                && x_post_permalink(node, base_url).is_some()
+        })
+        .collect::<Vec<_>>();
+    let list = posts.iter().find_map(|post| {
+        post.ancestors()
+            .find(|node| tag_name(node).as_deref() == Some("li"))
+            .and_then(|item| item.parent())
+    });
+    let Some(list) = list else {
+        return posts
+            .first()
+            .and_then(|post| x_tweet(post, base_url, include_images))
+            .into_iter()
+            .collect();
+    };
+    let mut tweets = Vec::new();
+    for item in element_children(&list) {
+        let item_posts = posts
+            .iter()
+            .filter(|post| is_descendant_of(post, &item))
+            .collect::<Vec<_>>();
+        if item_posts.is_empty() && !tweets.is_empty() && count_selector(&item, "h2") > 0 {
+            break;
+        }
+        for (index, post) in item_posts.into_iter().enumerate() {
+            if let Some(mut tweet) = x_tweet(post, base_url, include_images) {
+                tweet.is_thread_continuation = index > 0;
+                tweets.push(tweet);
+            }
+        }
+    }
+    tweets
+}
+
+// Keep quoted posts out of the enclosing post's text, author, media and permalink.
+fn x_own_nodes(post: &NodeRef, selector: &str) -> Vec<NodeRef> {
+    post.select(selector)
+        .ok()
+        .into_iter()
+        .flatten()
+        .map(|node| node.as_node().clone())
+        .filter(|node| {
+            node.ancestors()
+                .skip(1)
+                .find(|parent| {
+                    tag_name(parent).as_deref() == Some("article")
+                        || element_attr(parent, "data-slot").as_deref()
+                            == Some("embedded-tweet-frame")
+                })
+                .map_or(true, |scope| {
+                    scope == *post || !is_descendant_of(&scope, post)
+                })
+        })
         .collect()
+}
+
+fn x_post_permalink(post: &NodeRef, base_url: &str) -> Option<(String, String, String)> {
+    static STATUS: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^/([A-Za-z0-9_]{1,15})/status/([0-9]+)/?$").unwrap());
+    x_own_nodes(post, "a[href]").into_iter().find_map(|link| {
+        let href = absolutize_url(Some(base_url), &element_attr(&link, "href")?)?;
+        if !is_x_url(&href) {
+            return None;
+        }
+        let url = Url::parse(&href).ok()?;
+        let captures = STATUS.captures(url.path())?;
+        let handle = format!("@{}", &captures[1]);
+        let id = captures[2].parse::<u64>().ok()?;
+        let date = if captures[2].len() >= 15 {
+            format_unix_timestamp_millis_z(((id >> 22) + 1_288_834_974_657) as i64 / 1000)
+                .map(|date| date_part(&date))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Some((handle, href, date))
+    })
 }
 
 fn x_conversation_tweet_nodes(document: &NodeRef) -> Vec<NodeRef> {
@@ -9539,20 +9884,138 @@ fn x_conversation_tweet_nodes(document: &NodeRef) -> Vec<NodeRef> {
     }
 }
 
-fn x_tweet(tweet: &NodeRef, base_url: &str) -> Option<XTweet> {
-    let user = select_first_node(tweet, "[data-testid=\"User-Name\"]")?;
-    let (display_name, handle) = x_tweet_user(&user)?;
-    let (published, url) = x_tweet_time_and_url(tweet, base_url);
-    let body = select_first_node(tweet, "[data-testid=\"tweetText\"]")?;
-    let body_org = html_node_to_org_with_footnotes(&body, &FootnoteState::default());
-    let body_org = body_org.trim().to_string();
-    (!body_org.is_empty()).then_some(XTweet {
+fn x_tweet(tweet: &NodeRef, base_url: &str, include_images: bool) -> Option<XTweet> {
+    let (display_name, handle, published, url) = if let Some(user) =
+        select_first_node(tweet, "[data-testid=\"User-Name\"]")
+    {
+        let (name, handle) = x_tweet_user(&user)?;
+        let (published, url) = x_tweet_time_and_url(tweet, base_url);
+        (name, handle, published, url)
+    } else {
+        let (handle, url, published) = x_post_permalink(tweet, base_url)?;
+        let profile = format!("/{}", handle.trim_start_matches('@'));
+        let name = x_own_nodes(tweet, "a[href]")
+            .into_iter()
+            .filter(|node| {
+                element_attr(node, "href").is_some_and(|href| href.eq_ignore_ascii_case(&profile))
+            })
+            .map(|node| normalize_ws(&node.text_contents()))
+            .find(|text| !text.is_empty() && !text.starts_with('@'))
+            .unwrap_or_else(|| handle.clone());
+        (name, handle, published, url)
+    };
+    let body = select_first_node(tweet, "[data-testid=\"tweetText\"]").or_else(|| {
+        x_own_nodes(tweet, "div[dir=\"auto\"][lang]")
+            .into_iter()
+            .next()
+    })?;
+    let mut body_html = x_post_text_html(&body);
+    if include_images {
+        for image in x_own_nodes(tweet, "img[src]") {
+            let Some(src) = element_attr(&image, "src")
+                .filter(|src| src.starts_with("https://pbs.twimg.com/media/"))
+            else {
+                continue;
+            };
+            let src = x_large_media_url(&src).unwrap_or(src);
+            let alt = element_attr(&image, "alt").unwrap_or_default();
+            body_html.push_str(&format!(
+                r#"<img src="{}" alt="{}">"#,
+                escape_html_attr(&src),
+                escape_html_attr(&normalize_ws(&alt))
+            ));
+        }
+    }
+    if let Some(quote) = x_own_nodes(tweet, "[data-slot=\"embedded-tweet-frame\"]")
+        .into_iter()
+        .next()
+    {
+        let quote = select_first_node(&quote, "article").unwrap_or(quote);
+        if let Some(quote) = x_tweet(&quote, base_url, include_images) {
+            body_html.push_str(&format!(r#"<blockquote class="quoted-post"><p><strong>{} {}</strong> · {}</p>{}</blockquote>"#,
+                escape_html_text(&quote.display_name), escape_html_text(&quote.handle), escape_html_text(&quote.published), quote.body_html));
+        }
+    }
+    (!body_html.is_empty()).then_some(XTweet {
+        is_thread_continuation: true,
         display_name,
         handle,
         published,
         url,
-        body_org,
+        body_html,
     })
+}
+
+fn x_post_text_html(body: &NodeRef) -> String {
+    let fragment = kuchiki::parse_html().one(serialize_children_html(body));
+    let nodes = fragment
+        .select("a, span, div, img[src*=\"/emoji/\"]")
+        .unwrap()
+        .map(|node| node.as_node().clone())
+        .collect::<Vec<_>>();
+    for node in nodes {
+        if tag_name(&node).as_deref() == Some("img") {
+            if let Some(alt) = element_attr(&node, "alt") {
+                node.insert_before(NodeRef::new_text(alt));
+            }
+            node.detach();
+        } else {
+            unwrap_node_children_before(&node);
+        }
+    }
+    let body = select_first_node(&fragment, "body").unwrap();
+    let mut paragraphs = Vec::new();
+    let mut paragraph = new_html_element("p").unwrap();
+    for child in body.children().collect::<Vec<_>>() {
+        if let Some(text) = child.as_text() {
+            for (index, line) in text.borrow().split('\n').enumerate() {
+                if index > 0 {
+                    paragraphs.push(paragraph);
+                    paragraph = new_html_element("p").unwrap();
+                }
+                paragraph.append(NodeRef::new_text(line));
+            }
+        } else if tag_name(&child).as_deref() == Some("br") {
+            paragraphs.push(paragraph);
+            paragraph = new_html_element("p").unwrap();
+        } else {
+            paragraph.append(child);
+        }
+    }
+    paragraphs.push(paragraph);
+    paragraphs
+        .into_iter()
+        .filter(|node| !node.text_contents().trim().is_empty() || count_selector(node, "img") > 0)
+        .map(|node| serialize_node(&node).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn x_timeline_html(tweets: &[XTweet], include_replies: IncludeReplies) -> String {
+    let Some((first, replies)) = tweets.split_first() else {
+        return String::new();
+    };
+    let comment_start = x_timeline_comment_start(first, replies);
+    let mut post = first.body_html.clone();
+    for tweet in &replies[..comment_start] {
+        post.push_str("\n<hr>\n");
+        post.push_str(&tweet.body_html);
+    }
+    let mut comments = String::new();
+    if include_replies.extractor_replies() {
+        for reply in &replies[comment_start..] {
+            comments.push_str("<blockquote>");
+            comments.push_str(&standardized_comment_html(
+                &format!("{} {}", reply.display_name, reply.handle),
+                &date_part(&reply.published),
+                &reply.url,
+                "",
+                &reply.body_html,
+            ));
+            comments.push_str("</blockquote>");
+        }
+    }
+    standardized_post_comments_html("twitter", &post, &comments)
 }
 
 fn x_tweet_user(user: &NodeRef) -> Option<(String, String)> {
@@ -9646,79 +10109,11 @@ fn x_tweet_time_and_url(tweet: &NodeRef, base_url: &str) -> (String, String) {
     (String::new(), String::new())
 }
 
-fn x_timeline_body_org(tweets: &[XTweet], include_replies: IncludeReplies) -> String {
-    let Some((first, replies)) = tweets.split_first() else {
-        return String::new();
-    };
-    let mut body = first.body_org.clone();
-    if replies.is_empty() {
-        return body;
-    }
-
-    let comment_start = x_timeline_comment_start(first, replies);
-    for reply in &replies[..comment_start] {
-        body.push_str("\n\n-----\n\n");
-        body.push_str(reply.body_org.trim());
-    }
-
-    if !include_replies.extractor_replies() || comment_start >= replies.len() {
-        return body;
-    }
-
-    body.push_str("\n\n-----\n\n** Comments\n\n");
-    for reply in &replies[comment_start..] {
-        body.push_str("#+begin_quote\n");
-        let date = reply
-            .published
-            .split('T')
-            .next()
-            .unwrap_or(&reply.published);
-        if reply.url.is_empty() || date.is_empty() {
-            body.push_str(&format!("*{} {}*\n\n", reply.display_name, reply.handle));
-        } else {
-            body.push_str(&format!(
-                "*{} {}* · [[{}][{}]]\n\n",
-                reply.display_name, reply.handle, reply.url, date
-            ));
-        }
-        body.push_str(reply.body_org.trim());
-        body.push_str("\n#+end_quote\n\n");
-    }
-    body
-}
-
 fn x_timeline_comment_start(first: &XTweet, replies: &[XTweet]) -> usize {
     replies
         .iter()
-        .position(|reply| reply.handle != first.handle)
+        .position(|reply| !reply.is_thread_continuation || reply.handle != first.handle)
         .unwrap_or(replies.len())
-}
-
-fn x_timeline_word_count(
-    tweets: &[XTweet],
-    include_replies: IncludeReplies,
-    body_org: &str,
-) -> usize {
-    let Some((first, replies)) = tweets.split_first() else {
-        return count_words(body_org);
-    };
-    if !include_replies.extractor_replies() || replies.is_empty() {
-        return count_words(body_org);
-    }
-
-    let comment_start = x_timeline_comment_start(first, replies);
-    let metadata_words = replies[comment_start..]
-        .iter()
-        .map(|reply| {
-            let date = reply
-                .published
-                .split('T')
-                .next()
-                .unwrap_or(&reply.published);
-            count_words(&format!("{} {}", reply.display_name, reply.handle)) + count_words(date)
-        })
-        .sum::<usize>();
-    count_words(body_org).saturating_sub(metadata_words)
 }
 
 fn normalize_x_media_images(document: &NodeRef) {
@@ -10005,8 +10400,11 @@ fn remove_empty_elements(root: &NodeRef) {
         if ALLOWED_EMPTY_ELEMENTS.contains(&tag.as_str())
             || matches!(tag.as_str(), "pre" | "code")
             || is_inside_preserved_code_block(&node)
-            || is_math_node(&node)
-            || is_inside_math_tree(&node)
+            || (is_math_node(&node)
+                && element_attr(&node, "data-latex").is_some_and(|latex| !latex.trim().is_empty()))
+            || node
+                .parent()
+                .is_some_and(|parent| is_inside_math_tree(&parent))
             || is_empty_footnote_definition_anchor(&node)
         {
             continue;
@@ -10220,11 +10618,21 @@ fn is_divider_like_node(node: &NodeRef) -> bool {
     tag_name(node).as_deref() == Some("hr") || is_trailing_separator_wrapper_node(node)
 }
 
-fn remove_empty_lines(root: &NodeRef) {
+fn remove_empty_lines(root: &NodeRef, language: &str) {
     static LINE_BREAK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\n\r]+").unwrap());
     static TAB_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\t+").unwrap());
     static MULTI_SPACE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r" {2,}").unwrap());
     static BEFORE_PUNCTUATION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+([,.!?:;])").unwrap());
+    static FRENCH_PUNCTUATION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+([,.])").unwrap());
+    let punctuation = if language
+        .split(['-', '_'])
+        .next()
+        .is_some_and(|code| code.eq_ignore_ascii_case("fr"))
+    {
+        &*FRENCH_PUNCTUATION_RE
+    } else {
+        &*BEFORE_PUNCTUATION_RE
+    };
     static INVISIBLE_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"[\u{200b}\u{200d}\u{200e}\u{200f}\u{feff}]+").unwrap());
     static MULTI_NBSP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\u{a0}{2,}").unwrap());
@@ -10255,11 +10663,133 @@ fn remove_empty_lines(root: &NodeRef) {
         let cleaned = LINE_BREAK_RE.replace_all(&original, " ");
         let cleaned = TAB_RE.replace_all(&cleaned, " ");
         let cleaned = MULTI_SPACE_RE.replace_all(&cleaned, " ");
-        let cleaned = BEFORE_PUNCTUATION_RE.replace_all(&cleaned, "$1");
+        let cleaned = punctuation.replace_all(&cleaned, "$1");
         let cleaned = INVISIBLE_RE.replace_all(&cleaned, "");
         let cleaned = MULTI_NBSP_RE.replace_all(&cleaned, "\u{a0}");
         if cleaned != original {
             *text.borrow_mut() = cleaned.into_owned();
+        }
+    }
+}
+
+fn normalize_inline_spacing(root: &NodeRef, footnotes: &FootnoteState) {
+    let renderer = OrgRenderer::new(footnotes, RenderOptions { standardize: true });
+    let is_reference = |node: &NodeRef| {
+        node.as_element()
+            .and_then(|element| renderer.footnote_reference_number(node, element))
+            .is_some()
+    };
+    for node in root.descendants().collect::<Vec<_>>().into_iter().rev() {
+        let Some(tag) = tag_name(&node) else {
+            continue;
+        };
+        if matches!(tag.as_str(), "pre" | "code")
+            || is_inside_preserved_code_block(&node)
+            || is_inside_math_tree(&node)
+            || tag == "svg"
+            || has_ancestor_tag(&node, &["svg"])
+        {
+            continue;
+        }
+        if is_reference(&node) || node.ancestors().any(|parent| is_reference(&parent)) {
+            continue;
+        }
+        if markdown_block_tag(&tag) {
+            for edge in [node.first_child(), node.last_child()]
+                .into_iter()
+                .flatten()
+            {
+                if edge
+                    .as_text()
+                    .is_some_and(|text| text.borrow().trim().is_empty())
+                {
+                    edge.detach();
+                }
+            }
+        }
+        if is_standard_inline_element(&tag) && !matches!(tag.as_str(), "sub" | "sup" | "code") {
+            for leading in [true, false] {
+                let edge = if leading {
+                    node.first_child()
+                } else {
+                    node.last_child()
+                };
+                if let Some(edge) = edge {
+                    if let Some(text) = edge.as_text() {
+                        let value = text.borrow().clone();
+                        let trimmed = if leading {
+                            value.trim_start()
+                        } else {
+                            value.trim_end()
+                        };
+                        if trimmed != value {
+                            *text.borrow_mut() = trimmed.to_string();
+                            let neighbor = if leading {
+                                node.previous_sibling()
+                            } else {
+                                node.next_sibling()
+                            };
+                            let spaced = neighbor
+                                .and_then(|n| {
+                                    n.as_text().map(|v| {
+                                        if leading {
+                                            v.borrow().ends_with(' ')
+                                        } else {
+                                            v.borrow().starts_with(' ')
+                                        }
+                                    })
+                                })
+                                .unwrap_or(false);
+                            if !spaced {
+                                if leading {
+                                    node.insert_before(NodeRef::new_text(" "));
+                                } else {
+                                    node.insert_after(NodeRef::new_text(" "));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let children = node.children().collect::<Vec<_>>();
+        for pair in children.windows(2) {
+            let current = &pair[0];
+            let next = &pair[1];
+            if is_reference(next) {
+                continue;
+            }
+            if current.as_element().is_none() && next.as_element().is_none() {
+                continue;
+            }
+            if [current, next].iter().any(|node| {
+                matches!(tag_name(node).as_deref(), Some("sub" | "sup" | "code"))
+                    || node
+                        .children()
+                        .find(|child| !child.text_contents().trim().is_empty())
+                        .is_some_and(|child| {
+                            matches!(tag_name(&child).as_deref(), Some("sub" | "sup" | "code"))
+                                && node.text_contents() == child.text_contents()
+                        })
+            }) {
+                continue;
+            }
+            let left = current.text_contents();
+            let right = next.text_contents();
+            let left_punct = left
+                .trim_end()
+                .chars()
+                .last()
+                .is_some_and(|c| ",.!?:;([“‘—–".contains(c));
+            let right_punct = right
+                .chars()
+                .next()
+                .is_some_and(|c| ",.!?:;)]”’—–".contains(c));
+            let spaced = current.as_text().is_some_and(|_| left.ends_with(' '))
+                || next.as_text().is_some_and(|_| right.starts_with(' '));
+            if !left_punct && !right_punct && !spaced {
+                next.insert_before(NodeRef::new_text(" "));
+            }
         }
     }
 }
@@ -11230,11 +11760,7 @@ fn bluesky_quoted_post_org(item: &NodeRef, base_url: &str) -> Option<String> {
     None
 }
 
-fn bluesky_comments(
-    reply_items: &[NodeRef],
-    base_url: &str,
-    include_images: bool,
-) -> Vec<HackerNewsComment> {
+fn bluesky_comments(reply_items: &[NodeRef], base_url: &str, include_images: bool) -> Vec<Comment> {
     let mut current_depth = 0usize;
     let mut comments = Vec::new();
     for item in reply_items {
@@ -11256,7 +11782,7 @@ fn bluesky_comments(
         if author.is_empty() && org.trim().is_empty() {
             continue;
         }
-        comments.push(HackerNewsComment {
+        comments.push(Comment {
             depth: current_depth,
             author,
             published: bluesky_reply_date(item),
@@ -11923,11 +12449,11 @@ fn threads_quote_org(
     out
 }
 
-fn threads_comments(reply_posts: &[Vec<ThreadsPost>]) -> Vec<HackerNewsComment> {
+fn threads_comments(reply_posts: &[Vec<ThreadsPost>]) -> Vec<Comment> {
     let mut comments = Vec::new();
     for posts in reply_posts {
         for (idx, post) in posts.iter().enumerate() {
-            comments.push(HackerNewsComment {
+            comments.push(Comment {
                 depth: if posts.len() == 1 { 0 } else { idx },
                 author: format!("@{}", post.username),
                 published: post.date.clone(),
@@ -11941,7 +12467,7 @@ fn threads_comments(reply_posts: &[Vec<ThreadsPost>]) -> Vec<HackerNewsComment> 
     comments
 }
 
-fn threads_comments_from_json(document: &NodeRef, main_author: &str) -> Vec<HackerNewsComment> {
+fn threads_comments_from_json(document: &NodeRef, main_author: &str) -> Vec<Comment> {
     let Ok(scripts) = document.select("script[type=\"application/json\"]") else {
         return Vec::new();
     };
@@ -11978,7 +12504,7 @@ fn threads_comments_from_json(document: &NodeRef, main_author: &str) -> Vec<Hack
         if text.trim().is_empty() {
             continue;
         }
-        comments.push(HackerNewsComment {
+        comments.push(Comment {
             depth: 0,
             author: format!("@{username}"),
             published: String::new(),
@@ -12236,7 +12762,7 @@ fn mastodon_output(
     if !comment_statuses.is_empty() {
         let comments = comment_statuses
             .iter()
-            .map(|status| HackerNewsComment {
+            .map(|status| Comment {
                 depth: status.depth,
                 author: status.author.clone(),
                 published: status.published.clone(),
@@ -12480,8 +13006,16 @@ fn mastodon_statuses(
     let Ok(matches) = document.select(".status.status-public") else {
         return Vec::new();
     };
+    let main_handle = select_text(document, ".detailed-status .display-name__account");
     matches
-        .filter_map(|matched| mastodon_status(matched.as_node(), base_url, include_images))
+        .filter_map(|matched| {
+            mastodon_status(
+                matched.as_node(),
+                base_url,
+                include_images,
+                main_handle.as_deref(),
+            )
+        })
         .collect()
 }
 
@@ -12489,6 +13023,7 @@ fn mastodon_status(
     status: &NodeRef,
     base_url: &str,
     include_images: bool,
+    main_handle: Option<&str>,
 ) -> Option<MastodonStatus> {
     let display = select_text(status, ".display-name__html").unwrap_or_default();
     let account = select_text(status, ".display-name__account").unwrap_or_default();
@@ -12526,7 +13061,20 @@ fn mastodon_status(
     } else {
         1
     };
-    let is_thread_continuation = depth == 1;
+    let account_name = |value: &str| {
+        value
+            .trim_start_matches('@')
+            .split('@')
+            .next()
+            .unwrap_or_default()
+            .to_lowercase()
+    };
+    let is_thread_continuation = depth == 1
+        && main_handle.is_some_and(|handle| {
+            !handle.is_empty()
+                && !account.is_empty()
+                && account_name(handle) == account_name(&account)
+        });
     Some(MastodonStatus {
         depth,
         is_thread_continuation,
@@ -12892,7 +13440,7 @@ fn reddit_metadata(document: &NodeRef, provided_url: Option<&str>, post: &NodeRe
     }
 }
 
-fn reddit_comments(document: &NodeRef, base_url: &str) -> Vec<HackerNewsComment> {
+fn reddit_comments(document: &NodeRef, base_url: &str) -> Vec<Comment> {
     let Ok(matches) = document.select(".commentarea .thing.comment") else {
         return Vec::new();
     };
@@ -12901,7 +13449,7 @@ fn reddit_comments(document: &NodeRef, base_url: &str) -> Vec<HackerNewsComment>
         .collect()
 }
 
-fn reddit_comment(comment: &NodeRef, base_url: &str) -> Option<HackerNewsComment> {
+fn reddit_comment(comment: &NodeRef, base_url: &str) -> Option<Comment> {
     let entry = select_first_node(comment, ".entry")?;
     let author = element_attr(comment, "data-author")
         .or_else(|| select_text(&entry, "a.author"))
@@ -12929,7 +13477,7 @@ fn reddit_comment(comment: &NodeRef, base_url: &str) -> Option<HackerNewsComment
             has_class_token(ancestor, "thing") && has_class_token(ancestor, "comment")
         })
         .count();
-    Some(HackerNewsComment {
+    Some(Comment {
         depth,
         author,
         published,
@@ -15036,7 +15584,11 @@ fn remove_hidden_elements(document: &NodeRef, mut debug_removals: Option<&mut Ve
             if is_hidden && is_substantive_svg_node(node) {
                 return None;
             }
-            if is_hidden && is_inline_footnote_content_node(node) {
+            if is_hidden
+                && (is_inline_footnote_content_node(node)
+                    || (has_class_token(node, "ltx_note_outer")
+                        && has_ancestor_class(node, "ltx_role_footnote")))
+            {
                 return None;
             }
             if is_hidden && is_data_definition_footnote_content_node(node) {
@@ -15309,6 +15861,20 @@ fn should_skip_exact_noise_node(node: &NodeRef, main: Option<&NodeRef>) -> bool 
     {
         return true;
     }
+    if is_data_table_cell(node) {
+        let hidden = node.as_element().is_some_and(|element| {
+            let attrs = element.attributes.borrow();
+            attrs.contains("hidden")
+                || attrs.get("aria-hidden") == Some("true")
+                || attrs.get("class").and_then(hidden_class_token).is_some()
+                || attrs
+                    .get("style")
+                    .is_some_and(|style| HIDDEN_STYLE_RE.is_match(style))
+        });
+        if !hidden {
+            return true;
+        }
+    }
     if tag_name(node).as_deref() == Some("a")
         && has_ancestor_tag(node, &["h1", "h2", "h3", "h4", "h5", "h6"])
     {
@@ -15378,7 +15944,7 @@ fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
     if attr_prefix_ci(class, "ad-") {
         return Some("[class^=\"ad-\" i]");
     }
-    if attr_suffix_ci(class, "-ad") {
+    if attr_suffix_ci(class, "-ad") && !class_token_eq_ci(class, "with-ad") {
         return Some("[class$=\"-ad\" i]");
     }
     if attr_prefix_ci(id, "ad-") {
@@ -15467,8 +16033,11 @@ fn conditional_exact_noise_selector(node: &NodeRef) -> Option<&'static str> {
         && attr_contains_ci(class, "ref")
         && !class_token_eq_ci(class, "ltx_ref")
         && !class_token_eq_ci(class, "footnote-backref")
+        && !class_token_eq_ci(class, "reference")
     {
-        return Some("a[href^=\"#\"][class*=\"ref\" i]:not(.ltx_ref):not(.footnote-backref)");
+        return Some(
+            "a[href^=\"#\"][class*=\"ref\" i]:not(.ltx_ref):not(.footnote-backref):not(.reference)",
+        );
     }
     if attr_contains_ci(
         attrs.get("data-container").unwrap_or_default(),
@@ -15586,6 +16155,12 @@ fn attr_suffix_ci(value: &str, suffix: &str) -> bool {
 }
 
 fn is_exact_noise_footnote_node(node: &NodeRef) -> bool {
+    if tag_name(node).as_deref() == Some("a") && is_footnote_container_node(node) {
+        let root = node.ancestors().last().unwrap_or_else(|| node.clone());
+        return element_attr(node, "href")
+            .and_then(|href| href_fragment(&href))
+            .is_some_and(|id| find_node_by_id(&root, &id).is_some());
+    }
     is_footnote_container_node(node)
         || has_ancestor_matching(node, is_footnote_container_node)
         || count_selector(node, "[data-footnotes], .footnotes, .footnote, .references") > 0
@@ -15716,7 +16291,7 @@ fn remove_partial_noise(
             if is_content_shell_node(node) {
                 return None;
             }
-            if is_table_header_structure_node(node) {
+            if is_table_header_structure_node(node) || is_data_table_cell(node) {
                 return None;
             }
             if is_elementor_text_content_widget(node) {
@@ -16017,9 +16592,15 @@ fn is_non_content_heading_wrapper(node: &NodeRef, text: &str) -> bool {
     let Ok(headings) = node.select("h1, h2, h3, h4, h5, h6") else {
         return false;
     };
-    let has_navigation_heading = headings
-        .map(|heading| normalize_ws(&heading.as_node().text_contents()))
-        .any(|heading| LOW_SCORING_NAVIGATION_RE.is_match(&heading));
+    let mut has_navigation_heading = false;
+    for heading in headings {
+        let text = normalize_ws(&heading.as_node().text_contents());
+        if LOW_SCORING_NAVIGATION_RE.is_match(&text) {
+            has_navigation_heading = true;
+        } else if !text.is_empty() && heading.name.local.as_ref() == "h1" {
+            return false;
+        }
+    }
     if !has_navigation_heading {
         return false;
     }
@@ -16485,7 +17066,7 @@ fn strip_unsafe_elements(document: &NodeRef) {
     let Ok(matches) = document.select(
         "script, style, noscript, template, frame, frameset, object, embed, applet, base, \
          svg script, animate, set, animatemotion, animatetransform, animatecolor, discard, \
-         animateMotion, animateTransform, animateColor",
+         animateMotion, animateTransform, animateColor, math title",
     ) else {
         return;
     };
@@ -16631,17 +17212,35 @@ fn simplify_heading_contents(root: &NodeRef) {
             continue;
         };
         copy_standardized_paragraph_attributes(&heading, &replacement);
-        if has_class_token(&heading, "footnote-body-heading") {
-            replacement
-                .as_element()
-                .unwrap()
-                .attributes
-                .borrow_mut()
-                .insert("class", "footnote-body-heading".to_string());
+        let navigation = heading
+            .descendants()
+            .filter(|node| {
+                tag_name(node).as_deref() == Some("button")
+                    || (node.as_element().is_some()
+                        && (has_class_token(node, "actions")
+                            || has_class_token(node, "permalink-widget")
+                            || has_class_token(node, "anchor")))
+            })
+            .collect::<Vec<_>>();
+        for node in navigation {
+            node.detach();
         }
-        replacement.append(NodeRef::new_text(normalize_ws(&heading.text_contents())));
+        append_heading_content(&heading, &replacement);
         heading.insert_before(replacement);
         heading.detach();
+    }
+}
+
+fn append_heading_content(source: &NodeRef, target: &NodeRef) {
+    for child in source.children().collect::<Vec<_>>() {
+        if child.as_text().is_some()
+            || is_math_node(&child)
+            || (tag_name(&child).as_deref() == Some("sup") && count_selector(&child, "a[href]") > 0)
+        {
+            target.append(child);
+        } else if child.as_element().is_some() {
+            append_heading_content(&child, target);
+        }
     }
 }
 
@@ -16775,7 +17374,6 @@ fn standardize_bare_spans(root: &NodeRef) {
             unwrap_node_children_before(&node);
         }
     }
-    normalize_adjacent_text_nodes(root);
 }
 
 fn normalize_adjacent_text_nodes(root: &NodeRef) {
@@ -16808,6 +17406,14 @@ fn normalize_adjacent_text_nodes(root: &NodeRef) {
 }
 
 fn span_has_upstream_preserved_attributes(node: &NodeRef) -> bool {
+    // These nodes are consumed later by the shared LaTeXML note collector.
+    if has_ancestor_class(node, "ltx_role_footnote")
+        && (has_class_token(node, "ltx_note_content")
+            || has_class_token(node, "ltx_note_mark")
+            || has_class_token(node, "ltx_tag_note"))
+    {
+        return true;
+    }
     let Some(element) = node.as_element() else {
         return false;
     };
@@ -20155,12 +20761,16 @@ fn is_section_breadcrumb_node(
     let Ok(link_url) = page.join(&href) else {
         return false;
     };
+    if normalized_host(&link_url) != normalized_host(page) {
+        return false;
+    }
     let link_path = link_url.path();
     if link_path == "/" || link_path == page_path {
         return false;
     }
 
-    page_path.starts_with(link_path) || is_parent_index_path(link_path, page_path)
+    let parent_prefix = format!("{}/", link_path.trim_end_matches('/'));
+    page_path.starts_with(&parent_prefix) || is_parent_index_path(link_path, page_path)
 }
 
 fn is_parent_index_path(link_path: &str, page_path: &str) -> bool {
@@ -20290,7 +20900,11 @@ fn remove_author_share_widgets(
         .collect::<Vec<_>>();
 
     for node in candidates {
-        if node.parent().is_none() || !is_descendant_of(&node, main) {
+        if node.parent().is_none()
+            || !is_descendant_of(&node, main)
+            || is_inside_pre_or_code(&node)
+            || count_selector(&node, "pre, code") > 0
+        {
             continue;
         }
         let text = normalize_ws(&node.text_contents());
@@ -20332,7 +20946,11 @@ fn remove_social_counters(main: &NodeRef, debug_removals: &mut Option<&mut Vec<D
         .collect();
 
     for node in candidates {
-        if node.parent().is_none() || !is_social_counter_node(&node) {
+        if node.parent().is_none()
+            || is_inside_pre_or_code(&node)
+            || count_selector(&node, "pre, code") > 0
+            || !is_social_counter_node(&node)
+        {
             continue;
         }
         let target = highest_single_child_wrapper(&node, main);
@@ -21935,7 +22553,15 @@ fn has_math_content(node: &NodeRef) -> bool {
 fn callout_info(node: &NodeRef, element: &ElementData) -> Option<CalloutInfo> {
     let attrs = element.attributes.borrow();
     if let Some(kind) = attrs.get("data-callout") {
-        let kind = normalize_callout_kind(kind);
+        let kind = if !kind.is_empty()
+            && kind
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'-'))
+        {
+            kind.to_ascii_lowercase()
+        } else {
+            "note".to_string()
+        };
         return Some(CalloutInfo {
             title: select_first_text(node, ".callout-title-inner")
                 .unwrap_or_else(|| titlecase_ascii(&kind)),
@@ -22222,7 +22848,13 @@ fn math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
 fn markdown_math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo> {
     let tag = element.name.local.as_ref();
     if tag != "math" {
-        return math_info(node, element);
+        let info = math_info(node, element)?;
+        if let Some(math) = select_first_node(node, "math") {
+            return math
+                .as_element()
+                .and_then(|element| markdown_math_info(&math, element));
+        }
+        return Some(info);
     }
 
     let attrs = element.attributes.borrow();
@@ -22252,6 +22884,12 @@ fn markdown_math_info(node: &NodeRef, element: &ElementData) -> Option<MathInfo>
         select_first_text_raw(node, "annotation[encoding=\"application/x-tex\"]").or(alt)
     {
         return MathInfo::new(latex, is_block);
+    }
+    if let Some(latex) = data_latex
+        .as_ref()
+        .filter(|latex| LATEX_MARKER_RE.is_match(latex))
+    {
+        return MathInfo::new(latex.clone(), is_block);
     }
     if let Some(latex) = has_mathml_element_children(node)
         .then(|| mathml_to_latex(node))
@@ -23415,6 +24053,15 @@ fn is_heading_permalink_anchor(anchor: &NodeRef) -> bool {
         return false;
     };
     let attrs = element.attributes.borrow();
+    if attrs.get("role") == Some("doc-noteref")
+        || anchor.ancestors().any(|parent| {
+            tag_name(&parent).as_deref() == Some("sup")
+                && (is_footnote_container_node(&parent)
+                    || node_id(&parent).is_some_and(|id| id.starts_with("fnref:")))
+        })
+    {
+        return false;
+    }
     let href = attrs.get("href").map(str::to_owned).unwrap_or_default();
     let attr_marker = [
         attrs.get("class"),
@@ -23450,7 +24097,7 @@ fn is_heading_permalink_anchor(anchor: &NodeRef) -> bool {
         .as_deref()
         .is_some_and(|id| href_fragment(&href).is_some_and(|fragment| fragment == id));
 
-    fragment_matches_heading || attr_marker
+    fragment_matches_heading || attr_marker || href.starts_with('#')
 }
 
 fn is_heading_anchor_wrapper(anchor: &NodeRef, element: &ElementData) -> bool {
@@ -23923,7 +24570,12 @@ fn html_children_to_org_with_footnotes(node: &NodeRef, footnotes: &FootnoteState
     cleanup_org(&renderer.out)
 }
 
+#[cfg(test)]
 fn html_fragment_to_markdown(html: &str) -> String {
+    markdown_from_html(html, false, "")
+}
+
+fn markdown_from_html(html: &str, standardize: bool, language: &str) -> String {
     if html.trim().is_empty() {
         return String::new();
     }
@@ -23932,7 +24584,21 @@ fn html_fragment_to_markdown(html: &str) -> String {
     // The caller's HTML is normally clean already; do not rely on it, since the
     // HTML kept in the Markdown is written out as it stands.
     sanitize_output_content(&document);
+    if standardize {
+        let body = select_first_node(&document, "body").unwrap();
+        if !has_canonical_footnotes(&body) {
+            standardize_structured_footnotes(&body, &FootnoteState::default());
+        }
+        simplify_heading_contents(&document);
+        standardize_block_links(&document);
+        collapse_consecutive_dividers(&document);
+        remove_empty_lines(&document, language);
+        normalize_adjacent_text_nodes(&document);
+        normalize_inline_spacing(&document, &collect_footnotes(&document));
+    }
+    collapse_markdown_whitespace(&document, &mut None, &mut false);
     let mut renderer = MarkdownRenderer::new();
+    renderer.standardize = standardize;
     if let Ok(body) = document.select_first("body") {
         for child in body.as_node().children() {
             renderer.render_node(&child, false);
@@ -23943,33 +24609,211 @@ fn html_fragment_to_markdown(html: &str) -> String {
     cleanup_markdown(&renderer.out)
 }
 
+fn standardize_block_links(root: &NodeRef) {
+    let links = root
+        .select("a[href]")
+        .unwrap()
+        .map(|node| node.as_node().clone())
+        .collect::<Vec<_>>();
+    for link in links {
+        let Some(heading) = select_first_node(&link, "h1,h2,h3,h4,h5,h6") else {
+            continue;
+        };
+        let href = element_attr(&link, "href").unwrap();
+        if !href.starts_with('#') {
+            let inner = new_html_element("a").unwrap();
+            inner
+                .as_element()
+                .unwrap()
+                .attributes
+                .borrow_mut()
+                .insert("href", href);
+            for child in heading.children().collect::<Vec<_>>() {
+                inner.append(child);
+            }
+            heading.append(inner);
+        }
+        unwrap_node_children_before(&link);
+    }
+}
+
+fn markdown_block_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "address"
+            | "article"
+            | "aside"
+            | "audio"
+            | "blockquote"
+            | "body"
+            | "canvas"
+            | "center"
+            | "dd"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "html"
+            | "li"
+            | "main"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
+            | "video"
+    )
+}
+
+fn collapse_markdown_whitespace(node: &NodeRef, previous: &mut Option<NodeRef>, keep: &mut bool) {
+    static SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ \r\n\t]+").unwrap());
+    let tag = tag_name(node).unwrap_or_default();
+    let block = markdown_block_tag(&tag) || tag == "br";
+    let trim_previous = |previous: &mut Option<NodeRef>| {
+        if let Some(node) = previous.take() {
+            if let Some(text) = node.as_text() {
+                let mut text = text.borrow_mut();
+                if text.ends_with(' ') {
+                    text.pop();
+                }
+            }
+        }
+    };
+    if block {
+        trim_previous(previous);
+        *keep = false;
+    }
+    if let Some(text) = node.as_text() {
+        let mut value = SPACE.replace_all(&text.borrow(), " ").into_owned();
+        let preceded = previous
+            .as_ref()
+            .and_then(|node| node.as_text())
+            .is_some_and(|text| text.borrow().ends_with(' '));
+        if (previous.is_none() || preceded) && !*keep && value.starts_with(' ') {
+            value.remove(0);
+        }
+        if value.is_empty() {
+            node.detach();
+            return;
+        }
+        *text.borrow_mut() = value;
+        *previous = Some(node.clone());
+    } else if tag == "pre" || tag == "code" {
+        *previous = None;
+        *keep = true;
+        return;
+    } else if markdown_void_html_tag(&tag) && tag != "br" {
+        *previous = None;
+        *keep = true;
+    } else {
+        for child in node.children().collect::<Vec<_>>() {
+            collapse_markdown_whitespace(&child, previous, keep);
+        }
+    }
+    if block {
+        trim_previous(previous);
+        *keep = false;
+    }
+}
+
+fn join_markdown(mut left: String, right: &str) -> String {
+    let a = left.len() - left.trim_end_matches('\n').len();
+    let b = right.len() - right.trim_start_matches('\n').len();
+    left.truncate(left.len() - a);
+    left.push_str(&"\n".repeat(a.max(b).min(2)));
+    let right = right.trim_start_matches('\n');
+    if a == 0
+        && b == 0
+        && left.ends_with('!')
+        && (right.starts_with("![") || right.starts_with("[!["))
+    {
+        left.push(' ');
+    }
+    left.push_str(right);
+    left
+}
+
 struct MarkdownRenderer {
     out: String,
-    list_depth: usize,
-    suppress_next_space: bool,
     force_inline_math: bool,
+    standardize: bool,
 }
 
 impl MarkdownRenderer {
     fn new() -> Self {
         Self {
             out: String::new(),
-            list_depth: 0,
-            suppress_next_space: false,
             force_inline_math: false,
+            standardize: false,
+        }
+    }
+
+    fn nested(&self) -> Self {
+        Self {
+            out: String::new(),
+            force_inline_math: self.force_inline_math,
+            standardize: self.standardize,
         }
     }
 
     fn render_node(&mut self, node: &NodeRef, inline: bool) {
+        let before = std::mem::take(&mut self.out);
         match node.data() {
-            NodeData::Text(text) => self.push_plain_text(&text.borrow()),
-            NodeData::Element(element) => self.render_element(node, element, inline),
+            NodeData::Text(text) => self.push_plain_text(node, &text.borrow()),
+            NodeData::Element(element) => {
+                self.render_element(node, element, inline);
+                let tag = element.name.local.as_ref();
+                if !markdown_block_tag(tag)
+                    && !matches!(tag, "code" | "pre")
+                    && !self.out.is_empty()
+                {
+                    let text = node.text_contents();
+                    let leading = text.len() - text.trim_start().len();
+                    let trailing = text.len() - text.trim_end().len();
+                    if leading > 0
+                        && leading < text.len()
+                        && !previous_sibling_ends_with_whitespace(node)
+                    {
+                        self.out.insert_str(0, &text[..leading]);
+                    }
+                    if trailing > 0
+                        && trailing < text.len()
+                        && !node
+                            .next_sibling()
+                            .and_then(|n| n.as_text().map(|t| t.borrow().starts_with(' ')))
+                            .unwrap_or(false)
+                    {
+                        self.out.push_str(&text[text.len() - trailing..]);
+                    }
+                }
+            }
             _ => {
                 for child in node.children() {
                     self.render_node(&child, inline);
                 }
             }
         }
+        self.out = join_markdown(before, &self.out);
     }
 
     fn render_element(&mut self, node: &NodeRef, element: &ElementData, inline: bool) {
@@ -23996,7 +24840,7 @@ impl MarkdownRenderer {
         let tag = element.name.local.as_ref();
         match tag {
             "script" | "style" | "noscript" | "template" => {}
-            "wbr" => self.suppress_next_space = true,
+            "wbr" => {}
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = tag[1..].parse::<usize>().unwrap_or(2).clamp(1, 6);
                 let text = self.render_inline_children(node);
@@ -24008,13 +24852,8 @@ impl MarkdownRenderer {
                     self.out.push_str("\n\n");
                 }
             }
-            "p" if inline => {
-                for child in node.children() {
-                    self.render_node(&child, true);
-                }
-            }
             "p" => self.render_block_children(node),
-            "br" => self.out.push('\n'),
+            "br" => self.out.push_str("  \n"),
             "hr" => self.render_horizontal_rule(),
             "a" if markdown_is_complex_link_structure(node) => {
                 self.render_complex_link_structure(node, element)
@@ -24022,25 +24861,22 @@ impl MarkdownRenderer {
             "a" => self.render_link(node, element),
             "img" => self.render_image(element),
             "figure" => self.render_figure(node),
-            "figcaption" => self.render_block_children(node),
+            "figcaption" | "dt" | "dd" => self.render_block_children(node),
             "iframe" => self.render_iframe(node, element, inline),
             "video" | "audio" => self.render_raw_html(node, inline),
             "ol" if markdown_is_footnotes_list(node) => self.render_footnotes_list(node),
             "ol" if markdown_is_arxiv_enumerate(element) => self.render_arxiv_enumerate(node),
             "ul" | "ol" => {
                 self.ensure_newline();
-                self.list_depth += 1;
                 for child in node.children() {
                     self.render_node(&child, false);
                 }
-                self.list_depth = self.list_depth.saturating_sub(1);
                 self.ensure_newline();
             }
             "li" => self.render_list_item(node),
             "blockquote" => self.render_quote(node),
             "pre" => self.render_fenced_code(node),
-            "code" if inline => self.render_inline_code_text(&node.text_contents()),
-            "code" => self.render_fenced_code(node),
+            "code" => self.render_inline_code_text(&self.render_inline_children(node)),
             "table" => self.render_table(node),
             "tr" | "td" | "th" | "thead" | "tbody" | "tfoot" => {}
             "strong" | "b" => self.render_wrapped(node, "**"),
@@ -24049,14 +24885,13 @@ impl MarkdownRenderer {
             "mark" => self.render_wrapped(node, "=="),
             "sup" | "sub" => self.render_raw_inline_html(node),
             "article" | "main" | "section" | "div" | "body" | "html" => {
+                self.ensure_blank_line();
                 for child in node.children() {
                     self.render_node(&child, inline);
                 }
-                if !inline {
-                    self.ensure_newline();
-                }
+                self.ensure_blank_line();
             }
-            "svg" => self.render_raw_html(node, inline),
+            "svg" => self.render_raw_inline_html(node),
             _ => {
                 for child in node.children() {
                     self.render_node(&child, inline);
@@ -24096,12 +24931,7 @@ impl MarkdownRenderer {
     }
 
     fn render_complex_link_remaining(&self, node: &NodeRef, heading: &NodeRef) -> String {
-        let mut nested = MarkdownRenderer {
-            out: String::new(),
-            list_depth: self.list_depth,
-            suppress_next_space: false,
-            force_inline_math: self.force_inline_math,
-        };
+        let mut nested = self.nested();
         for child in node.children() {
             if child == *heading {
                 continue;
@@ -24131,12 +24961,7 @@ impl MarkdownRenderer {
     }
 
     fn render_arxiv_enumerate_item_content(&self, node: &NodeRef) -> String {
-        let mut nested = MarkdownRenderer {
-            out: String::new(),
-            list_depth: self.list_depth,
-            suppress_next_space: false,
-            force_inline_math: self.force_inline_math,
-        };
+        let mut nested = self.nested();
         let mut skipped_tag = false;
         for child in node.children() {
             if !skipped_tag && markdown_is_ltx_tag_item(&child) {
@@ -24211,12 +25036,8 @@ impl MarkdownRenderer {
 
     fn render_figure_caption(&self, node: &NodeRef) -> String {
         let tag = select_first_text(node, ".ltx_tag_figure").unwrap_or_default();
-        let mut nested = MarkdownRenderer {
-            out: String::new(),
-            list_depth: self.list_depth,
-            suppress_next_space: false,
-            force_inline_math: true,
-        };
+        let mut nested = self.nested();
+        nested.force_inline_math = true;
         for child in node.children() {
             nested.render_node(&child, true);
         }
@@ -24241,12 +25062,7 @@ impl MarkdownRenderer {
     }
 
     fn render_callout(&mut self, node: &NodeRef, callout: CalloutInfo) {
-        let mut nested = MarkdownRenderer {
-            out: String::new(),
-            list_depth: self.list_depth,
-            suppress_next_space: false,
-            force_inline_math: self.force_inline_math,
-        };
+        let mut nested = self.nested();
         match callout.content_node {
             Some(content) => {
                 for child in content.children() {
@@ -24278,7 +25094,7 @@ impl MarkdownRenderer {
         let content = cleanup_markdown(&nested.out);
         for line in content.trim().lines() {
             if line.is_empty() {
-                self.out.push('>');
+                self.out.push_str("> ");
             } else {
                 self.out.push_str("> ");
                 self.out.push_str(line);
@@ -24297,7 +25113,13 @@ impl MarkdownRenderer {
     }
 
     fn render_raw_block_html(&mut self, node: &NodeRef) {
-        let html = markdown_inert_html(node, &|_| true);
+        let html = markdown_inert_html(node, &|name| {
+            !self.standardize
+                || name == "xmlns"
+                || tag_name(node).as_deref() == Some("svg")
+                || has_ancestor_tag(node, &["svg"])
+                || upstream_allows_attribute(name)
+        });
         let html = html.trim();
         if html.is_empty() {
             return;
@@ -24308,21 +25130,13 @@ impl MarkdownRenderer {
     }
 
     fn render_raw_inline_html(&mut self, node: &NodeRef) {
-        let html = markdown_inert_html(node, &|_| true);
-        let html = html.trim();
-        if html.is_empty() {
-            return;
-        }
-        if previous_sibling_ends_with_whitespace(node)
-            && !self.out.chars().last().is_some_and(char::is_whitespace)
-            && needs_space_before(&self.out, html)
-        {
-            self.out.push(' ');
-        }
-        self.out.push_str(html);
-        if next_sibling_starts_without_whitespace(node) {
-            self.suppress_next_space = true;
-        }
+        self.out.push_str(&markdown_inert_html(node, &|name| {
+            !self.standardize
+                || name == "xmlns"
+                || tag_name(node).as_deref() == Some("svg")
+                || has_ancestor_tag(node, &["svg"])
+                || upstream_allows_attribute(name)
+        }));
     }
 
     fn render_block_image_link(&mut self, url: &str) {
@@ -24348,8 +25162,17 @@ impl MarkdownRenderer {
     }
 
     fn render_link(&mut self, node: &NodeRef, element: &ElementData) {
+        if has_ancestor_tag(node, &["code"]) {
+            for child in node.children() {
+                self.render_node(&child, true);
+            }
+            return;
+        }
         let attrs = element.attributes.borrow();
-        let href = attrs.get("href").map(str::to_owned);
+        let href = attrs
+            .get("href")
+            .filter(|href| !href.trim().is_empty())
+            .map(str::to_owned);
         let title = attrs.get("title").map(str::to_owned);
         drop(attrs);
         if href.as_deref().map_or(true, is_dangerous_url) {
@@ -24374,7 +25197,6 @@ impl MarkdownRenderer {
             return;
         }
 
-        self.ensure_inline_space("[");
         let label = label.trim();
         self.out.push('[');
         self.out.push_str(label);
@@ -24390,7 +25212,6 @@ impl MarkdownRenderer {
         let alt = attrs.get("alt").unwrap_or("");
         let title = attrs.get("title");
         if let Some(src) = src.filter(|src| !src.trim().is_empty() && !is_dangerous_url(src)) {
-            self.ensure_inline_space("!");
             self.out.push_str("![");
             self.out.push_str(&escape_markdown_link_text(alt.trim()));
             self.out.push_str("](");
@@ -24401,27 +25222,26 @@ impl MarkdownRenderer {
     }
 
     fn render_list_item(&mut self, node: &NodeRef) {
-        self.ensure_newline();
-        self.out
-            .push_str(&"\t".repeat(self.list_depth.saturating_sub(1)));
+        let content = self.render_block_children_to_string(node);
+        let mut fence = None;
+        let lines = content
+            .lines()
+            .filter(|line| {
+                let in_fence = markdown_fence_line(line, &mut fence);
+                !line.is_empty() || in_fence
+            })
+            .collect::<Vec<_>>();
+        let content = lines.join("\n\t");
         if let Some(number) = markdown_ordered_list_number(node) {
-            self.out.push_str(&number.to_string());
-            self.out.push_str(". ");
+            self.out.push_str(&format!("{number}. "));
         } else {
             self.out.push_str("- ");
         }
         if let Some(checked) = markdown_task_list_marker(node) {
             self.out.push_str(if checked { "[x] " } else { "[ ] " });
         }
-
-        for child in node.children() {
-            if matches!(tag_name(&child).as_deref(), Some("ul" | "ol")) {
-                self.render_node(&child, false);
-            } else {
-                self.render_node(&child, true);
-            }
-        }
-        self.ensure_newline();
+        self.out.push_str(content.trim());
+        self.out.push('\n');
     }
 
     fn render_footnotes_list(&mut self, node: &NodeRef) {
@@ -24443,17 +25263,12 @@ impl MarkdownRenderer {
     }
 
     fn render_footnote_definition_content(&self, node: &NodeRef, id: &str) -> String {
-        let mut nested = MarkdownRenderer {
-            out: String::new(),
-            list_depth: 0,
-            suppress_next_space: false,
-            force_inline_math: self.force_inline_math,
-        };
+        let mut nested = self.nested();
         for child in node.children() {
             if markdown_is_redundant_footnote_label(&child, id) {
                 continue;
             }
-            nested.render_node(&child, true);
+            nested.render_node(&child, false);
         }
         cleanup_markdown(&nested.out)
             .trim()
@@ -24471,10 +25286,10 @@ impl MarkdownRenderer {
         self.ensure_blank_line();
         for line in content.lines() {
             if line.trim().is_empty() {
-                self.out.push('>');
+                self.out.push_str("> ");
             } else {
                 self.out.push_str("> ");
-                self.out.push_str(line.trim_end());
+                self.out.push_str(line);
             }
             self.out.push('\n');
         }
@@ -24482,35 +25297,49 @@ impl MarkdownRenderer {
     }
 
     fn render_math(&mut self, node: &NodeRef, math: MathInfo) {
-        if !self.force_inline_math && (math.is_block || is_standalone_node_in_block(node)) {
-            self.ensure_blank_line();
-            self.out.push_str("$$\n");
-            self.out.push_str(&math.latex);
-            self.out.push_str("\n$$\n\n");
+        static HTML_TAG: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?i)<([!?/]|[a-z][a-z0-9-]*(?:\s|/|>))").unwrap());
+        static LINK: Lazy<Regex> = Lazy::new(|| Regex::new(r"\]([(:\[])").unwrap());
+        static LITERAL: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(
+                r"\\(?:text[a-z]*|mbox|hbox|vbox|verb|url|href|operatorname|tag|label|ref|eqref)\b",
+            )
+            .unwrap()
+        });
+        let block = !self.force_inline_math
+            && !has_ancestor_tag(node, &["table"])
+            && (math.is_block
+                || (node.as_element().is_some()
+                    && node
+                        .parent()
+                        .is_some_and(|parent| tag_name(&parent).as_deref() == Some("p"))
+                    && is_standalone_node_in_block(node)));
+        let safe = HTML_TAG.replace_all(&math.latex, "< $1");
+        let safe = LINK.replace_all(&safe, "] $1");
+        if safe != math.latex && LITERAL.is_match(&math.latex) {
+            self.out.push_str(&if block {
+                markdown_fenced_code(&math.latex, None)
+            } else {
+                markdown_code_span(&math.latex)
+            });
+        } else if block {
+            self.out.push_str(&format!("\n$$\n{safe}\n$$\n"));
         } else {
-            self.ensure_inline_space("$");
-            self.out.push('$');
-            self.out.push_str(&math.latex);
-            self.out.push('$');
+            self.out.push_str(&format!("${safe}$"));
         }
     }
 
     fn render_fenced_code(&mut self, node: &NodeRef) {
         let text = code_block_text(node);
-        let text = text.trim();
-        if text.is_empty() {
-            return;
-        }
-        let text = text.replace('`', "\\`");
-        self.ensure_blank_line();
-        self.out.push_str("```");
-        if let Some(language) = code_language(node) {
-            self.out.push_str(&language);
-        }
-        self.out.push('\n');
-        self.out.push_str(&text);
-        self.out.push('\n');
-        self.out.push_str("```\n\n");
+        let language = select_first_node(node, "code")
+            .and_then(|code| {
+                element_attr(&code, "data-lang").or_else(|| element_attr(&code, "data-language"))
+            })
+            .or_else(|| code_language_in_subtree(node))
+            .or_else(|| code_language(node))
+            .or_else(|| infer_code_language_from_text(&text));
+        self.out
+            .push_str(&markdown_fenced_code(&text, language.as_deref()));
     }
 
     fn render_inline_code_text(&mut self, text: &str) {
@@ -24518,7 +25347,6 @@ impl MarkdownRenderer {
         if text.is_empty() {
             return;
         }
-        self.ensure_inline_space("`");
         self.out.push_str(&markdown_code_span(&text));
     }
 
@@ -24539,10 +25367,13 @@ impl MarkdownRenderer {
             return;
         }
 
-        if let Some(cells) = markdown_layout_table_cells(node) {
+        if is_layout_table(node) && !markdown_table_has_spans(node) {
             self.ensure_blank_line();
+            let rows = direct_table_rows(node);
+            let cells = dominant_layout_table_cells(&rows)
+                .unwrap_or_else(|| rows.iter().flat_map(direct_row_cells).collect());
             for cell in cells {
-                for child in cell.children() {
+                for child in layout_cell_content_children(&cell) {
                     self.render_node(&child, false);
                 }
                 self.ensure_blank_line();
@@ -24614,19 +25445,13 @@ impl MarkdownRenderer {
         if inner.is_empty() {
             return;
         }
-        self.ensure_inline_space(marker);
         self.out.push_str(marker);
         self.out.push_str(&inner);
         self.out.push_str(marker);
     }
 
     fn render_inline_children(&self, node: &NodeRef) -> String {
-        let mut nested = MarkdownRenderer {
-            out: String::new(),
-            list_depth: self.list_depth,
-            suppress_next_space: false,
-            force_inline_math: self.force_inline_math,
-        };
+        let mut nested = self.nested();
         for child in node.children() {
             nested.render_node(&child, true);
         }
@@ -24634,30 +25459,47 @@ impl MarkdownRenderer {
     }
 
     fn render_block_children_to_string(&self, node: &NodeRef) -> String {
-        let mut nested = MarkdownRenderer {
-            out: String::new(),
-            list_depth: self.list_depth,
-            suppress_next_space: false,
-            force_inline_math: self.force_inline_math,
-        };
+        let mut nested = self.nested();
         for child in node.children() {
             nested.render_node(&child, false);
         }
         cleanup_markdown(&nested.out).trim().to_string()
     }
 
-    fn push_plain_text(&mut self, text: &str) {
-        let text = normalize_ws(text);
-        if text.is_empty() {
+    fn push_plain_text(&mut self, node: &NodeRef, text: &str) {
+        if has_ancestor_tag(node, &["code"]) {
+            self.out.push_str(text);
             return;
         }
-        let text = escape_markdown_text(&text);
-        if self.suppress_next_space {
-            self.suppress_next_space = false;
-        } else if needs_space_before(&self.out, &text) {
-            self.out.push(' ');
+
+        let mut last = 0;
+        for captures in RAW_LATEX_RE.captures_iter(text) {
+            let full = captures.get(0).unwrap();
+            let Some((latex, block, backslash)) = raw_latex_capture(&captures) else {
+                continue;
+            };
+            if !is_valid_raw_latex(latex.as_str().trim(), block, backslash) {
+                continue;
+            }
+            self.out
+                .push_str(&escape_markdown_text(&text[last..full.start()]));
+            let standalone = text[..full.start()].trim().is_empty()
+                && text[full.end()..].trim().is_empty()
+                && (block
+                    || (node
+                        .parent()
+                        .is_some_and(|parent| tag_name(&parent).as_deref() == Some("p"))
+                        && is_standalone_node_in_block(node)));
+            self.render_math(
+                node,
+                MathInfo {
+                    latex: clean_math_latex(latex.as_str()),
+                    is_block: standalone,
+                },
+            );
+            last = full.end();
         }
-        self.out.push_str(&text);
+        self.out.push_str(&escape_markdown_text(&text[last..]));
     }
 
     fn ensure_newline(&mut self) {
@@ -24671,16 +25513,28 @@ impl MarkdownRenderer {
             self.out.push('\n');
         }
     }
+}
 
-    fn ensure_inline_space(&mut self, next: &str) {
-        if next == "!" && self.out.ends_with('!') {
-            self.out.push(' ');
-            return;
-        }
-        if needs_space_before(&self.out, next) {
-            self.out.push(' ');
-        }
+fn markdown_fenced_code(text: &str, language: Option<&str>) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
     }
+    let fence = "`".repeat(
+        text.split(|ch| ch != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0)
+            .max(2)
+            + 1,
+    );
+    let language = language
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .replace('`', "");
+    format!("\n{fence}{language}\n{text}\n{fence}\n")
 }
 
 fn markdown_ordered_list_number(node: &NodeRef) -> Option<usize> {
@@ -24778,25 +25632,6 @@ fn markdown_equation_table_math(node: &NodeRef) -> Option<Vec<MathInfo>> {
         .collect::<Vec<_>>();
 
     Some(equations)
-}
-
-fn markdown_layout_table_cells(node: &NodeRef) -> Option<Vec<NodeRef>> {
-    let rows = direct_table_rows(node);
-    let cells = rows.iter().flat_map(direct_row_cells).collect::<Vec<_>>();
-    let has_nested_tables = node
-        .descendants()
-        .any(|descendant| descendant != *node && tag_name(&descendant).as_deref() == Some("table"));
-    if !has_nested_tables && cells.len() > 1 {
-        return None;
-    }
-
-    let cell_counts = rows.iter().map(direct_row_cells).map(|cells| cells.len());
-    let cell_counts = cell_counts.collect::<Vec<_>>();
-    let is_single_column = cell_counts
-        .first()
-        .is_some_and(|first| *first <= 1 && cell_counts.iter().all(|count| count == first));
-
-    (is_single_column || has_nested_tables).then_some(cells)
 }
 
 fn markdown_table_has_spans(node: &NodeRef) -> bool {
@@ -24986,6 +25821,7 @@ fn markdown_is_redundant_footnote_label(node: &NodeRef, id: &str) -> bool {
 #[derive(Debug, Default)]
 struct FootnoteState {
     entries: Vec<FootnoteEntry>,
+    inline_references: HashMap<usize, usize>,
     by_id: HashMap<String, usize>,
     numbers: HashSet<usize>,
     reference_counts: HashMap<usize, usize>,
@@ -25126,7 +25962,14 @@ impl<'a> OrgRenderer<'a> {
             "script" | "style" | "noscript" | "template" => {}
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = tag[1..].parse::<usize>().unwrap_or(2).max(1);
-                let text = cleanup_inline(&node.text_contents());
+                let text = if count_selector(node, "math, sup a[href]") > 0 {
+                    self.render_inline_children(node)
+                        .trim_start_matches('*')
+                        .trim()
+                        .to_string()
+                } else {
+                    escape_org_headline(&cleanup_inline(&node.text_contents()))
+                };
                 if self.options.standardize && is_standalone_date(&text) {
                     return;
                 }
@@ -25134,7 +25977,7 @@ impl<'a> OrgRenderer<'a> {
                     self.ensure_blank_line();
                     self.out.push_str(&"*".repeat(level));
                     self.out.push(' ');
-                    self.out.push_str(&escape_org_headline(&text));
+                    self.out.push_str(&text);
                     self.out.push_str("\n\n");
                 }
             }
@@ -25854,6 +26697,9 @@ impl<'a> OrgRenderer<'a> {
         if self.rendering_footnote_defs {
             return None;
         }
+        if let Some(number) = self.footnotes.inline_references.get(&node_key(node)) {
+            return Some(*number);
+        }
         let tag = element.name.local.as_ref();
         if !matches!(tag, "a" | "sup" | "span" | "label") {
             return None;
@@ -25909,6 +26755,9 @@ fn clean_footnote_definition_content(content: &str, number: usize) -> String {
 fn collect_footnotes(root: &NodeRef) -> FootnoteState {
     let mut state = FootnoteState::default();
     collect_arxiv_bibliography_footnotes(root, &mut state);
+    collect_inline_sidenotes(root, &mut state);
+    collect_data_definition_footnotes(root, &mut state);
+    collect_latexml_footnotes(root, &mut state);
     collect_structured_footnotes(root, &mut state);
     collect_easy_footnote_wrapper_fallbacks(root, &mut state);
     collect_br_separated_footnotes(root, &mut state);
@@ -25917,7 +26766,6 @@ fn collect_footnotes(root: &NodeRef) -> FootnoteState {
     collect_orgmode_css_footnotes(root, &mut state);
     collect_texinfo_footnotes(root, &mut state);
     collect_dhammatalks_note_footnotes(root, &mut state);
-    collect_data_definition_footnotes(root, &mut state);
     collect_aside_ordered_footnotes(root, &mut state);
     collect_reference_list_anchor_footnotes(root, &mut state);
     collect_class_paragraph_footnotes(root, &mut state);
@@ -25976,6 +26824,62 @@ fn remove_adopted_footnote_heading(node: &NodeRef) {
     }
 }
 
+fn collect_inline_sidenotes(root: &NodeRef, state: &mut FootnoteState) {
+    let Ok(containers) = root.select("span.sidenote-container") else {
+        return;
+    };
+    for container in containers {
+        let container = container.as_node();
+        let Some(content) = select_first_node(container, ".sidenote") else {
+            continue;
+        };
+        let id = format!("inline-sidenote-{}", node_key(container));
+        add_footnote_entry(state, id.clone(), content, None);
+        if let Some(number) = state.by_id.get(&id) {
+            state.inline_references.insert(node_key(container), *number);
+        }
+    }
+}
+
+fn collect_latexml_footnotes(root: &NodeRef, state: &mut FootnoteState) {
+    let Ok(notes) = root.select("span.ltx_note.ltx_role_footnote") else {
+        return;
+    };
+    let mut seen = HashMap::new();
+    for note in notes {
+        let note = note.as_node();
+        let Some(content) = select_first_node(note, ".ltx_note_content") else {
+            continue;
+        };
+        let mark = select_text(note, ".ltx_note_mark").unwrap_or_default();
+        let content = kuchiki::parse_html().one(serialize_children_html(&content));
+        let labels = content
+            .select(".ltx_note_mark, .ltx_tag_note")
+            .ok()
+            .into_iter()
+            .flatten()
+            .map(|node| node.as_node().clone())
+            .collect::<Vec<_>>();
+        for label in labels {
+            label.detach();
+        }
+        let content = select_first_node(&content, "body").unwrap_or(content);
+        let key = (mark, serialize_children_html(&content).trim().to_string());
+        let number = if let Some(number) = seen.get(&key) {
+            *number
+        } else {
+            let id = node_id(note).unwrap_or_else(|| format!("latexml-note-{}", node_key(note)));
+            add_footnote_entry(state, id.clone(), content, None);
+            let Some(number) = state.by_id.get(&id.to_ascii_lowercase()).copied() else {
+                continue;
+            };
+            seen.insert(key, number);
+            number
+        };
+        state.inline_references.insert(node_key(note), number);
+    }
+}
+
 fn collect_arxiv_bibliography_footnotes(root: &NodeRef, state: &mut FootnoteState) {
     let Ok(matches) = root.select(".ltx_bibliography") else {
         return;
@@ -26003,7 +26907,7 @@ fn collect_arxiv_bibliography_footnotes(root: &NodeRef, state: &mut FootnoteStat
 
 fn render_footnote_content_node(renderer: &mut OrgRenderer<'_>, node: &NodeRef) {
     match tag_name(node).as_deref() {
-        Some("p" | "li" | "div" | "span" | "aside") => {
+        Some("p" | "li" | "div" | "span" | "aside" | "body") => {
             for child in node.children() {
                 renderer.render_node(&child, true);
             }
@@ -26125,12 +27029,13 @@ fn collect_br_separated_footnotes(root: &NodeRef, state: &mut FootnoteState) {
             continue;
         }
         for (id, nodes) in definitions {
-            if let Some(wrapper) = new_html_element("div") {
-                for node in nodes {
-                    wrapper.append(node);
-                }
-                add_footnote_entry(state, id, wrapper, None);
-            }
+            let html = nodes
+                .iter()
+                .map(|node| serialize_node(node).unwrap())
+                .collect::<String>();
+            let fragment = kuchiki::parse_html().one(html);
+            let content = select_first_node(&fragment, "body").unwrap();
+            add_footnote_entry(state, id, content, None);
         }
         state.definition_nodes.insert(node_key(block));
         mark_previous_footnote_separator(state, block);
@@ -26694,7 +27599,10 @@ fn add_footnote_entry_nodes(
     if aliases.iter().any(|alias| state.by_id.contains_key(alias)) {
         return;
     }
-    let number = explicit_number.unwrap_or_else(|| state.entries.len() + 1);
+    let next = state.numbers.iter().copied().max().unwrap_or(0) + 1;
+    let number = explicit_number
+        .filter(|number| !state.numbers.contains(number))
+        .unwrap_or(next);
     for content_node in &content_nodes {
         collect_footnote_noise_nodes(state, content_node);
     }
@@ -27352,7 +28260,22 @@ fn is_inline_footnote_content_node(node: &NodeRef) -> bool {
 }
 
 fn is_data_definition_footnote_content_node(node: &NodeRef) -> bool {
-    has_class_token(node, "fna-content") && node_id(node).is_some()
+    let Some(id) = node_id(node) else {
+        return false;
+    };
+    if has_class_token(node, "fna-content") {
+        return true;
+    }
+    if tag_name(node).as_deref() != Some("aside") {
+        return false;
+    }
+    let root = node.ancestors().last().unwrap_or_else(|| node.clone());
+    root.select("[data-definition]").is_ok_and(|mut refs| {
+        refs.any(|reference| {
+            element_attr(reference.as_node(), "data-definition")
+                .is_some_and(|target| target.eq_ignore_ascii_case(&id))
+        })
+    })
 }
 
 fn is_arxiv_footnote_mark_node(node: &NodeRef) -> bool {
@@ -27437,6 +28360,13 @@ fn extract_json_ld(document: &NodeRef) -> Vec<Value> {
     };
     matches
         .filter_map(|node| serde_json::from_str::<Value>(&node.text_contents()).ok())
+        .flat_map(|value| {
+            value
+                .get("@graph")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_else(|| vec![value])
+        })
         .collect()
 }
 
@@ -27459,21 +28389,11 @@ fn collect_meta_tags(document: &NodeRef) -> Vec<MetaTagItem> {
     matches
         .filter_map(|matched| {
             let attrs = matched.attributes.borrow();
-            let name = attrs
-                .get("name")
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let property = attrs
-                .get("property")
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let content = attrs.get("content").map(str::to_string);
-            (name.is_some() || property.is_some() || content.is_some()).then_some(MetaTagItem {
-                name,
-                property,
-                content,
+            let content = attrs.get("content").filter(|value| !value.is_empty())?;
+            Some(MetaTagItem {
+                name: attrs.get("name").map(str::to_string),
+                property: attrs.get("property").map(str::to_string),
+                content: Some(content.to_string()),
             })
         })
         .collect()
@@ -27481,25 +28401,12 @@ fn collect_meta_tags(document: &NodeRef) -> Vec<MetaTagItem> {
 
 fn schema_string(values: &[Value], paths: &[&str]) -> Option<String> {
     for path in paths {
+        let parts = path.split('.').collect::<Vec<_>>();
         for value in values {
-            if let Some(found) = schema_path(value, path) {
+            if let Some(found) = schema_path_parts(value, &parts) {
                 if !found.trim().is_empty() {
                     return Some(found);
                 }
-            }
-        }
-    }
-    None
-}
-
-fn schema_path(value: &Value, path: &str) -> Option<String> {
-    if let Some(found) = schema_path_parts(value, &path.split('.').collect::<Vec<_>>()) {
-        return Some(found);
-    }
-    if let Some(graph) = value.get("@graph").and_then(Value::as_array) {
-        for item in graph {
-            if let Some(found) = schema_path_parts(item, &path.split('.').collect::<Vec<_>>()) {
-                return Some(found);
             }
         }
     }
@@ -28604,7 +29511,12 @@ fn resolve_srcset(base: &Url, srcset: &str) -> String {
 }
 
 fn is_placeholder(value: &str) -> bool {
-    value.contains('{') || value.contains('}') || !value.chars().any(|c| c.is_alphanumeric())
+    static TEMPLATE_FIELD: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^#[a-zA-Z_$][\w$]*(\.[\w$]+)+$").unwrap());
+    value.contains('{')
+        || value.contains('}')
+        || TEMPLATE_FIELD.is_match(value)
+        || !value.chars().any(|c| c.is_alphanumeric())
 }
 
 fn is_html_or_body_node(node: &NodeRef) -> bool {
@@ -28694,6 +29606,34 @@ fn is_signature_footer_node(node: &NodeRef) -> bool {
     }
     let words = count_words(&node.text_contents());
     words <= 20 && count_selector(node, "a[href]") <= 3
+}
+
+fn is_data_table_cell(node: &NodeRef) -> bool {
+    if !matches!(tag_name(node).as_deref(), Some("tr" | "td" | "th")) {
+        return false;
+    }
+    let Some(table) = node
+        .ancestors()
+        .find(|node| tag_name(node).as_deref() == Some("table"))
+    else {
+        return false;
+    };
+    if count_selector(&table, "pre") > 0 {
+        return false;
+    }
+    let header_row = |row: &NodeRef| {
+        element_children(row)
+            .iter()
+            .any(|cell| tag_name(cell).as_deref() == Some("th"))
+    };
+    element_children(&table)
+        .iter()
+        .any(|child| match tag_name(child).as_deref() {
+            Some("caption" | "thead") => true,
+            Some("tr") => header_row(child),
+            Some("tbody") => element_children(child).iter().any(header_row),
+            _ => false,
+        })
 }
 
 fn is_table_header_structure_node(node: &NodeRef) -> bool {
@@ -28884,14 +29824,16 @@ fn element_attr_fingerprint(node: &kuchiki::NodeDataRef<ElementData>) -> String 
 }
 
 fn partial_selector_attr_fingerprint(node: &kuchiki::NodeDataRef<ElementData>) -> String {
+    static ARBITRARY_CLASS: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[[^\]]*\]").unwrap());
     let tag = node.name.local.as_ref();
     let attrs = node.attributes.borrow();
+    let class = ARBITRARY_CLASS.replace_all(attrs.get("class").unwrap_or_default(), "");
     if matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
-        return attrs.get("class").unwrap_or_default().to_string();
+        return class.into_owned();
     }
 
     [
-        attrs.get("class"),
+        Some(class.as_ref()),
         attrs.get("data-component"),
         attrs.get("data-test"),
         attrs.get("data-testid"),
@@ -28907,14 +29849,35 @@ fn partial_selector_attr_fingerprint(node: &kuchiki::NodeDataRef<ElementData>) -
 
 fn partial_selector_id(node: &kuchiki::NodeDataRef<ElementData>) -> String {
     let tag = node.name.local.as_ref();
-    if matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+    if matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+        || (is_standard_inline_element(tag) && has_ancestor_tag(node.as_node(), &["p"]))
+    {
         return String::new();
     }
-    node.attributes
-        .borrow()
-        .get("id")
-        .unwrap_or_default()
-        .to_string()
+    let attrs = node.attributes.borrow();
+    let id = attrs.get("id").unwrap_or_default();
+    let level_section = tag == "section"
+        && attrs.get("class").is_some_and(|class| {
+            class.split_ascii_whitespace().any(|token| {
+                token.strip_prefix("level").is_some_and(|level| {
+                    !level.is_empty() && level.bytes().all(|ch| ch.is_ascii_digit())
+                })
+            })
+        });
+    if level_section {
+        static SLUG_SEPARATORS: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^\p{L}\p{N}]+").unwrap());
+        let heading = select_text(node.as_node(), "h1, h2, h3, h4, h5, h6")
+            .unwrap_or_default()
+            .to_lowercase();
+        let slug = SLUG_SEPARATORS.replace_all(&heading, "-");
+        let slug = slug.trim_matches('-');
+        if id.starts_with("sec-")
+            || (!slug.is_empty() && (id == slug || slug.ends_with(&format!("-{id}"))))
+        {
+            return String::new();
+        }
+    }
+    id.to_string()
 }
 
 fn partial_selector_fingerprint(attrs: &str, id: &str) -> String {
@@ -28956,6 +29919,16 @@ fn is_upstream_partial_selector_exception(value: &str, matched: &regex::Match<'_
     let prefix = value[..matched.start()].to_ascii_lowercase();
     match matched_text.as_str() {
         "access-wall" => prefix.ends_with("main-"),
+        "jumpto" => {
+            prefix
+                .bytes()
+                .last()
+                .is_some_and(|b| b.is_ascii_alphanumeric())
+                || value[matched.end()..]
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphanumeric())
+        }
         "related" => {
             let bytes = prefix.as_bytes();
             bytes.len() >= 3
@@ -29056,7 +30029,7 @@ fn code_language(node: &NodeRef) -> Option<String> {
         current = ancestor.parent();
     }
 
-    find_code_language(&candidates)
+    find_code_language(&candidates).map(|language| normalize_language_name(&language))
 }
 
 fn is_code_block_container(node: &NodeRef, element: &ElementData) -> bool {
@@ -29192,7 +30165,7 @@ fn code_language_from_token(token: &str) -> Option<String> {
         .or_else(|| token.strip_prefix("lang-"))
         .or_else(|| token.strip_prefix("brush:"))
         .unwrap_or(&token);
-    is_known_code_language(raw).then(|| normalize_language_name(raw))
+    is_known_code_language(raw).then(|| raw.to_string())
 }
 
 fn is_known_code_language(language: &str) -> bool {
@@ -29740,10 +30713,7 @@ fn ancestor_contains_code_block(node: &NodeRef) -> bool {
 /// Equivalent to `count_selector(node, "pre, code, .cm-content") > 0`.
 fn contains_code_content(node: &NodeRef) -> bool {
     node.inclusive_descendants()
-        .filter_map(|n| {
-            n.as_element()
-                .map(|element| is_code_content_element(element))
-        })
+        .filter_map(|n| n.as_element().map(is_code_content_element))
         .any(|matched| matched)
 }
 
@@ -29896,19 +30866,55 @@ fn collapse_repeated_org_dividers(text: &str) -> String {
     lines.join("\n")
 }
 
+fn markdown_fence_line(line: &str, fence: &mut Option<(char, usize)>) -> bool {
+    let line = line.trim_start_matches([' ', '\t']);
+    let was_open = fence.is_some();
+    if let Some(marker) = line.chars().next().filter(|ch| matches!(ch, '`' | '~')) {
+        let size = line.chars().take_while(|ch| *ch == marker).count();
+        if size >= 3 {
+            if let Some((open, count)) = *fence {
+                if marker == open && size >= count && line[size..].trim().is_empty() {
+                    *fence = None;
+                }
+            } else {
+                *fence = Some((marker, size));
+            }
+        }
+    }
+    was_open || fence.is_some()
+}
+
 fn cleanup_markdown(text: &str) -> String {
     static BLANK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
-    let text = text
-        .lines()
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let text = BLANK_RE.replace_all(text.trim(), "\n\n");
-    if text.is_empty() {
-        String::new()
-    } else {
-        format!("{text}\n")
+    let mut result = String::new();
+    let mut prose = String::new();
+    let mut fence = None;
+    let flush = |prose: &mut String, result: &mut String| {
+        let text = BLANK_RE.replace_all(prose, "\n\n");
+        let mut empty_quote = false;
+        for line in text.split_inclusive('\n') {
+            let blank_quote = line.trim().starts_with('>')
+                && line
+                    .trim()
+                    .chars()
+                    .all(|ch| ch == '>' || ch.is_whitespace());
+            if !blank_quote || !empty_quote {
+                result.push_str(line);
+            }
+            empty_quote = blank_quote;
+        }
+        prose.clear();
+    };
+    for line in text.split_inclusive('\n') {
+        if markdown_fence_line(line.trim_end_matches('\n'), &mut fence) {
+            flush(&mut prose, &mut result);
+            result.push_str(line);
+        } else {
+            prose.push_str(line);
+        }
     }
+    flush(&mut prose, &mut result);
+    result.trim().to_string()
 }
 
 fn count_words(text: &str) -> usize {
@@ -29950,18 +30956,10 @@ fn serialize_output_node(
 ) -> Result<String, DefuddleError> {
     let html = serialize_node(node)?;
     if standardize {
-        standardize_footnote_html(&html, footnote_hints)
+        standardize_structured_footnote_html(&html, footnote_hints)
     } else {
         Ok(html)
     }
-}
-
-fn standardize_footnote_html(
-    html: &str,
-    footnote_hints: &FootnoteState,
-) -> Result<String, DefuddleError> {
-    let html = standardize_inline_footnote_html(html)?;
-    standardize_structured_footnote_html(&html, footnote_hints)
 }
 
 fn html_serialization_root(document: &NodeRef, html: &str) -> Option<NodeRef> {
@@ -29978,61 +30976,6 @@ fn html_serialization_root(document: &NodeRef, html: &str) -> Option<NodeRef> {
     }
 }
 
-fn standardize_inline_footnote_html(html: &str) -> Result<String, DefuddleError> {
-    let document = kuchiki::parse_html().one(html);
-    let root = html_serialization_root(&document, html);
-    let Some(root) = root else {
-        return Ok(html.to_string());
-    };
-    let Ok(matches) =
-        root.select("span.footnote-container, span.sidenote-container, span.inline-footnote")
-    else {
-        return Ok(html.to_string());
-    };
-    let containers = matches
-        .map(|matched| matched.as_node().clone())
-        .collect::<Vec<_>>();
-    if containers.is_empty() {
-        return Ok(html.to_string());
-    }
-
-    let mut items = Vec::new();
-    for container in containers {
-        let Some(content) = select_first_node(
-            &container,
-            "span.footnote, span.sidenote, span.footnoteContent",
-        ) else {
-            continue;
-        };
-        let number = items.len() + 1;
-        trim_footnote_trailing_whitespace(&content);
-        let content_html = serialize_children_html(&content);
-        let reference = kuchiki::parse_html().one(format!(
-            "<html><body><sup id=\"fnref:{number}\"><a href=\"#fn:{number}\">{number}</a></sup></body></html>"
-        ));
-        let Some(reference) = select_first_node(&reference, "sup") else {
-            continue;
-        };
-        container.insert_before(reference);
-        container.detach();
-        items.push(format!(
-            "<li id=\"fn:{number}\"><p>{content_html} <a class=\"footnote-backref\" title=\"return to article\" href=\"#fnref:{number}\">↩</a></p></li>"
-        ));
-    }
-    if items.is_empty() {
-        return Ok(html.to_string());
-    }
-
-    let footnotes = kuchiki::parse_html().one(format!(
-        "<html><body><div id=\"footnotes\"><ol>{}</ol></div></body></html>",
-        items.join("")
-    ));
-    if let Some(footnotes) = select_first_node(&footnotes, "#footnotes") {
-        root.append(footnotes);
-    }
-    serialize_node(&root)
-}
-
 fn standardize_structured_footnote_html(
     html: &str,
     footnote_hints: &FootnoteState,
@@ -30041,22 +30984,29 @@ fn standardize_structured_footnote_html(
     let Some(root) = html_serialization_root(&document, html) else {
         return Ok(html.to_string());
     };
-    if has_canonical_footnotes(&root) {
-        return Ok(html.to_string());
-    }
-    let mediawiki = is_mediawiki_content_node(&root);
-    let footnotes = collect_footnotes(&root);
+    standardize_structured_footnotes(&root, footnote_hints);
+    serialize_node(&root)
+}
+
+fn standardize_structured_footnotes(root: &NodeRef, footnote_hints: &FootnoteState) {
+    let mediawiki = is_mediawiki_content_node(root);
+    let footnotes = collect_footnotes(root);
     if footnotes.entries.is_empty() {
-        return Ok(html.to_string());
+        return;
     }
 
-    let references = structured_footnote_reference_candidates(&root, &footnotes);
+    let references = structured_footnote_reference_candidates(root, &footnotes);
     if references.is_empty() {
-        return Ok(html.to_string());
+        return;
     }
 
-    let heading = canonical_footnote_heading(&root);
-    detach_footnote_noise_nodes(&root, &footnotes);
+    let heading = canonical_footnote_heading(root);
+    detach_footnote_noise_nodes(root, &footnotes);
+    for entry in &footnotes.entries {
+        for node in &entry.content_nodes {
+            detach_footnote_noise_nodes(node, &footnotes);
+        }
+    }
 
     let mut refs_by_number: HashMap<usize, Vec<String>> = HashMap::new();
     let mut ref_counts: HashMap<usize, usize> = HashMap::new();
@@ -30096,14 +31046,13 @@ fn standardize_structured_footnote_html(
     }
 
     let footnotes_html = canonical_footnotes_html(&footnotes, &refs_by_number);
-    detach_footnote_definition_nodes(&root, &footnotes);
+    detach_footnote_definition_nodes(root, &footnotes);
     if let Some(heading) = heading {
         root.append(heading);
     }
     if let Some(footnotes_node) = parse_first_html_node(&footnotes_html, "#footnotes") {
         root.append(footnotes_node);
     }
-    serialize_node(&root)
 }
 
 fn canonical_footnote_heading(root: &NodeRef) -> Option<NodeRef> {
@@ -30259,7 +31208,8 @@ fn canonical_footnotes_html(
         .entries
         .iter()
         .filter_map(|entry| {
-            let content = canonical_footnote_entry_content(entry, refs_by_number);
+            let content =
+                canonical_footnote_entry_content(entry, refs_by_number, &footnotes.noise_nodes);
             (!content.trim().is_empty())
                 .then(|| format!(r#"<li id="fn:{}">{}</li>"#, entry.number, content.trim()))
         })
@@ -30271,10 +31221,12 @@ fn canonical_footnotes_html(
 fn canonical_footnote_entry_content(
     entry: &FootnoteEntry,
     refs_by_number: &HashMap<usize, Vec<String>>,
+    noise_nodes: &HashSet<usize>,
 ) -> String {
     let mut content = entry
         .content_nodes
         .iter()
+        .filter(|node| !noise_nodes.contains(&node_key(node)))
         .map(footnote_content_node_html)
         .collect::<Vec<_>>()
         .join("");
@@ -30308,7 +31260,7 @@ fn canonical_footnote_entry_content(
 fn footnote_content_node_html(node: &NodeRef) -> String {
     match tag_name(node).as_deref() {
         Some("p") => format!("<p>{}</p>", serialize_children_html(node)),
-        Some("li" | "div" | "span" | "aside") => {
+        Some("li" | "div" | "span" | "aside" | "body") => {
             let inner = serialize_children_html(node);
             if html_contains_block_tag(&inner) {
                 inner
@@ -30396,7 +31348,9 @@ fn standardize_arxiv_elements(root: &NodeRef) {
         .map(|matched| matched.as_node().clone())
         .collect::<Vec<_>>();
     for note_outer in note_outers {
-        note_outer.detach();
+        if !has_ancestor_class(&note_outer, "ltx_role_footnote") {
+            note_outer.detach();
+        }
     }
 
     let reference_links = root
@@ -30761,9 +31715,8 @@ fn markdown_code_span(text: &str) -> String {
 fn markdown_table_cell(text: &str) -> String {
     text.replace('|', "\\|")
         .replace('\n', " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+        .trim()
+        .to_string()
 }
 
 fn escape_html_attr(text: &str) -> String {
@@ -30889,7 +31842,7 @@ mod tests {
                     <tr>
                       <td class="subtext">
                         <span class="score">42 points</span>
-                        <a class="hnuser">ada</a>
+                        <a class="hnuser" href="user?id=ada">ada</a>
                         <span class="age" title="2026-06-01T12:34:56"></span>
                       </td>
                     </tr>
@@ -30899,7 +31852,7 @@ mod tests {
                       <td class="ind"><img width="0"></td>
                       <td>
                         <div class="comhead">
-                          <a class="hnuser">grace</a>
+                          <a class="hnuser" href="user?id=grace">grace</a>
                           <span class="age" title="2026-06-02T01:02:03"><a href="item?id=456">1 day ago</a></span>
                           <span class="score">5 points</span>
                         </div>
@@ -34135,35 +35088,40 @@ mod tests {
     fn include_replies_false_keeps_x_self_thread_but_omits_comments() {
         let tweets = vec![
             XTweet {
+                is_thread_continuation: true,
                 display_name: "Ada".to_string(),
                 handle: "@ada".to_string(),
                 published: "2025-01-01T00:00:00Z".to_string(),
                 url: "https://x.com/ada/status/1".to_string(),
-                body_org: "Main post body".to_string(),
+                body_html: "<p>Main post body</p>".to_string(),
             },
             XTweet {
+                is_thread_continuation: true,
                 display_name: "Ada".to_string(),
                 handle: "@ada".to_string(),
                 published: "2025-01-01T00:01:00Z".to_string(),
                 url: "https://x.com/ada/status/2".to_string(),
-                body_org: "Self-thread continuation".to_string(),
+                body_html: "<p>Self-thread continuation</p>".to_string(),
             },
             XTweet {
+                is_thread_continuation: true,
                 display_name: "Grace".to_string(),
                 handle: "@grace".to_string(),
                 published: "2025-01-01T00:02:00Z".to_string(),
                 url: "https://x.com/grace/status/3".to_string(),
-                body_org: "External reply comment".to_string(),
+                body_html: "<p>External reply comment</p>".to_string(),
             },
         ];
 
-        let without_replies = x_timeline_body_org(&tweets, IncludeReplies::None);
+        let without_replies =
+            render_html_fragment_to_org(&x_timeline_html(&tweets, IncludeReplies::None));
         assert!(without_replies.contains("Main post body"));
         assert!(without_replies.contains("Self-thread continuation"));
         assert!(!without_replies.contains("** Comments"));
         assert!(!without_replies.contains("External reply comment"));
 
-        let with_replies = x_timeline_body_org(&tweets, IncludeReplies::Extractors);
+        let with_replies =
+            render_html_fragment_to_org(&x_timeline_html(&tweets, IncludeReplies::Extractors));
         assert!(with_replies.contains("Self-thread continuation"));
         assert!(with_replies.contains("** Comments"));
         assert!(with_replies.contains("External reply comment"));
@@ -40302,6 +41260,12 @@ line break text.">
         assert!(image_after_exclamation.contains("! ![IMG]"));
         assert!(!image_after_exclamation.contains("!!["));
 
+        let literal_image_syntax = html_fragment_to_markdown(
+            r#"<p><code>!![x] ![![y]</code></p><p><a href="">Empty link</a></p>"#,
+        );
+        assert!(literal_image_syntax.contains("`!![x] ![![y]`"));
+        assert!(!literal_image_syntax.contains("[Empty link]()"));
+
         let normal_image = html_fragment_to_markdown(
             r#"<article><p>Hello world</p><img src="https://example.com/img.png" alt="photo"></article>"#,
         );
@@ -40729,12 +41693,11 @@ line break text.">
 </code></pre></article>"#,
         );
         assert!(code.contains(
-            r#"```rust
-let value = \`tick\`;
-\`\`\`danger
-```"#
+            r#"````rust
+let value = `tick`;
+```danger
+````"#
         ));
-        assert!(!code.contains("````"));
     }
 
     #[test]
@@ -41339,14 +42302,14 @@ let value = \`tick\`;
         assert!(
             output
                 .html
-                .contains(r##"<sup id="fnref:1"><a href="#fn:1">1</a></sup>"##),
+                .contains(r##"<sup id="fnref:7"><a href="#fn:7">7</a></sup>"##),
             "{}",
             output.html
         );
         assert!(output.html.contains(r#"<div id="footnotes"><ol>"#));
         assert!(output
             .html
-            .contains(r#"<li id="fn:1"><p>Note <em>content</em>. <a class="footnote-backref""#));
+            .contains(r#"<li id="fn:7"><p>Note <em>content</em>.<a class="footnote-backref""#));
         assert!(!output.html.contains("footnote-container"));
         assert!(output.org.contains("Body text [fn:7]"), "{}", output.org);
         assert!(

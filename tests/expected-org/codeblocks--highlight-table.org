@@ -1,0 +1,16 @@
+* Highlighted code table
+:PROPERTIES:
+:URL: https://example.com/code
+:SITE: example.com
+:DOMAIN: example.com
+:LANGUAGE: en
+:WORD_COUNT: 24
+:END:
+
+A code viewer can render each source line in a separate table row.
+
+#+begin_src js
+const first = 1;
+const second = 2;
+console.log(first + second);
+#+end_src

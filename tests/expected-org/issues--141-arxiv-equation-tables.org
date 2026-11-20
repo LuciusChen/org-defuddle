@@ -4,7 +4,7 @@
 :SITE: 141-arxiv-equation-tables
 :DOMAIN: 141-arxiv-equation-tables
 :LANGUAGE: en
-:WORD_COUNT: 29
+:WORD_COUNT: 68
 :END:
 
 ** Scaled Dot-Product Attention

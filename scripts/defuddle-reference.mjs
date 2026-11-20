@@ -27,13 +27,14 @@ for (const file of fixtureFiles) {
 	const url = frontmatter.url || `https://${urlName}`;
 	const response = await Defuddle(html, url, {
 		fetch: offlineFetch,
-		separateMarkdown: false,
+		separateMarkdown: true,
 	});
 	results.push({
 		name,
 		url,
 		content: response.content,
 		wordCount: response.wordCount,
+		contentMarkdown: response.contentMarkdown,
 	});
 }
 

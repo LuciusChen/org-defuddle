@@ -1,0 +1,35 @@
+* Code examples
+:PROPERTIES:
+:URL: https://example.com/articles/code-blocks
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 52
+:END:
+
+A code example can use explicit line breaks without a preformatted wrapper.
+
+#+begin_src
+agent = Agent(
+    model="example",
+    tools=[search_tool]
+)
+result = agent.run(query)
+#+end_src
+
+Highlighted code should keep its language, indentation, and empty lines.
+
+#+begin_src python
+if ready:
+    run()
+
+finish()
+#+end_src
+
+Existing preformatted code still works.
+
+#+begin_src
+first()
+second()
+#+end_src
+
+Ordinary inline code such as ~agent.run(query)~ stays in its sentence.

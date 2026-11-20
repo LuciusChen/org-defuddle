@@ -304,11 +304,6 @@ language order."
     org-defuddle-module-parse-youtube-org)
   "Functions that must be provided by the Rust dynamic module.")
 
-(defconst org-defuddle--optional-module-functions
-  '(org-defuddle-module-youtube-inline-caption-info
-    org-defuddle-module-parse-reddit-atom-org)
-  "Functions used when provided by a newer Rust dynamic module.")
-
 (defun org-defuddle--repo-root ()
   "Return the repository root when this file is loaded from the source tree."
   org-defuddle--source-directory)
@@ -869,7 +864,7 @@ network or HTTP failures when supplied."
     (org-defuddle--retrieve-body-with-url
      url callback headers method data on-error)))
 
-(defun org-defuddle--cli-compatible-html-url-options-p (options)
+(defun org-defuddle--cli-compatible-url-options-p (options)
   "Return non-nil when OPTIONS can use the CLI URL backend."
   (and org-defuddle-use-cli-url-fetch
        (org-defuddle--cli-file)
@@ -911,6 +906,8 @@ network or HTTP failures when supplied."
         (language (org-defuddle--language-option options)))
     (when (org-defuddle--frontmatter-option options)
       (setq command (append command (list "--frontmatter"))))
+    (unless (org-defuddle--use-async-option options)
+      (setq command (append command (list "--no-async"))))
     (unless (string= language "")
       (setq command (append command (list "--lang" language))))
     command))
@@ -1330,13 +1327,16 @@ the same keys as `org-defuddle-parse-html'."
 
 (defun org-defuddle--html-url-to-org (url options)
   "Fetch URL as HTML and insert extracted Org using OPTIONS."
-  (if (org-defuddle--cli-compatible-html-url-options-p options)
+  (if (org-defuddle--cli-compatible-url-options-p options)
       (org-defuddle--cli-url-to-org url options)
     (org-defuddle--retrieve-body
      url
      (lambda (body)
        (org-defuddle--insert-org-buffer
-        (org-defuddle-html-to-org body url options))))))
+        (org-defuddle-html-to-org body url options)))
+     nil nil nil
+     (lambda (failure)
+       (error "URL fetch failed: %s" failure)))))
 
 (defun org-defuddle--c2-url-to-org (url title)
   "Fetch C2 Wiki URL using TITLE and insert extracted Org."
@@ -1712,13 +1712,17 @@ OPTIONS controls image and comment inclusion in the extracted Org."
 
 OPTIONS is passed to `org-defuddle-html-to-org' for HTML pages.  C2 Wiki
 and supported X/Twitter, Bilibili, YouTube, and Reddit URLs use API or
-alternate-host extraction before falling back to their original HTML.
-  `:use-async' overrides `org-defuddle-use-async'."
+alternate-host extraction.  Compatible options use the Rust CLI when
+available.  `:use-async' overrides `org-defuddle-use-async'."
   (interactive "sURL: ")
   (when (called-interactively-p 'interactive)
     (org-defuddle-load-module t))
-  (if (not (org-defuddle--use-async-option options))
-      (org-defuddle--html-url-to-org url options)
+  (cond
+   ((org-defuddle--cli-compatible-url-options-p options)
+    (org-defuddle--cli-url-to-org url options))
+   ((not (org-defuddle--use-async-option options))
+    (org-defuddle--html-url-to-org url options))
+   (t
     (let ((c2-title (org-defuddle--c2-page-title url))
           (x-match (org-defuddle--x-status-match url))
           (bilibili-bvid (org-defuddle--bilibili-bvid url))
@@ -1732,7 +1736,7 @@ alternate-host extraction before falling back to their original HTML.
         (org-defuddle--youtube-url-to-org url options youtube-video-id))
        (reddit-old-url
         (org-defuddle--reddit-url-to-org url options reddit-old-url))
-       (t (org-defuddle--html-url-to-org url options))))))
+       (t (org-defuddle--html-url-to-org url options)))))))
 
 (provide 'org-defuddle)
 

@@ -1,8 +1,10 @@
+mod api;
+
 use encoding_rs::{Encoding, UTF_8, WINDOWS_1252};
 use org_defuddle_core::{
-    output_frontmatter, output_json_string_pretty, output_json_string_pretty_for_html,
-    output_property, parse_html_to_org, parse_reddit_atom_to_org, reddit_sources, DefuddleOptions,
-    DefuddleOutput, IncludeReplies,
+    api_source, apply_output_options, output_frontmatter, output_json_string_pretty,
+    output_json_string_pretty_for_html, output_property, parse_html_to_org,
+    parse_reddit_atom_to_org, reddit_sources, DefuddleOptions, DefuddleOutput, IncludeReplies,
 };
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -29,6 +31,7 @@ struct CliOptions {
     property: Option<String>,
     language: Option<String>,
     user_agent: Option<String>,
+    no_async: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -42,11 +45,7 @@ struct FetchOptions {
 }
 
 fn main() -> ExitCode {
-    match run(
-        std::env::args().skip(1),
-        &mut io::stdout(),
-        &mut io::stderr(),
-    ) {
+    match run(std::env::args().skip(1), &mut io::stdout()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("Error: {err}");
@@ -55,7 +54,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run<I, S>(args: I, stdout: &mut dyn Write, _stderr: &mut dyn Write) -> Result<(), String>
+fn run<I, S>(args: I, stdout: &mut dyn Write) -> Result<(), String>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
@@ -73,10 +72,36 @@ where
     }
 
     let options = parse_args(args)?;
-    let (mut output, html) = if let Some(source) = options
+    let api = options
         .source
         .as_deref()
-        .filter(|url| reddit_sources(url).is_some())
+        .filter(|_| !options.no_async)
+        .and_then(api_source);
+    let (mut output, html) = if let Some(api) = api {
+        api::extract(
+            api,
+            options.source.as_deref().unwrap(),
+            options.language.as_deref(),
+            &mut |request| {
+                fetch_body(
+                    request.url.as_deref().unwrap(),
+                    &request.method,
+                    &request.headers,
+                    request.data.as_deref(),
+                    options
+                        .user_agent
+                        .as_deref()
+                        .or(request.user_agent.as_deref())
+                        .unwrap_or(DEFAULT_UA),
+                    options.language.as_deref(),
+                    false,
+                )
+            },
+        )?
+    } else if let Some(source) = options
+        .source
+        .as_deref()
+        .filter(|url| !options.no_async && reddit_sources(url).is_some())
     {
         extract_reddit_with_fetch(source, &options, |url, require_html| {
             fetch_body(
@@ -103,6 +128,10 @@ where
             .map_err(|err| err.to_string())?;
         (output, html)
     };
+    apply_output_options(
+        &mut output,
+        &defuddle_options(&options, options.source.clone()),
+    );
     output = retry_url_with_bot_user_agent(output, &options)?;
     ensure_meaningful_content(&output, &options)?;
     let rendered = render_output_with_html(&output, &options, Some(&html))?;
@@ -273,6 +302,7 @@ where
             "-j" | "--json" => options.json = true,
             "-f" | "--frontmatter" => options.frontmatter = true,
             "--debug" => options.debug = true,
+            "--no-async" => options.no_async = true,
             "-o" | "--output" => {
                 let value = args
                     .next()
@@ -1020,21 +1050,12 @@ fn source_label(options: &CliOptions) -> &str {
 fn defuddle_options(options: &CliOptions, url: Option<String>) -> DefuddleOptions {
     DefuddleOptions {
         url,
-        include_images: true,
-        remove_small_images: true,
-        content_selector: None,
-        include_replies: IncludeReplies::Extractors,
-        remove_hidden_elements: true,
-        remove_exact_selectors: true,
-        remove_partial_selectors: true,
-        remove_content_patterns: true,
-        remove_low_scoring: true,
-        standardize: true,
         debug: options.debug,
         profile: options.debug,
         frontmatter: options.frontmatter,
         markdown: wants_markdown_output(options),
         separate_markdown: options.separate_markdown,
+        ..DefuddleOptions::default()
     }
 }
 
@@ -1102,8 +1123,9 @@ fn parse_usage() -> String {
         "  -m, --markdown, --md      Output Markdown content",
         "      --separate-markdown   Also populate contentMarkdown",
         "      --debug               Include debug/profile fields",
-        "  -l, --lang <code>         Accepted for defuddle CLI compatibility",
-        "  -u, --user-agent <value>  Accepted for defuddle CLI compatibility",
+        "      --no-async            Parse the original HTML without site API requests",
+        "  -l, --lang <code>         HTTP Accept-Language preference",
+        "  -u, --user-agent <value>  HTTP User-Agent override",
     ]
     .join("\n")
 }
@@ -1218,10 +1240,8 @@ mod tests {
             (vec!["fetch", "--help"], "Usage: org-defuddle fetch"),
         ] {
             let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            run(args, &mut stdout, &mut stderr).unwrap();
+            run(args, &mut stdout).unwrap();
             assert!(String::from_utf8(stdout).unwrap().contains(expected));
-            assert!(stderr.is_empty());
         }
     }
 
@@ -1239,6 +1259,7 @@ mod tests {
             "-o",
             "out.txt",
             "--debug",
+            "--no-async",
             "--lang",
             "en",
             "--user-agent",
@@ -1254,6 +1275,7 @@ mod tests {
         assert!(options.separate_markdown);
         assert!(options.frontmatter);
         assert!(options.debug);
+        assert!(options.no_async);
         assert_eq!(options.language.as_deref(), Some("en"));
         assert_eq!(options.user_agent.as_deref(), Some("agent"));
     }
@@ -1362,7 +1384,6 @@ mod tests {
         let html = "<!doctype html><html><head><title>File Output</title></head><body><article><h1>File Output</h1><p>Rendered body content goes to the requested file.</p></article></body></html>";
         fs::write(&input_path, html).unwrap();
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
         let result = run(
             vec![
@@ -1372,7 +1393,6 @@ mod tests {
                 output_path.display().to_string(),
             ],
             &mut stdout,
-            &mut stderr,
         );
 
         let _ = fs::remove_file(&input_path);
@@ -1392,7 +1412,6 @@ mod tests {
         let body = b"<!doctype html><html><head><title>Fetched Title</title></head><body><article><h1>Fetched Title</h1><p>Fetched body content.</p></article></body></html>".to_vec();
         let (url, request) = serve_once("HTTP/1.1 200 OK", &[("Content-Type", "text/html")], body);
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
         run(
             vec![
@@ -1406,7 +1425,6 @@ mod tests {
                 "TestAgent".to_string(),
             ],
             &mut stdout,
-            &mut stderr,
         )
         .unwrap();
 
@@ -1496,7 +1514,6 @@ mod tests {
             ),
         ]);
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
         run(
             vec![
@@ -1506,7 +1523,6 @@ mod tests {
                 "title".to_string(),
             ],
             &mut stdout,
-            &mut stderr,
         )
         .unwrap();
 
@@ -1549,7 +1565,6 @@ mod tests {
             ),
         ]);
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
         let err = run(
             vec![
@@ -1561,7 +1576,6 @@ mod tests {
                 "CustomAgent".to_string(),
             ],
             &mut stdout,
-            &mut stderr,
         )
         .unwrap_err();
 
@@ -1589,9 +1603,8 @@ mod tests {
             TestResponse::new("HTTP/1.1 200 OK", &[("Content-Type", "text/html")], shell),
         ]);
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
-        let err = run(vec!["parse".to_string(), url], &mut stdout, &mut stderr).unwrap_err();
+        let err = run(vec!["parse".to_string(), url], &mut stdout).unwrap_err();
 
         assert_eq!(stdout, b"");
         assert!(err.contains("No content could be extracted from http://"));
@@ -1632,12 +1645,10 @@ let answer = 42;
             ),
         ]);
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
         run(
             vec!["parse".to_string(), url, "--markdown".to_string()],
             &mut stdout,
-            &mut stderr,
         )
         .unwrap();
 
@@ -1680,9 +1691,8 @@ let answer = 42;
             ),
         ]);
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
-        run(vec!["parse".to_string(), url], &mut stdout, &mut stderr).unwrap();
+        run(vec!["parse".to_string(), url], &mut stdout).unwrap();
 
         let rendered = String::from_utf8(stdout).unwrap();
         assert!(rendered.contains("** Section"));
@@ -1699,9 +1709,8 @@ let answer = 42;
             br#"{"ok":true}"#.to_vec(),
         );
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
-        let err = run(vec!["parse".to_string(), url], &mut stdout, &mut stderr).unwrap_err();
+        let err = run(vec!["parse".to_string(), url], &mut stdout).unwrap_err();
 
         assert!(err.contains("Not an HTML page"));
     }
@@ -1714,7 +1723,6 @@ let answer = 42;
             br#"{"ok":true}"#.to_vec(),
         );
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
         run(
             vec![
@@ -1732,7 +1740,6 @@ let answer = 42;
                 "agent".to_string(),
             ],
             &mut stdout,
-            &mut stderr,
         )
         .unwrap();
 
@@ -1760,7 +1767,6 @@ let answer = 42;
             body,
         );
         let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
 
         run(
             vec![
@@ -1770,7 +1776,6 @@ let answer = 42;
                 "title".to_string(),
             ],
             &mut stdout,
-            &mut stderr,
         )
         .unwrap();
 

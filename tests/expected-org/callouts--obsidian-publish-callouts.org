@@ -29,7 +29,7 @@ A minus sign collapses the callout.
 #+end_src
 
 #+begin_quote
-[!question]- Is this foldable?
+[!faq]- Is this foldable?
 Yes, the content is hidden when collapsed.
 #+end_quote
 

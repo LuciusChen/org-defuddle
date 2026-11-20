@@ -570,6 +570,44 @@ the capture node as their argument."
       (should-not (string-match-p "Helpful reply" org))
       (should-not (string-match-p "photo.jpg" org)))))
 
+(ert-deftest org-defuddle-test-html-url-does-not-extract-http-error-page ()
+  (let ((response-buffer (generate-new-buffer " *org-defuddle-http-error*"))
+        parsed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'org-defuddle--cli-compatible-url-options-p)
+                   (lambda (_options) nil))
+                  ((symbol-function 'org-defuddle--cli-file) (lambda () nil))
+                  ((symbol-function 'url-retrieve)
+                   (lambda (_url callback &rest _args)
+                     (with-current-buffer response-buffer
+                       (insert "HTTP/1.1 503 Unavailable\r\n\r\nService unavailable")
+                       (setq-local url-http-response-status 503)
+                       (funcall callback nil))))
+                  ((symbol-function 'org-defuddle-html-to-org)
+                   (lambda (&rest _args) (setq parsed t) "* Error page"))
+                  ((symbol-function 'org-defuddle--insert-org-buffer) #'ignore))
+          (should-error
+           (org-defuddle-url-to-org "https://example.com/article" '(:use-async nil)))
+          (should-not parsed)
+          (should-not (buffer-live-p response-buffer)))
+      (when (buffer-live-p response-buffer) (kill-buffer response-buffer)))))
+
+(ert-deftest org-defuddle-test-url-cli-preserves-async-and-language-options ()
+  (let ((url "https://www.reddit.com/r/emacs/comments/abc123/topic/")
+        command)
+    (cl-letf (((symbol-function 'org-defuddle--cli-file) (lambda () "/tmp/org-defuddle"))
+              ((symbol-function 'org-defuddle--cli-compatible-url-options-p)
+               (lambda (_options) t))
+              ((symbol-function 'org-defuddle--cli-url-to-org)
+               (lambda (source options)
+                 (setq command (org-defuddle--cli-url-command source options)))))
+      (org-defuddle-url-to-org url '(:use-async nil :language "zh" :frontmatter t))
+      (should (equal command (list "/tmp/org-defuddle" "parse" url
+                                   "--frontmatter" "--no-async" "--lang" "zh")))
+      (org-defuddle-url-to-org "https://youtu.be/abcdefghijk" '(:use-async t))
+      (should (equal command (list "/tmp/org-defuddle" "parse"
+                                   "https://youtu.be/abcdefghijk"))))))
+
 (provide 'org-defuddle-test)
 
 ;;; org-defuddle-test.el ends here

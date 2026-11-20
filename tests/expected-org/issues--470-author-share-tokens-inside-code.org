@@ -1,0 +1,29 @@
+* Reading results
+:PROPERTIES:
+:URL: https://example.org/guide/reading-results
+:SITE: example.org
+:DOMAIN: example.org
+:LANGUAGE: en
+:WORD_COUNT: 94
+:END:
+
+This guide shows how to read the object the parser returns. The parser takes a document, finds the main content, removes clutter such as navigation and sidebars, and returns the cleaned content.
+
+#+begin_src
+// Parse the current document and read the metadata the parser found on the page
+const result = parser.parse();
+console.log(result.author);
+menu.share(result.url);
+#+end_src
+
+The result carries the title, the author, the publication date and the content. Each property is a plain string, so it can be logged or stored without further conversion.
+
+#+begin_src
+Written by
+Share
+12 Likes
+#+end_src
+
+~3 Comments~
+
+That is the whole result.

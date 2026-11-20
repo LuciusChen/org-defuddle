@@ -92,12 +92,12 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install 1.80.0 --profile minimal
-          cargo +1.80.0 check --workspace --locked
+          cargo +1.80.0 check --workspace --all-targets --locked
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked
           cargo test -p org-defuddle-core --test upstream_fixtures --locked \
-            all_upstream_fixture_content_matches_exact_org_rendering \
+            all_upstream_fixture_outputs_match_reference \
             -- --ignored
           cargo build --release -p org-defuddle-module --locked
           cargo build --release -p org-defuddle-cli --locked
@@ -105,6 +105,7 @@ jobs:
             -l test/org-defuddle-test.el \
             -f ert-run-tests-batch-and-exit
           emacs -Q --batch --eval '(byte-compile-file "org-defuddle.el")'
+          emacs -Q --batch --eval '(progn (require (quote checkdoc)) (find-file "org-defuddle.el") (checkdoc-current-buffer t))'
 
       - name: Commit release version
         id: commit

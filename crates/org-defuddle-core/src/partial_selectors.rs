@@ -1,4 +1,4 @@
-// Kept in the same order as defuddle's PARTIAL_SELECTORS. The two JavaScript
+// Kept in the same order as defuddle's PARTIAL_SELECTORS. The JavaScript
 // lookbehinds are represented by plain patterns and enforced in lib.rs.
 pub(crate) const PATTERNS: &[&str] = &[
     r#"a-statement"#,
