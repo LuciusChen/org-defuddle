@@ -24231,6 +24231,10 @@ fn is_heading_anchor_wrapper(anchor: &NodeRef, element: &ElementData) -> bool {
     node_id(&headings[0]).is_some_and(|id| id == fragment)
 }
 
+fn is_shared_figure_link(node: &NodeRef) -> bool {
+    has_ancestor_tag(node, &["figure"]) && node.select("img").unwrap().nth(1).is_some()
+}
+
 fn link_has_block_children(node: &NodeRef) -> bool {
     count_selector(
         node,
@@ -26169,7 +26173,11 @@ impl<'a> OrgRenderer<'a> {
                     self.render_node(&child, false);
                 }
             }
-            "a" if !inline && self.options.standardize && link_has_block_children(node) => {
+            "a" if !inline
+                && self.options.standardize
+                && link_has_block_children(node)
+                && !is_shared_figure_link(node) =>
+            {
                 self.render_block_link_container(node, element)
             }
             "a" => self.render_link(node, element, inline),
@@ -26401,7 +26409,7 @@ impl<'a> OrgRenderer<'a> {
             return;
         };
         let href = escape_link(href);
-        if text.is_empty() {
+        if text.is_empty() || is_shared_figure_link(node) {
             let mut rendered = false;
             for src in node
                 .select("img")
@@ -26421,7 +26429,7 @@ impl<'a> OrgRenderer<'a> {
                 }
                 rendered = true;
             }
-            if rendered {
+            if rendered && text.is_empty() {
                 return;
             }
         }
@@ -31936,7 +31944,14 @@ fn markdown_table_cell(text: &str) -> String {
             flattened.push_str(&part[..part.len() - 1]);
             rest = &rest[m.end() - 1..];
         } else {
-            flattened.push_str(&part.lines().map(str::trim).collect::<Vec<_>>().join(" "));
+            flattened.push_str(
+                &part
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
             rest = &rest[m.end()..];
         }
     }
@@ -33652,17 +33667,30 @@ mod tests {
 
     #[test]
     fn org_keeps_each_image_in_a_shared_link() {
-        let org = render_html_fragment_to_org(
-            r#"<figure><a href="/gallery"><img src="/one.jpg"><img src="/two.jpg"></a></figure>"#,
-        );
-        assert!(
-            org.contains("[[/gallery][/one.jpg]]\n\n[[/gallery][/two.jpg]]"),
-            "{org}"
-        );
+        let images = r#"<img src="/one.jpg"><img src="/two.jpg">"#;
+        for contents in [
+            images.to_owned(),
+            format!("<div>{images}</div>"),
+            format!("{images}Open collection"),
+        ] {
+            let html = format!(r#"<figure><a href="/gallery">{contents}</a></figure>"#);
+            let org = render_html_fragment_to_org(&html);
+            assert!(
+                org.contains("[[/gallery][/one.jpg]]\n\n[[/gallery][/two.jpg]]"),
+                "{org}"
+            );
+            if contents.contains("Open collection") {
+                assert!(org.contains("[[/gallery][Open collection]]"), "{org}");
+            }
+        }
     }
 
     #[test]
-    fn markdown_table_prices_can_precede_multiline_math() {
+    fn markdown_table_cells_preserve_breaks_outside_code_and_math() {
+        assert_eq!(
+            markdown_table_cell("```\nfirst\n\n    second\n```"),
+            "``` first second ```"
+        );
         assert_eq!(
             markdown_table_cell("Ticket $10; total=$2\n+3$"),
             "Ticket $10; total=$2 +3$"
