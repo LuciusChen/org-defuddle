@@ -1484,6 +1484,8 @@ fn parse_html_to_org_once(
         standardize_math_images(&main);
         standardize_code_blocks(&main);
     }
+    dedupe_figure_images(&main);
+    dedupe_adjacent_lazy_images(&main);
     let elapsed = step_start.elapsed();
     record_profile_elapsed(&mut profile, "standardizeContent", elapsed);
     if options.standardize {
@@ -16897,6 +16899,8 @@ fn remove_heading_permalink_anchors(document: &NodeRef) {
 
 fn normalize_images(document: &NodeRef) {
     normalize_images_with_standardize(document, true, false);
+    dedupe_figure_images(document);
+    dedupe_adjacent_lazy_images(document);
 }
 
 fn normalize_images_with_standardize(document: &NodeRef, standardize: bool, debug: bool) {
@@ -16916,8 +16920,6 @@ fn normalize_images_with_standardize(document: &NodeRef, standardize: bool, debu
         normalize_video_controls(document);
         normalize_custom_image_elements(document);
     }
-    dedupe_figure_images(document);
-    dedupe_adjacent_lazy_images(document);
 }
 
 fn normalize_image_attribute_casing(document: &NodeRef) {
@@ -17751,12 +17753,9 @@ fn standardize_container_media_captions(body: &NodeRef) {
     for container in containers {
         if container.parent().is_none()
             || !is_descendant_of(&container, body)
-            || container.ancestors().any(|ancestor| {
-                matches!(
-                    tag_name(&ancestor).as_deref(),
-                    Some("figcaption" | "figure")
-                )
-            })
+            || has_ancestor_tag(&container, &["figcaption"])
+            || (tag_name(&container).as_deref() != Some("figure")
+                && has_ancestor_tag(&container, &["figure"]))
         {
             continue;
         }
@@ -17769,7 +17768,8 @@ fn standardize_container_media_captions(body: &NodeRef) {
             continue;
         }
 
-        let Some(media) = single_container_media(&container) else {
+        let media_nodes = container_media(&container);
+        let Some(media) = media_nodes.first().cloned() else {
             continue;
         };
         let subject = media_figure_subject(&container, &media);
@@ -17779,6 +17779,7 @@ fn standardize_container_media_captions(body: &NodeRef) {
         if is_descendant_of(&caption, &subject)
             || !is_meaningful_media_caption(&normalize_ws(&caption.text_contents()))
             || !text_outside_media_caption(&container, &subject, &caption).is_empty()
+            || contains_nested_figure(&container)
             || is_canonical_media_figure(&container, &subject, &caption)
         {
             continue;
@@ -17788,7 +17789,20 @@ fn standardize_container_media_captions(body: &NodeRef) {
             continue;
         };
         container.insert_before(figure.clone());
-        figcaption.insert_before(subject);
+        for item in media_nodes {
+            let subject = media_figure_subject(&container, &item);
+            if subject != item && count_selector(&subject, "img, video") > 1 {
+                let link = new_html_element("a").unwrap();
+                link.as_element()
+                    .unwrap()
+                    .attributes
+                    .replace(subject.as_element().unwrap().attributes.borrow().clone());
+                link.append(item);
+                figcaption.insert_before(link);
+            } else {
+                figcaption.insert_before(subject);
+            }
+        }
         move_caption_content(&caption, &figcaption);
         container.detach();
     }
@@ -17874,8 +17888,14 @@ fn is_nextjs_image_node(node: &NodeRef) -> bool {
 }
 
 fn single_container_media(container: &NodeRef) -> Option<NodeRef> {
-    let matches = container.select("picture, img, video").ok()?;
-    let media = matches
+    let media = container_media(container);
+    (media.len() == 1).then(|| media[0].clone())
+}
+
+fn container_media(container: &NodeRef) -> Vec<NodeRef> {
+    let mut media: Vec<_> = container
+        .select("picture, img, video")
+        .unwrap()
         .filter_map(|matched| {
             let node = matched.as_node();
             let nested_media_parent = node
@@ -17889,8 +17909,17 @@ fn single_container_media(container: &NodeRef) -> Option<NodeRef> {
                 });
             (!nested_media_parent).then(|| node.clone())
         })
-        .collect::<Vec<_>>();
-    (media.len() == 1).then(|| media[0].clone())
+        .collect();
+    if media.len() > 1 {
+        media.retain(|item| {
+            tag_name(item).as_deref() != Some("img")
+                || item
+                    .as_element()
+                    .and_then(|el| image_source_for_rendering(&el.attributes.borrow()))
+                    .is_some_and(|src| !is_placeholder_image_src(&src))
+        });
+    }
+    media
 }
 
 fn media_figure_subject(container: &NodeRef, media: &NodeRef) -> NodeRef {
@@ -17901,7 +17930,6 @@ fn media_figure_subject(container: &NodeRef, media: &NodeRef) -> NodeRef {
         }
         if tag_name(&parent).as_deref() == Some("a")
             && normalize_ws(&parent.text_contents()).is_empty()
-            && single_container_media(&parent).is_some()
         {
             return parent;
         }
@@ -18896,37 +18924,77 @@ fn dedupe_figure_images(document: &NodeRef) {
         if images.len() < 2 {
             continue;
         }
-        let mut groups: HashMap<Option<String>, Vec<NodeRef>> = HashMap::new();
+        let mut groups = HashMap::<(String, String), Vec<NodeRef>>::new();
+        let mut first_label = HashMap::new();
+        let mut unlabeled = Vec::new();
         for image in images {
-            let Some(src) = element_attr(&image, "src") else {
+            let Some(src) = element_attr(&image, "src")
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| element_attr(&image, "srcset").and_then(|s| best_srcset_url(&s)))
+            else {
                 continue;
             };
             if !is_valid_image_src(&src) || has_ancestor_tag(&image, &["noscript"]) {
                 continue;
             }
+            let stem = figure_image_stem(&src);
             let alt = element_attr(&image, "alt")
-                .map(|alt| alt.trim().to_string())
-                .filter(|alt| !alt.is_empty());
-            groups.entry(alt).or_default().push(image);
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            if alt.is_empty() {
+                unlabeled.push((stem, image));
+            } else {
+                first_label
+                    .entry(stem.clone())
+                    .or_insert_with(|| alt.clone());
+                groups.entry((stem, alt)).or_default().push(image);
+            }
         }
-
-        for (alt, group) in groups {
-            if group.len() < 2 {
-                continue;
+        for (stem, image) in unlabeled {
+            let alt = first_label.get(&stem).cloned().unwrap_or_default();
+            groups.entry((stem, alt)).or_default().push(image);
+        }
+        for ((_, alt), group) in groups {
+            if group.len() > 1
+                && (alt.is_empty()
+                    || group
+                        .iter()
+                        .any(|image| element_attr(image, "src") != element_attr(&group[0], "src")))
+            {
+                keep_best_image(group);
             }
-            let same_src_with_alt = alt.is_some()
-                && group
-                    .iter()
-                    .filter_map(|image| element_attr(image, "src"))
-                    .collect::<HashSet<_>>()
-                    .len()
-                    == 1;
-            if same_src_with_alt {
-                continue;
-            }
-            keep_best_image(group);
         }
     }
+}
+
+fn figure_image_stem(src: &str) -> String {
+    static SIZE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(concat!(
+            r"^(?:large|medium|small|thumb|thumbnail|full|original|scaled|",
+            r"[0-9]+x[0-9]*|[wh][0-9]+|[0-9]+[wh])$"
+        ))
+        .unwrap()
+    });
+    let url = Url::parse("https://example.invalid")
+        .unwrap()
+        .join(src)
+        .ok();
+    let proxied = url.as_ref().and_then(|url| {
+        url.query_pairs()
+            .find(|(key, _)| key == "url")
+            .and_then(|(_, value)| url.join(&value).ok())
+    });
+    let path = proxied.as_ref().or(url.as_ref()).map_or(src, Url::path);
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let stem = file
+        .rsplit_once('.')
+        .map_or(file, |(stem, _)| stem)
+        .to_ascii_lowercase();
+    stem.split(['-', '_', '.', '@'])
+        .filter(|word| !word.is_empty() && !SIZE.is_match(word))
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 fn dedupe_adjacent_lazy_images(document: &NodeRef) {
@@ -18989,12 +19057,29 @@ fn keep_best_image(group: Vec<NodeRef>) {
         if candidate.parent().is_none() {
             continue;
         }
-        if image_a_is_better_or_equal(&best, candidate) {
-            candidate.detach();
+        let (winner, loser) = if image_a_is_better_or_equal(&best, candidate) {
+            (&best, candidate)
         } else {
-            best.detach();
-            best = candidate.clone();
+            (candidate, &best)
+        };
+        for name in ["src", "alt"] {
+            if element_attr(winner, name)
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+            {
+                if let Some(value) = element_attr(loser, name).filter(|s| !s.trim().is_empty()) {
+                    winner
+                        .as_element()
+                        .unwrap()
+                        .attributes
+                        .borrow_mut()
+                        .insert(name, value);
+                }
+            }
         }
+        loser.detach();
+        best = winner.clone();
     }
 }
 
@@ -20628,6 +20713,7 @@ fn remove_blog_metadata_lists(main: &NodeRef, debug_removals: &mut Option<&mut V
     for list in lists {
         if list.parent().is_none()
             || is_inside_footnotes_section(&list)
+            || has_ancestor_tag(&list, &["td", "th"])
             || !is_near_content_boundary(main, &list)
             || !is_blog_metadata_list(&list)
         {
@@ -24145,6 +24231,15 @@ fn is_heading_anchor_wrapper(anchor: &NodeRef, element: &ElementData) -> bool {
     node_id(&headings[0]).is_some_and(|id| id == fragment)
 }
 
+fn is_figure_image_link(node: &NodeRef) -> bool {
+    has_ancestor_tag(node, &["figure"])
+        && select_first_node(node, "img").is_some()
+        && !node
+            .select("h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, table, pre, article, section")
+            .unwrap()
+            .any(|block| !block.text_contents().trim().is_empty())
+}
+
 fn link_has_block_children(node: &NodeRef) -> bool {
     count_selector(
         node,
@@ -25013,39 +25108,42 @@ impl MarkdownRenderer {
     }
 
     fn render_figure(&mut self, node: &NodeRef) {
-        let Some(image) = select_first_node(node, "img") else {
-            self.render_figure_children(node);
-            return;
-        };
-        if markdown_figure_has_paragraphs_outside_caption(node) {
-            self.render_figure_children(node);
-            return;
-        }
-        let Some(image_element) = image.as_element() else {
-            self.render_figure_children(node);
-            return;
-        };
-        let image_attrs = image_element.attributes.borrow();
-        let src = image_attrs
-            .get("srcset")
-            .and_then(best_srcset_url)
-            .or_else(|| image_attrs.get("src").map(str::to_string))
-            .unwrap_or_default();
-        let alt = escape_markdown_inline_text(image_attrs.get("alt").unwrap_or_default());
-        drop(image_attrs);
-        if is_dangerous_url(&src) {
+        if contains_nested_figure(node)
+            || markdown_figure_has_paragraphs_outside_caption(node)
+            || select_first_node(node, "img").is_none()
+        {
             self.render_figure_children(node);
             return;
         }
-
-        self.ensure_blank_line();
-        if src.is_empty() {
-            self.out.push_str(&alt);
-        } else {
-            self.out.push_str(&format!(
-                "![{alt}]({})",
-                markdown_link_destination(&src, None)
-            ));
+        let has_image_src = first_image_src(node).is_some();
+        for image in node.select("img").unwrap() {
+            self.ensure_blank_line();
+            let attrs = image.attributes.borrow();
+            let alt = escape_markdown_inline_text(attrs.get("alt").unwrap_or_default());
+            let Some(src) = image_source_for_rendering(&attrs)
+                .filter(|src| !src.is_empty() && !is_dangerous_url(src))
+            else {
+                if !has_image_src {
+                    self.out.push_str(&alt);
+                }
+                continue;
+            };
+            let image_md = format!("![{alt}]({})", markdown_link_destination(&src, None));
+            let href = image
+                .as_node()
+                .ancestors()
+                .take_while(|parent| parent != node)
+                .find(|parent| tag_name(parent).as_deref() == Some("a"))
+                .and_then(|link| element_attr(&link, "href"))
+                .filter(|href| !href.is_empty() && !is_dangerous_url(href));
+            if let Some(href) = href {
+                self.out.push_str(&format!(
+                    "[{image_md}]({})",
+                    markdown_link_destination(&href, None)
+                ));
+            } else {
+                self.out.push_str(&image_md);
+            }
         }
 
         if let Some(figcaption) = select_first_node(node, "figcaption") {
@@ -25405,7 +25503,24 @@ impl MarkdownRenderer {
             return;
         }
 
-        if is_layout_table(node) && !markdown_table_has_spans(node) {
+        if markdown_table_has_spans(node) {
+            let html = markdown_clean_table_html(node);
+            if !html.trim().is_empty() {
+                self.ensure_blank_line();
+                self.out.push_str(html.trim());
+                self.out.push_str("\n\n");
+            }
+            return;
+        }
+
+        if let Some(caption) = node
+            .children()
+            .find(|child| tag_name(child).as_deref() == Some("caption"))
+        {
+            self.render_block_children(&caption);
+        }
+
+        if is_layout_table(node) {
             self.ensure_blank_line();
             let rows = direct_table_rows(node);
             let cells = dominant_layout_table_cells(&rows)
@@ -25415,16 +25530,6 @@ impl MarkdownRenderer {
                     self.render_node(&child, false);
                 }
                 self.ensure_blank_line();
-            }
-            return;
-        }
-
-        if markdown_table_has_spans(node) {
-            let html = markdown_clean_table_html(node);
-            if !html.trim().is_empty() {
-                self.ensure_blank_line();
-                self.out.push_str(html.trim());
-                self.out.push_str("\n\n");
             }
             return;
         }
@@ -25616,6 +25721,11 @@ fn markdown_is_ltx_tag_item(node: &NodeRef) -> bool {
     tag_name(node).as_deref() == Some("span")
         && has_class_token(node, "ltx_tag")
         && has_class_token(node, "ltx_tag_item")
+}
+
+fn contains_nested_figure(node: &NodeRef) -> bool {
+    node.descendants()
+        .any(|child| tag_name(&child).as_deref() == Some("figure"))
 }
 
 fn markdown_figure_has_paragraphs_outside_caption(node: &NodeRef) -> bool {
@@ -26068,7 +26178,11 @@ impl<'a> OrgRenderer<'a> {
                     self.render_node(&child, false);
                 }
             }
-            "a" if !inline && self.options.standardize && link_has_block_children(node) => {
+            "a" if !inline
+                && self.options.standardize
+                && link_has_block_children(node)
+                && !is_figure_image_link(node) =>
+            {
                 self.render_block_link_container(node, element)
             }
             "a" => self.render_link(node, element, inline),
@@ -26157,7 +26271,10 @@ impl<'a> OrgRenderer<'a> {
 
     fn render_figure(&mut self, node: &NodeRef) {
         if let Some(image) = select_first_node(node, "img") {
-            if !markdown_figure_has_paragraphs_outside_caption(node) {
+            if count_selector(node, "img") == 1
+                && !contains_nested_figure(node)
+                && !markdown_figure_has_paragraphs_outside_caption(node)
+            {
                 let subject = image
                     .ancestors()
                     .take_while(|ancestor| ancestor != node)
@@ -26288,42 +26405,41 @@ impl<'a> OrgRenderer<'a> {
 
         let href = element.attributes.borrow().get("href").map(str::to_owned);
         let text = cleanup_inline(&node.text_contents());
-        let linked_image_src = text.is_empty().then(|| first_image_src(node)).flatten();
-        match (
-            href.as_deref(),
-            text.is_empty(),
-            linked_image_src.as_deref(),
-        ) {
-            (Some(href), true, Some(image_src)) if !is_dangerous_url(href) => {
+        let Some(href) = href.as_deref().filter(|href| !is_dangerous_url(href)) else {
+            self.render_unlinked_inline(node);
+            return;
+        };
+        let href = escape_link(href);
+        if text.is_empty() || is_figure_image_link(node) {
+            let mut rendered = false;
+            for src in node
+                .select("img")
+                .unwrap()
+                .filter_map(|image| image_source_for_rendering(&image.attributes.borrow()))
+                .filter(|src| is_valid_image_src(src))
+            {
                 if inline {
                     self.ensure_inline_space("[[");
                 } else {
                     self.ensure_blank_line();
                 }
-                self.out.push_str("[[");
-                self.out.push_str(&escape_link(href));
-                self.out.push_str("][");
-                self.out.push_str(&escape_link_text(image_src));
-                self.out.push_str("]]");
+                self.out
+                    .push_str(&format!("[[{href}][{}]]", escape_link_text(&src)));
                 if !inline {
                     self.out.push_str("\n\n");
                 }
+                rendered = true;
             }
-            (Some(href), false, _) if !is_dangerous_url(href) => {
-                self.ensure_inline_space("[[");
-                self.out.push_str("[[");
-                self.out.push_str(&escape_link(href));
-                self.out.push_str("][");
-                self.out.push_str(&escape_link_text(&text));
-                self.out.push_str("]]");
+            if rendered && text.is_empty() {
+                return;
             }
-            (Some(href), true, None) if !is_dangerous_url(href) => {
-                self.ensure_inline_space("[[");
-                self.out.push_str("[[");
-                self.out.push_str(&escape_link(href));
-                self.out.push_str("]]");
-            }
-            _ => self.render_unlinked_inline(node),
+        }
+        self.ensure_inline_space("[[");
+        if text.is_empty() {
+            self.out.push_str(&format!("[[{href}]]"));
+        } else {
+            self.out
+                .push_str(&format!("[[{href}][{}]]", escape_link_text(&text)));
         }
     }
 
@@ -31813,10 +31929,41 @@ fn longest_backtick_run(text: &str) -> usize {
 }
 
 fn markdown_table_cell(text: &str) -> String {
-    text.replace('|', "\\|")
-        .replace('\n', " ")
-        .trim()
-        .to_string()
+    // Protect code and math before turning cell line breaks into HTML breaks.
+    static ONE_LINE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?s)```.*?```|\$\$.*?\$\$|\$[^\s$](?:[^$]*?[^\s$])?\$").unwrap());
+    let mut flattened = String::new();
+    let mut rest = text;
+    while let Some(m) = ONE_LINE.find(rest) {
+        flattened.push_str(&rest[..m.start()]);
+        let part = m.as_str();
+        if part.starts_with('$')
+            && !part.starts_with("$$")
+            && rest.as_bytes().get(m.end()).is_some_and(u8::is_ascii_digit)
+        {
+            // The second dollar may open the next expression.
+            flattened.push_str(&part[..part.len() - 1]);
+            rest = &rest[m.end() - 1..];
+        } else {
+            flattened.push_str(
+                &part
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            rest = &rest[m.end()..];
+        }
+    }
+    flattened.push_str(rest);
+    flattened
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("<br>")
+        .replace('|', "\\|")
 }
 
 fn escape_html_attr(text: &str) -> String {
@@ -33434,7 +33581,7 @@ mod tests {
                 .org
                 .matches("[[https://example.com/images/repeated-panel.jpg][Repeated panel]]")
                 .count(),
-            1,
+            2,
             "{}",
             output.org
         );
@@ -33490,6 +33637,86 @@ mod tests {
         assert!(!output.org.contains("machine.jpg?w=320"), "{}", output.org);
         assert!(output.org.contains("step-one.jpg?w=640"), "{}", output.org);
         assert!(output.org.contains("step-two.jpg?w=1280"), "{}", output.org);
+    }
+
+    #[test]
+    fn captioned_galleries_keep_distinct_images_and_nested_captions() {
+        let html = r#"<article><p><img src="/north.jpg" alt="View"><img src="/south.jpg" alt="View"><span class="caption">Two views of the harbor</span></p>
+            <figure><figure><img src="/pier.jpg"><span class="caption">The northern pier</span></figure>
+            <figcaption>The entire gallery</figcaption></figure></article>"#;
+        let output = parse_html_to_org(
+            html,
+            DefuddleOptions {
+                content_selector: Some("article".into()),
+                separate_markdown: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for text in [&output.org, &output.content_markdown] {
+            for expected in [
+                "north.jpg",
+                "south.jpg",
+                "Two views of the harbor",
+                "The northern pier",
+                "The entire gallery",
+            ] {
+                assert_eq!(text.matches(expected).count(), 1, "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn org_keeps_each_image_in_a_shared_link() {
+        let images = r#"<img src="/one.jpg"><img src="/two.jpg">"#;
+        for contents in [
+            images.to_owned(),
+            format!("<div>{images}</div>"),
+            format!("{images}Open collection"),
+        ] {
+            let html = format!(r#"<figure><a href="/gallery">{contents}</a></figure>"#);
+            let org = render_html_fragment_to_org(&html);
+            assert!(
+                org.contains("[[/gallery][/one.jpg]]\n\n[[/gallery][/two.jpg]]"),
+                "{org}"
+            );
+            if contents.contains("Open collection") {
+                assert!(org.contains("[[/gallery][Open collection]]"), "{org}");
+            }
+        }
+    }
+
+    #[test]
+    fn org_keeps_single_linked_image_with_a_label() {
+        let org = render_html_fragment_to_org(
+            r#"<figure><a href="/gallery"><img src="/one.jpg">View original</a></figure>"#,
+        );
+        assert!(org.contains("[[/gallery][/one.jpg]]"), "{org}");
+        assert!(org.contains("[[/gallery][View original]]"), "{org}");
+    }
+
+    #[test]
+    fn org_figure_link_keeps_article_card_blocks_in_order() {
+        let html = r#"<figure><a href="/gallery"><h3>Northern coast</h3><p>Walk to the pier.</p>
+            <img src="/north.jpg"><p>Follow the path inland.</p><img src="/south.jpg"></a></figure>"#;
+        let org = render_html_fragment_to_org(html);
+        assert_eq!(org.trim(), "*** Northern coast\n\nWalk to the pier.\n\n[[/north.jpg]]\n\nFollow the path inland.\n\n[[/south.jpg]]");
+    }
+
+    #[test]
+    fn markdown_table_cells_preserve_breaks_outside_code_and_math() {
+        assert_eq!(
+            markdown_table_cell("```\nfirst\n\n    second\n```"),
+            "``` first second ```"
+        );
+        assert_eq!(
+            markdown_table_cell("Ticket $10; total=$2\n+3$"),
+            "Ticket $10; total=$2 +3$"
+        );
+        assert_eq!(
+            markdown_table_cell("Adults $10\nChildren $5"),
+            "Adults $10<br>Children $5"
+        );
     }
 
     #[test]
@@ -41790,8 +42017,9 @@ line break text.">
         );
         assert!(figure.contains("![Diagram](https://example.com/large.jpg)"));
         assert!(!figure.contains("Ignored figure title"));
-        assert!(!figure.contains("https://example.com/full"));
-        assert!(!figure.contains("https://example.com/second.jpg"));
+        assert!(figure
+            .contains("[![Diagram](https://example.com/large.jpg)](https://example.com/full)"));
+        assert!(figure.contains("![Second image](https://example.com/second.jpg)"));
         assert!(
             figure.contains("Figure 2. Loss $L=x^2$ from [source](https://example.com/source).")
         );

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Command;
 
-const UPSTREAM_FIXTURE_COUNT: usize = 246;
+const UPSTREAM_FIXTURE_COUNT: usize = 248;
 const UPSTREAM_REVISION: &str = include_str!("../../../tests/upstream-revision");
 
 #[derive(Debug, Deserialize)]

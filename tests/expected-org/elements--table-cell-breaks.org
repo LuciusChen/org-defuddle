@@ -1,0 +1,20 @@
+* Airports by City
+:PROPERTIES:
+:URL: https://www.example.com/article/airports
+:SITE: example.com
+:DOMAIN: example.com
+:WORD_COUNT: 101
+:END:
+
+Most large cities have more than one airport. This table lists the main airports for a few European capitals, so you can pick the one closest to where you're staying.
+
+| City | Airports | Code |
+| London | Heathrow Gatwick | ~LHR~ ~LGW~ |
+| Paris | - Orly - Charles de Gaulle | ~ORY~ and ~CDG~ |
+| Rome | Fiumicino Ciampino | ~FCO CIA~ |
+
+| Train | Fares |
+| Heathrow Express | Adults $10 Children $5 |
+| Orlyval | Adults $14 Children $7 |
+
+Trains run from each airport to the city center, and most take less than an hour. Check the timetable before you fly, since late flights can miss the last train.
