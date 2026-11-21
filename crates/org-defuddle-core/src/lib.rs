@@ -24231,8 +24231,13 @@ fn is_heading_anchor_wrapper(anchor: &NodeRef, element: &ElementData) -> bool {
     node_id(&headings[0]).is_some_and(|id| id == fragment)
 }
 
-fn is_shared_figure_link(node: &NodeRef) -> bool {
-    has_ancestor_tag(node, &["figure"]) && node.select("img").unwrap().nth(1).is_some()
+fn is_figure_image_link(node: &NodeRef) -> bool {
+    has_ancestor_tag(node, &["figure"])
+        && select_first_node(node, "img").is_some()
+        && !node
+            .select("h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, table, pre, article, section")
+            .unwrap()
+            .any(|block| !block.text_contents().trim().is_empty())
 }
 
 fn link_has_block_children(node: &NodeRef) -> bool {
@@ -26176,7 +26181,7 @@ impl<'a> OrgRenderer<'a> {
             "a" if !inline
                 && self.options.standardize
                 && link_has_block_children(node)
-                && !is_shared_figure_link(node) =>
+                && !is_figure_image_link(node) =>
             {
                 self.render_block_link_container(node, element)
             }
@@ -26276,11 +26281,7 @@ impl<'a> OrgRenderer<'a> {
                     .find(|ancestor| tag_name(ancestor).as_deref() == Some("a"))
                     .unwrap_or(image);
                 self.ensure_blank_line();
-                if tag_name(&subject).as_deref() == Some("a") {
-                    self.render_link(&subject, subject.as_element().unwrap(), false);
-                } else {
-                    self.render_node(&subject, false);
-                }
+                self.render_node(&subject, false);
                 self.ensure_blank_line();
                 if let Some(figcaption) = select_first_node(node, "figcaption") {
                     let caption = self.render_inline_children(&figcaption);
@@ -26409,7 +26410,7 @@ impl<'a> OrgRenderer<'a> {
             return;
         };
         let href = escape_link(href);
-        if text.is_empty() || is_shared_figure_link(node) {
+        if text.is_empty() || is_figure_image_link(node) {
             let mut rendered = false;
             for src in node
                 .select("img")
@@ -33683,6 +33684,23 @@ mod tests {
                 assert!(org.contains("[[/gallery][Open collection]]"), "{org}");
             }
         }
+    }
+
+    #[test]
+    fn org_keeps_single_linked_image_with_a_label() {
+        let org = render_html_fragment_to_org(
+            r#"<figure><a href="/gallery"><img src="/one.jpg">View original</a></figure>"#,
+        );
+        assert!(org.contains("[[/gallery][/one.jpg]]"), "{org}");
+        assert!(org.contains("[[/gallery][View original]]"), "{org}");
+    }
+
+    #[test]
+    fn org_figure_link_keeps_article_card_blocks_in_order() {
+        let html = r#"<figure><a href="/gallery"><h3>Northern coast</h3><p>Walk to the pier.</p>
+            <img src="/north.jpg"><p>Follow the path inland.</p><img src="/south.jpg"></a></figure>"#;
+        let org = render_html_fragment_to_org(html);
+        assert_eq!(org.trim(), "*** Northern coast\n\nWalk to the pier.\n\n[[/north.jpg]]\n\nFollow the path inland.\n\n[[/south.jpg]]");
     }
 
     #[test]
